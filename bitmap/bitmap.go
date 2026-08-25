@@ -16,7 +16,10 @@
 // Stability: tier 1, stable.
 package bitmap
 
-import "math/bits"
+import (
+	"encoding/binary"
+	"math/bits"
+)
 
 // Bitmap is a growable sequence of bits.
 type Bitmap struct {
@@ -99,10 +102,56 @@ func (b *Bitmap) Append(v bool) {
 
 // CountOnes returns the number of set bits, which for a validity bitmap is the
 // number of valid values.
-func (b *Bitmap) CountOnes() int {
+//
+// It reads the whole buffer including the final byte, which is correct because
+// the bits past the length there are always zero.
+func (b *Bitmap) CountOnes() int { return countBytes(b.bits) }
+
+// CountOnesRange returns the number of set bits in positions i through j-1. It
+// panics if the range is out of bounds.
+//
+// This is what a column reports as its null count after being sliced. Slicing
+// is meant to be constant time, so the array layer keeps an offset into a
+// bitmap it shares rather than copying one, and then it needs the count over a
+// range that does not start on a byte boundary.
+func (b *Bitmap) CountOnesRange(i, j int) int {
+	if i < 0 || j < i || j > b.n {
+		panic("bitmap: range out of range")
+	}
+	if i == j {
+		return 0
+	}
+
+	// The first and last bytes are partial and get masked. The head mask drops
+	// the bits before i, the tail mask drops the bits from j on, and when the
+	// range lives inside one byte both apply to the same byte.
+	first, last := i>>3, (j-1)>>3
+	head := byte(0xFF) << uint(i&7)
+	tail := byte(0xFF) >> uint(7-(j-1)&7)
+
+	if first == last {
+		return bits.OnesCount8(b.bits[first] & head & tail)
+	}
+	n := bits.OnesCount8(b.bits[first] & head)
+	n += countBytes(b.bits[first+1 : last])
+	return n + bits.OnesCount8(b.bits[last]&tail)
+}
+
+// countBytes returns the number of set bits in p, eight bytes at a time.
+//
+// A popcount instruction works on a register, so feeding it one byte at a time
+// asks for eight times the loads and eight times the instructions to get the
+// same answer. Endianness does not matter here, since the number of set bits in
+// a word does not depend on the order the bytes were loaded in, so this uses
+// the native order and gets a plain load on every machine.
+func countBytes(p []byte) int {
 	n := 0
-	for _, byt := range b.bits {
-		n += bits.OnesCount8(byt)
+	for len(p) >= 8 {
+		n += bits.OnesCount64(binary.NativeEndian.Uint64(p))
+		p = p[8:]
+	}
+	for _, c := range p {
+		n += bits.OnesCount8(c)
 	}
 	return n
 }

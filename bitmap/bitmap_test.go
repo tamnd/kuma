@@ -235,6 +235,50 @@ func TestSlicePadding(t *testing.T) {
 	}
 }
 
+// TestCountOnesRange checks every start and end position against the model.
+// The masking of the first and last byte is the whole of this function, and a
+// mask that is off by one bit is an answer that is off by one null, which is
+// the kind of wrong that reaches a user as a row count rather than as a crash.
+func TestCountOnesRange(t *testing.T) {
+	const n = 200
+	src := bitmap.New(n)
+	model := make(reference, n)
+	for i := range n {
+		model[i] = i%3 == 0 || i%7 == 1
+		src.Set(i, model[i])
+	}
+
+	for i := range n + 1 {
+		for j := i; j <= n; j++ {
+			if got, want := src.CountOnesRange(i, j), model[i:j].countOnes(); got != want {
+				t.Fatalf("CountOnesRange(%d, %d) = %d, want %d", i, j, got, want)
+			}
+		}
+	}
+
+	// The whole range has to agree with CountOnes, since they are two routes to
+	// the same number and one of them is the one everything else calls.
+	if got, want := src.CountOnesRange(0, n), src.CountOnes(); got != want {
+		t.Errorf("CountOnesRange(0, %d) = %d but CountOnes() = %d", n, got, want)
+	}
+}
+
+// TestCountOnesRangeAllSet is the case where every mask bug shows up as a
+// number that is too large, since there is no clear bit to hide behind.
+func TestCountOnesRangeAllSet(t *testing.T) {
+	for _, n := range []int{1, 7, 8, 9, 63, 64, 65, 511, 512, 513} {
+		src := bitmap.NewSet(n)
+		for i := range n + 1 {
+			for j := i; j <= n; j++ {
+				if got := src.CountOnesRange(i, j); got != j-i {
+					t.Fatalf("on %d bits all set, CountOnesRange(%d, %d) = %d, want %d",
+						n, i, j, got, j-i)
+				}
+			}
+		}
+	}
+}
+
 func TestPanics(t *testing.T) {
 	tests := []struct {
 		name string
@@ -242,6 +286,7 @@ func TestPanics(t *testing.T) {
 	}{
 		{"negative length", func() { bitmap.New(-1) }},
 		{"short buffer", func() { bitmap.FromBytes([]byte{0}, 9) }},
+		{"negative length from bytes", func() { bitmap.FromBytes([]byte{0}, -1) }},
 		{"get out of range", func() { bitmap.New(8).Get(8) }},
 		{"get negative", func() { bitmap.New(8).Get(-1) }},
 		{"set out of range", func() { bitmap.New(8).Set(8, true) }},
@@ -250,6 +295,9 @@ func TestPanics(t *testing.T) {
 		{"slice past the end", func() { bitmap.New(8).Slice(0, 9) }},
 		{"slice backwards", func() { bitmap.New(8).Slice(5, 4) }},
 		{"slice negative", func() { bitmap.New(8).Slice(-1, 4) }},
+		{"count past the end", func() { bitmap.New(8).CountOnesRange(0, 9) }},
+		{"count backwards", func() { bitmap.New(8).CountOnesRange(5, 4) }},
+		{"count negative", func() { bitmap.New(8).CountOnesRange(-1, 4) }},
 	}
 
 	for _, tt := range tests {
@@ -268,9 +316,41 @@ func BenchmarkCountOnes(b *testing.B) {
 	bm := bitmap.NewSet(1 << 20)
 	b.SetBytes(int64(len(bm.Bytes())))
 	for b.Loop() {
-		_ = bm.CountOnes()
+		intSink = bm.CountOnes()
 	}
 }
+
+// BenchmarkCountOnesRange is the same work reached the other way. The aligned
+// case is a chunk boundary that fell on a byte, which is the common one, and
+// the unaligned case pays for masking two partial bytes at the ends.
+func BenchmarkCountOnesRange(b *testing.B) {
+	bm := bitmap.NewSet(1 << 20)
+	b.SetBytes(int64(len(bm.Bytes())))
+	for b.Loop() {
+		intSink = bm.CountOnesRange(0, 1<<20)
+	}
+}
+
+func BenchmarkCountOnesRangeUnaligned(b *testing.B) {
+	bm := bitmap.NewSet(1 << 20)
+	b.SetBytes(int64(len(bm.Bytes())))
+	for b.Loop() {
+		intSink = bm.CountOnesRange(3, 1<<20-5)
+	}
+}
+
+// BenchmarkCountOnesRangeSmall is the size a null count over one chunk actually
+// runs at, which is where the per call overhead shows up rather than the
+// throughput.
+func BenchmarkCountOnesRangeSmall(b *testing.B) {
+	bm := bitmap.NewSet(1 << 20)
+	for b.Loop() {
+		intSink = bm.CountOnesRange(1000, 9192)
+	}
+}
+
+// intSink keeps the benchmarks from being optimized away.
+var intSink int
 
 func BenchmarkAnd(b *testing.B) {
 	x := bitmap.NewSet(1 << 20)
