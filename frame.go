@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/tamnd/kuma/dtype"
+	"github.com/tamnd/kuma/kernel"
 )
 
 // Dynamic is the schema type for a frame whose columns are not known at compile
@@ -249,20 +250,63 @@ func (f *Frame[S]) Slice(i, j int) *Frame[S] {
 		panic(fmt.Sprintf("kuma: Slice(%d, %d) of a frame of %d rows", i, j, f.rows))
 	}
 
-	out := &Frame[S]{
-		cols:   make([]Column, len(f.cols)),
-		schema: f.schema,
-		rows:   j - i,
-		index:  f.index,
-	}
+	cols := make([]Column, len(f.cols))
 	for k, c := range f.cols {
-		out.cols[k] = c.Slice(i, j)
+		cols[k] = c.Slice(i, j)
 	}
+	return f.rebuild(cols, j-i)
+}
 
-	// The nulls in the range are not the nulls in the frame, and nullability is
-	// read off the data, so the schema has to be rebuilt rather than shared.
-	out.schema.Fields = make([]dtype.Field, len(out.cols))
-	for k, c := range out.cols {
+// Take returns the rows at the given positions, in the order given.
+//
+// This is how every reordering of a frame is done. Sorting works out the order
+// and takes it, a join works out which row of the left goes with which row of
+// the right and takes both, and the values move here.
+//
+// A position below zero gives a row of nulls, which is what an outer join does
+// with a row that matched nothing. A position at or past the end panics, the
+// same way indexing a slice does.
+//
+// Unlike Slice this copies every column, since the rows it wants are scattered
+// through the frame.
+func (f *Frame[S]) Take(idx []int) *Frame[S] {
+	checkPositions(idx, f.rows)
+
+	cols := make([]Column, len(f.cols))
+	for k, c := range f.cols {
+		cols[k] = Column{name: c.name, data: kernel.Take(c.data, idx)}
+	}
+	return f.rebuild(cols, len(idx))
+}
+
+// Filter returns the rows that mask selects, in the order they were in.
+//
+// A null in the mask selects nothing. A row that nobody can say belongs in the
+// result does not go in the result, which is the same rule a null gets
+// everywhere else here.
+//
+// It reports an error if the mask is not as long as the frame.
+func (f *Frame[S]) Filter(mask Series[bool]) (*Frame[S], error) {
+	if mask.Len() != f.rows {
+		return nil, fmt.Errorf("kuma: a mask of %d values for a frame of %d rows: %w",
+			mask.Len(), f.rows, ErrLength)
+	}
+	// The positions are worked out once and every column is gathered with them,
+	// rather than every column walking the mask for itself.
+	return f.Take(kernel.Indices(mask.data)), nil
+}
+
+// rebuild returns a frame of the given columns, which have to be the columns of
+// f in the same order under the same names and are allowed to hold different
+// rows.
+//
+// The schema is built again rather than shared, because nullability is read off
+// the data and the nulls in some of the rows are not the nulls in all of them.
+// The name to position map is shared, since that is what did not change.
+func (f *Frame[S]) rebuild(cols []Column, rows int) *Frame[S] {
+	out := &Frame[S]{cols: cols, rows: rows, index: f.index}
+	out.schema.Fields = make([]dtype.Field, len(cols))
+	for k, c := range cols {
 		out.schema.Fields[k] = c.Field()
 	}
 	return out

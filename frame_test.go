@@ -2,6 +2,7 @@ package kuma_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -415,5 +416,98 @@ func TestFrameString(t *testing.T) {
 	}, "\n")
 	if got := f.String(); got != want {
 		t.Errorf("String() =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestFrameTake(t *testing.T) {
+	f := trades(t)
+
+	idx := []int{3, 0, 0}
+	got := f.Take(idx)
+	if got.NumRows() != 3 || got.NumCols() != 3 {
+		t.Fatalf("%s, want 3 rows and 3 columns", got)
+	}
+	if names := got.Names(); !slices.Equal(names, f.Names()) {
+		t.Errorf("Take gave the columns %v, want %v", names, f.Names())
+	}
+
+	if want := []string{"NVDA", "AAPL", "AAPL"}; !slices.Equal(got.ColumnAt(0).MustAs[string]().Values(), want) {
+		t.Errorf("the symbols are %v, want %v", got.ColumnAt(0).MustAs[string]().Values(), want)
+	}
+	if want := []int64{400, 100, 100}; !slices.Equal(got.ColumnAt(2).MustAs[int64]().Values(), want) {
+		t.Errorf("the quantities are %v, want %v", got.ColumnAt(2).MustAs[int64]().Values(), want)
+	}
+	if f.NumRows() != 4 {
+		t.Error("Take changed the frame it was called on")
+	}
+
+	// A position below zero is a row of nulls, one in every column.
+	nulls := f.Take([]int{-1, 1})
+	for _, c := range nulls.Columns() {
+		if !c.IsNull(0) {
+			t.Errorf("column %q is not null in the row that matched nothing", c.Name())
+		}
+	}
+	if !nulls.Schema().Fields[0].Nullable {
+		t.Error("the schema says the column is not nullable, and it has a null in it")
+	}
+}
+
+func TestFrameTakeNothing(t *testing.T) {
+	got := trades(t).Take(nil)
+	if got.NumRows() != 0 || got.NumCols() != 3 {
+		t.Fatalf("%s, want no rows and 3 columns", got)
+	}
+	if got.Schema().Fields[0].Nullable {
+		t.Error("a column of no values is nullable, want it not nullable")
+	}
+}
+
+func TestFrameFilter(t *testing.T) {
+	f := trades(t)
+	mask := kuma.NewSeries("keep", false, true, false, true)
+
+	got, err := f.Filter(mask)
+	if err != nil {
+		t.Fatalf("Filter: %v", err)
+	}
+	if got.NumRows() != 2 {
+		t.Fatalf("%s, want 2 rows", got)
+	}
+	if want := []string{"MSFT", "NVDA"}; !slices.Equal(got.ColumnAt(0).MustAs[string]().Values(), want) {
+		t.Errorf("the symbols are %v, want %v", got.ColumnAt(0).MustAs[string]().Values(), want)
+	}
+
+	if _, err := f.Filter(kuma.NewSeries("keep", true, false)); !errors.Is(err, kuma.ErrLength) {
+		t.Errorf("a short mask gave %v, want an ErrLength", err)
+	}
+}
+
+// TestFrameTakePanics also covers a frame with no columns, where there is no
+// column to notice that the position is out of range and the frame has to say
+// so itself.
+func TestFrameTakePanics(t *testing.T) {
+	empty, err := kuma.NewFrame()
+	if err != nil {
+		t.Fatalf("NewFrame: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		call func()
+	}{
+		{"past the end", func() { trades(t).Take([]int{4}) }},
+		{"out of an empty frame", func() { empty.Take([]int{0}) }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Fatal("it did not panic")
+				}
+			}()
+			tt.call()
+		})
 	}
 }

@@ -2,6 +2,7 @@ package kuma_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -465,4 +466,68 @@ func TestSeriesPanics(t *testing.T) {
 			tt.fn()
 		})
 	}
+}
+
+func TestSeriesTake(t *testing.T) {
+	s := nullableInts(t, 10, 4, 6)
+
+	idx := []int{9, 0, 3, 3, -1, 1}
+	got := s.Take(idx)
+	if got.Len() != len(idx) {
+		t.Fatalf("Take gave %d values, want %d", got.Len(), len(idx))
+	}
+	if got.Name() != s.Name() {
+		t.Errorf("Take gave a column called %q, want %q", got.Name(), s.Name())
+	}
+
+	for k, i := range idx {
+		null := i < 0 || s.IsNull(i)
+		if got.IsNull(k) != null {
+			t.Fatalf("value %d, taken from %d, is null %v, want %v", k, i, got.IsNull(k), null)
+		}
+		if !null && got.Value(k) != s.Value(i) {
+			t.Errorf("value %d is %d, want %d", k, got.Value(k), s.Value(i))
+		}
+	}
+	if s.Len() != 10 {
+		t.Error("Take changed the column it was called on")
+	}
+}
+
+func TestSeriesTakeStrings(t *testing.T) {
+	s := kuma.NewSeries("symbol", "AAPL", "MSFT", "NVDA")
+
+	got := s.Take([]int{2, 2, 0})
+	if want := []string{"NVDA", "NVDA", "AAPL"}; !slices.Equal(got.Values(), want) {
+		t.Errorf("Take gave %v, want %v", got.Values(), want)
+	}
+}
+
+func TestSeriesFilter(t *testing.T) {
+	s := kuma.NewSeries("qty", int64(10), 20, 30, 40)
+	mask := kuma.NewSeries("keep", true, false, true, false)
+
+	got, err := s.Filter(mask)
+	if err != nil {
+		t.Fatalf("Filter: %v", err)
+	}
+	if want := []int64{10, 30}; !slices.Equal(got.Values(), want) {
+		t.Errorf("Filter gave %v, want %v", got.Values(), want)
+	}
+	if got.Name() != "qty" {
+		t.Errorf("Filter gave a column called %q", got.Name())
+	}
+
+	if _, err := s.Filter(kuma.NewSeries("keep", true, false)); !errors.Is(err, kuma.ErrLength) {
+		t.Errorf("a short mask gave %v, want an ErrLength", err)
+	}
+}
+
+func TestSeriesTakePanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("Take past the end did not panic")
+		}
+	}()
+	kuma.NewSeries("qty", int64(1), 2, 3).Take([]int{3})
 }

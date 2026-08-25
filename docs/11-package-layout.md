@@ -57,7 +57,7 @@ github.com/tamnd/kuma
   strview/                      the string and binary view layout                   T1
   array/                        Array, ChunkedArray, builders                       T2
 
-  kernel/                       the dispatch table and every compute kernel         T3
+  kernel/                       the dispatch table and every compute kernel         T2
     kernel.go                   dispatch table, registration, Scalar constraint
     *_scalar.go                 the reference implementations, always built
     *_portable.go               //go:build goexperiment.simd
@@ -98,7 +98,9 @@ github.com/tamnd/kuma
   kumagen/                      the code generator, main package                    T1
 ```
 
-The tier column is the point of the table. `kuma/kernel` being tier 3 is what lets us track a moving `simd` API without breaking anyone, and it is why nothing in tier 1 may name a `simd` type.
+The tier column is the point of the table. Nothing in tier 1 may name a `simd` type, and nothing outside `kernel` may either.
+
+`kernel` was tier 3 in the first draft of this document, on the grounds that it will one day be full of build tagged files calling an unstable package. It is tier 2 instead. Its exported surface is arrays and slices and never names a `simd` type, which is the second of the four rules in document 05, so the churn stays inside the package. A tier says what a caller can rely on rather than what the implementation is made of, and the root package has to be able to call a kernel.
 
 ## Notes on specific choices
 

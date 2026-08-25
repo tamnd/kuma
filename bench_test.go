@@ -2,6 +2,7 @@ package kuma_test
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"testing"
 	"time"
 
@@ -238,4 +239,60 @@ func BenchmarkFrameWithColumn(b *testing.B) {
 		}
 		frameSink = out
 	}
+}
+
+// BenchmarkSeriesTake is a gather over one column, which is the cost every sort
+// and every join is really made of.
+func BenchmarkSeriesTake(b *testing.B) {
+	s := benchInts(b, 1)
+	idx := benchOrder(benchLen)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		seriesSink = s.Take(idx)
+	}
+}
+
+// BenchmarkFrameTake is the same gather across sixteen columns, which is what a
+// row reordering costs on a table rather than on a column.
+func BenchmarkFrameTake(b *testing.B) {
+	f := benchFrame(b)
+	idx := benchOrder(benchLen)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		frameSink = f.Take(idx)
+	}
+}
+
+func BenchmarkFrameFilter(b *testing.B) {
+	f := benchFrame(b)
+
+	keep := make([]bool, benchLen)
+	for i := range keep {
+		keep[i] = i%2 == 0
+	}
+	mask := kuma.NewSeries("keep", keep...)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.Filter(mask)
+		if err != nil {
+			b.Fatalf("Filter: %v", err)
+		}
+		frameSink = out
+	}
+}
+
+// benchOrder returns the positions of every row, shuffled, which is the order a
+// sort or a hash join hands to a gather and the one that costs the most.
+func benchOrder(n int) []int {
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	r := rand.New(rand.NewPCG(1, 2))
+	r.Shuffle(len(idx), func(i, j int) { idx[i], idx[j] = idx[j], idx[i] })
+	return idx
 }

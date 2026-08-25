@@ -233,3 +233,76 @@ func ExampleCanRead() {
 	// true
 	// false
 }
+
+func ExampleFrame_Filter() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT", "NVDA").Column(),
+		kuma.NewSeries("price", 189.5, 411.2, 121.0).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	prices, err := f.Series[float64]("price")
+	if err != nil {
+		panic(err)
+	}
+
+	// A mask is an ordinary boolean column, so building one by hand is what
+	// there is until the expression API arrives.
+	keep := make([]bool, prices.Len())
+	for i, p := range prices.Values() {
+		keep[i] = p > 150
+	}
+
+	dear, err := f.Filter(kuma.NewSeries("keep", keep...))
+	if err != nil {
+		panic(err)
+	}
+
+	symbols, err := dear.Series[string]("symbol")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(symbols.Values())
+	// Output:
+	// [AAPL MSFT]
+}
+
+func ExampleFrame_Take() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT", "NVDA").Column(),
+		kuma.NewSeries("qty", int64(100), 50, 400).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	// The order some other operation worked out, and a position below zero for
+	// a row that matched nothing.
+	got := f.Take([]int{2, -1, 0})
+
+	symbols, err := got.Series[string]("symbol")
+	if err != nil {
+		panic(err)
+	}
+	for i := range symbols.Len() {
+		if symbols.IsNull(i) {
+			fmt.Println("null")
+			continue
+		}
+		fmt.Println(symbols.Value(i))
+	}
+	// Output:
+	// NVDA
+	// null
+	// AAPL
+}
+
+func ExampleSeries_Take() {
+	s := kuma.NewSeries("qty", int64(100), 50, 400)
+
+	fmt.Println(s.Take([]int{2, 0, 2}).Values())
+	// Output:
+	// [400 100 400]
+}

@@ -201,7 +201,7 @@ a.Add(b)                       // still positional, never aligned behind your ba
 - [ ] `set_index` -> `WithIndex` (M7)
 - [ ] `set_axis` -> `WithNames` (M7)
 - [ ] `sample` -> `Sample`, with weights, replacement and a seed (M1)
-- [ ] `take` -> `Take` (M1)
+- [x] `take` -> `Take` (M1)
 - [ ] `truncate` -> `Truncate` (M8)
 
 ### Missing data
