@@ -144,7 +144,7 @@ Now the Go struct is derived from the data rather than typed out by hand, and th
 
 `kumagen` is a small program with no cleverness in it. It is not a framework and it does not need to understand your query.
 
-Given a Go struct it emits the `Cols` variable, a `Schema()` method, and the field to column index mapping used by `Rows`. Given a data file it emits the struct too. It handles nested structs by flattening with a dotted prefix, and slices by mapping to the Arrow list type. Unexported fields are skipped. A field with no `kuma` tag uses a snake_cased version of the field name, following the same convention as most Go JSON code.
+Given a Go struct it emits the `Cols` variable, a `Schema()` method, and the field to column index mapping used by `Rows`. The first version emits the `Cols` variable, since that is the part the compiler checks a query against, and the rest arrives with the operations that need it. Given a data file it emits the struct too. It handles nested structs by flattening with a dotted prefix, and slices by mapping to the Arrow list type, both of which come with the column types underneath them. A field of a type with no handle, an `int32` where there is only an `I64Col`, is reported rather than written out as something that would not compile. Unexported fields are skipped. A field with no `kuma` tag uses a snake_cased version of the field name, following the same convention as most Go JSON code.
 
 It writes one file per type, named `<type>_kuma.go`, with the standard generated file header so that linters and diff tools leave it alone. The output is plain readable Go that you can open and understand, not a wall of reflection.
 
