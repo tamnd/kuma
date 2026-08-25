@@ -120,11 +120,45 @@ func DiffColumns(got, want kuma.Column, o *Options) string {
 	return d.String()
 }
 
-// pair is two columns of the same name and type, waiting to be compared.
+// pair is two columns of the same name and type, waiting to be compared, and
+// where the walk has got to in each of them.
 type pair struct {
 	name string
 	got  kuma.Column
 	want kuma.Column
+
+	gotAt  cursor
+	wantAt cursor
+}
+
+// cursor walks the values of a column one at a time, remembering where it got
+// to.
+//
+// Asking a chunked column for value i costs a binary search over its chunks,
+// and a comparison that does that four times a cell spends longer finding the
+// values than looking at them. The two sides cannot be taken a chunk at a time
+// instead, since they are chunked however they were built and the boundaries
+// need not line up, so this is the same answer the binary kernels came to: the
+// cost per value is an increment and a comparison.
+type cursor struct {
+	chunks []*array.Array
+
+	// c is the chunk the next value is in and i is where in that chunk it is.
+	c, i int
+}
+
+// next returns the chunk holding the next value and where in that chunk it is.
+// It must not be called more times than the column has rows.
+func (c *cursor) next() (*array.Array, int) {
+	for c.chunks[c.c].Len() == c.i {
+		// An empty chunk is a chunk like any other and holds no value, so the
+		// position moves past it rather than pointing into it.
+		c.c++
+		c.i = 0
+	}
+	a, i := c.chunks[c.c], c.i
+	c.i++
+	return a, i
 }
 
 // cell is one value that differs, as the report will print it.
@@ -189,10 +223,18 @@ func (d *diff) walk(pairs []pair, rows int) {
 		}
 	}
 
+	for i := range pairs {
+		pairs[i].gotAt = cursor{chunks: pairs[i].got.Data().Chunks()}
+		pairs[i].wantAt = cursor{chunks: pairs[i].want.Data().Chunks()}
+	}
+
 	for i := range rows {
 		differs := false
-		for _, p := range pairs {
-			if equalAt(p.got.Data(), p.want.Data(), i, d.opts) {
+		for j := range pairs {
+			p := &pairs[j]
+			g, gi := p.gotAt.next()
+			w, wi := p.wantAt.next()
+			if equalAt(g, gi, w, wi, d.opts) {
 				continue
 			}
 			differs = true
@@ -268,11 +310,11 @@ func (d *diff) table() string {
 	return t.String()
 }
 
-// equalAt reports whether value i is the same in both columns. The two are
-// known to be the same type by the time this is called.
-func equalAt(a, b *array.Chunked, i int, o *Options) bool {
-	if a.IsNull(i) || b.IsNull(i) {
-		return a.IsNull(i) && b.IsNull(i)
+// equalAt reports whether value i of a is the same as value j of b. The two
+// columns are known to be the same type by the time this is called.
+func equalAt(a *array.Array, i int, b *array.Array, j int, o *Options) bool {
+	if a.IsNull(i) || b.IsNull(j) {
+		return a.IsNull(i) && b.IsNull(j)
 	}
 
 	switch a.DType().Kind() {
@@ -281,33 +323,33 @@ func equalAt(a, b *array.Chunked, i int, o *Options) bool {
 		// already answered this.
 		return true
 	case dtype.BoolKind:
-		return a.Bool(i) == b.Bool(i)
+		return a.Bool(i) == b.Bool(j)
 	case dtype.Int8Kind:
-		return a.Value[int8](i) == b.Value[int8](i)
+		return a.Value[int8](i) == b.Value[int8](j)
 	case dtype.Int16Kind:
-		return a.Value[int16](i) == b.Value[int16](i)
+		return a.Value[int16](i) == b.Value[int16](j)
 	case dtype.Int32Kind, dtype.Date32Kind, dtype.Time32Kind:
-		return a.Value[int32](i) == b.Value[int32](i)
+		return a.Value[int32](i) == b.Value[int32](j)
 	case dtype.Int64Kind, dtype.Date64Kind, dtype.Time64Kind,
 		dtype.TimestampKind, dtype.DurationKind:
-		return a.Value[int64](i) == b.Value[int64](i)
+		return a.Value[int64](i) == b.Value[int64](j)
 	case dtype.Uint8Kind:
-		return a.Value[uint8](i) == b.Value[uint8](i)
+		return a.Value[uint8](i) == b.Value[uint8](j)
 	case dtype.Uint16Kind:
-		return a.Value[uint16](i) == b.Value[uint16](i)
+		return a.Value[uint16](i) == b.Value[uint16](j)
 	case dtype.Uint32Kind:
-		return a.Value[uint32](i) == b.Value[uint32](i)
+		return a.Value[uint32](i) == b.Value[uint32](j)
 	case dtype.Uint64Kind:
-		return a.Value[uint64](i) == b.Value[uint64](i)
+		return a.Value[uint64](i) == b.Value[uint64](j)
 	case dtype.Float32Kind:
-		return closeEnough(float64(a.Value[float32](i)), float64(b.Value[float32](i)), o)
+		return closeEnough(float64(a.Value[float32](i)), float64(b.Value[float32](j)), o)
 	case dtype.Float64Kind:
-		return closeEnough(a.Value[float64](i), b.Value[float64](i), o)
+		return closeEnough(a.Value[float64](i), b.Value[float64](j), o)
 	default:
 		// The rest are the types whose values are a run of bytes, meaning the
 		// strings, the binaries, the decimals and the intervals. canCompare
 		// has already turned away everything that is not one of those.
-		return bytes.Equal(a.Bytes(i), b.Bytes(i))
+		return bytes.Equal(a.Bytes(i), b.Bytes(j))
 	}
 }
 

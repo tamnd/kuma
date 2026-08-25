@@ -241,6 +241,30 @@ func TestDiffFramesIgnoresHowTheColumnsAreChunked(t *testing.T) {
 	}
 }
 
+// TestDiffColumnsWalksChunksThatDoNotLineUp is the case the walk is written
+// for. Two columns that hold the same values can be cut into chunks in any two
+// ways, including with empty chunks in the middle, and the comparison has to
+// move through both of them without losing its place.
+func TestDiffColumnsWalksChunksThatDoNotLineUp(t *testing.T) {
+	values := []int64{1, 2, 3, 4, 5, 6}
+
+	a := chunked(t, "qty", []int64{}, values[:1], []int64{}, values[1:4], values[4:])
+	b := chunked(t, "qty", values[:4], []int64{}, values[4:5], values[5:])
+	if d := kumatest.DiffColumns(a, b, nil); d != "" {
+		t.Errorf("the same values in different chunks were reported as\n%s", d)
+	}
+
+	wrong := []int64{1, 2, 3, 4, 9, 6}
+	c := chunked(t, "qty", wrong[:5], wrong[5:])
+	d := kumatest.DiffColumns(a, c, nil)
+	if !strings.Contains(d, "columns differ in 1 of 6 rows") {
+		t.Errorf("the report is\n%s\nand one value differs", d)
+	}
+	if !strings.Contains(d, "    4 | 5   | 9") {
+		t.Errorf("the report is\n%s\nand it should name row 4", d)
+	}
+}
+
 // TestNullIsNotAValue is the distinction the library exists to keep, so it is
 // the one comparison worth writing out on its own.
 func TestNullIsNotAValue(t *testing.T) {
@@ -529,6 +553,34 @@ func nulls(name string, dt dtype.DataType, n int) kuma.Column {
 	col, err := kuma.NewColumn(name, data)
 	if err != nil {
 		panic(err)
+	}
+	return col
+}
+
+// chunked builds a column out of a chunk per group of values, so that a test
+// can say how the values are laid out as well as what they are.
+func chunked(t *testing.T, name string, groups ...[]int64) kuma.Column {
+	t.Helper()
+
+	chunks := make([]*array.Array, len(groups))
+	for i, g := range groups {
+		b, err := array.NewBuilder(dtype.Int64)
+		if err != nil {
+			t.Fatalf("NewBuilder: %v", err)
+		}
+		for _, v := range g {
+			b.Append(v)
+		}
+		chunks[i] = b.Finish()
+	}
+
+	data, err := array.NewChunked(dtype.Int64, chunks...)
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+	col, err := kuma.NewColumn(name, data)
+	if err != nil {
+		t.Fatalf("NewColumn: %v", err)
 	}
 	return col
 }
