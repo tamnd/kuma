@@ -83,7 +83,7 @@ a.Add(b)                       // still positional, never aligned behind your ba
 - [ ] `values` -> `Values()` per column, adapted since there is no single homogeneous 2D value (M1)
 - [ ] `axes` -> `Names()` and `Len()`, adapted (M1)
 - [ ] `ndim` -> always 2 for a frame, 1 for a series (M1)
-- [ ] `size` -> `Size()` (M1)
+- [x] `size` -> `Size()` on a frame, and `Size()` as a group by aggregation (M1)
 - [ ] `shape` -> `Shape()` (M1)
 - [ ] `empty` -> `IsEmpty()` (M1)
 - [ ] `memory_usage` -> `MemoryUsage()` (M1)
@@ -147,7 +147,7 @@ a.Add(b)                       // still positional, never aligned behind your ba
 - [ ] `pipe` -> ordinary Go function composition (adapted, M1)
 - [ ] `agg` `aggregate` -> `Agg[R]` (M3)
 - [ ] `transform` -> `Over(keys)` (M7)
-- [ ] `groupby` -> `GroupBy` (M3)
+- [x] `groupby` -> `GroupBy`, eagerly, returning a `GroupedFrame` (M1). The lazy form over expressions is still M3.
 - [ ] `rolling` -> `Rolling` (M7)
 - [ ] `expanding` -> `Expanding` (M7)
 - [ ] `ewm` -> `EWM` (M7)
@@ -160,21 +160,21 @@ a.Add(b)                       // still positional, never aligned behind your ba
 - [ ] `corr` -> `Corr`, pearson, spearman, kendall (M7)
 - [ ] `corrwith` -> `CorrWith` (M7)
 - [ ] `cov` -> `Cov` (M7)
-- [ ] `count` -> `Count` (M1)
+- [x] `count` -> `Count`, counting the values that are there rather than the rows (M1)
 - [ ] `cummax` `cummin` `cumprod` `cumsum` -> `CumMax` `CumMin` `CumProd` `CumSum` (M7)
 - [ ] `describe` -> `Describe` (M7)
 - [ ] `diff` -> `Diff` (M7)
 - [ ] `kurt` `kurtosis` -> `Kurtosis` (M7)
-- [ ] `max` `min` `mean` `median` `sum` `prod` -> same names (M1)
+- [x] `max` `min` `mean` `median` `sum` -> same names (M1). `prod` is still to do.
 - [ ] `mode` -> `Mode` (M7)
 - [ ] `pct_change` -> `PctChange` (M7)
-- [ ] `quantile` -> `Quantile` with all interpolation modes (M1)
+- [x] `quantile` -> `Quantile` with all five interpolations (M1)
 - [ ] `rank` -> `Rank`, all six methods (M7)
 - [ ] `round` -> `Round` (M1)
 - [ ] `sem` -> `SEM` (M1)
 - [ ] `skew` -> `Skew` (M7)
-- [ ] `std` `var` -> same, with ddof (M1)
-- [ ] `nunique` -> `NUnique` (M7)
+- [x] `std` `var` -> same, with ddof (M1)
+- [x] `nunique` -> `NUnique` (M1, earlier than planned since the group by key encoder already had the answer)
 - [ ] `value_counts` -> `ValueCounts` (M7)
 - [ ] `idxmax` `idxmin` -> `IdxMax` `IdxMin`, returning a label with an index or a position without (M7)
 - [ ] `argmax` `argmin` -> `ArgMax` `ArgMin` (M7)
@@ -251,18 +251,18 @@ a.Add(b)                       // still positional, never aligned behind your ba
 - [ ] `transform` -> `Over` (M7)
 - [ ] `filter` -> `FilterGroups` (M7)
 - [ ] `pipe` -> ordinary composition (adapted)
-- [ ] `all` `any` `count` `size` `sum` `prod` `mean` `median` `min` `max` `std` `var` `sem` -> same names (M3)
-- [ ] `first` `last` `nth` `head` `tail` -> same names (M3)
+- [x] `count` `size` `sum` `mean` `median` `min` `max` `std` `var` -> same names (M1). `all`, `any`, `prod` and `sem` are still to do.
+- [x] `first` `last` -> same names (M1). `nth`, `head` and `tail` on a group are still to do.
 - [ ] `idxmax` `idxmin` -> same (M7)
-- [ ] `quantile` `describe` `rank` -> same (M3, M7)
+- [x] `quantile` -> same, with all five interpolations (M1). `describe` and `rank` are still to do (M7).
 - [ ] `shift` `diff` `pct_change` -> same (M7)
 - [ ] `cumsum` `cumprod` `cummax` `cummin` `cumcount` -> same (M7)
-- [ ] `ngroup` `ngroups` -> `NGroup` `NGroups` (M7)
+- [x] `ngroups` -> `NumGroups` (M1). `ngroup`, the group number of each row, is `Groups().IDs()` and wants a name of its own (M7).
 - [ ] `fillna` `ffill` `bfill` -> same (M7)
-- [ ] `nunique` `value_counts` `unique` -> same (M7)
+- [x] `nunique` -> `NUnique` (M1). `value_counts` and `unique` are still to do (M7).
 - [ ] `rolling` `expanding` `resample` on groups -> same (M8)
-- [ ] `get_group` `groups` `indices` -> `Group`, `Partitions` (M7)
-- [ ] `dropna` `observed` `sort` `as_index` options -> options on `GroupBy` (M3)
+- [ ] `get_group` `groups` `indices` -> `Group`, `Partitions` (M7). The raw form is `GroupedFrame.Groups()` today.
+- [ ] `dropna` `observed` `sort` `as_index` options -> options on `GroupBy` (M3). Today the behaviour is fixed: nulls are a group, the order is first appearance, and the keys come back as columns.
 - [ ] `corr` `cov` `skew` `kurt` -> same (M7)
 - [ ] `sample` -> same (M7)
 
