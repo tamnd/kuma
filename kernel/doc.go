@@ -34,6 +34,13 @@
 // [Cast], which turns the values of a column into another type, and [SortIndex],
 // which works out the order rows go in and leaves the moving to Take.
 //
+// [Compare], which is the six comparisons, [Arith], which is the five
+// arithmetic operators, and [And], [Or] and [Not], which are the three valued
+// logic that a column with holes in it needs. These are the three that read two
+// columns at once, so a column of one value on either side is that value
+// against every row of the other, which is how a comparison against a literal
+// is written without building a column of copies of it.
+//
 // [GroupBy], which divides rows up by the values of some key columns, and the
 // aggregations that run over what it produces: [Sum], [Mean], [Count], [Size],
 // [Min], [Max], [First], [Last], [Var], [Std], [Median], [Quantile] and

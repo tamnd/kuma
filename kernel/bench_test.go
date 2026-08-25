@@ -765,3 +765,107 @@ func BenchmarkKeepIndexCounted(b *testing.B) {
 		indexSink = kernel.KeepIndex(cols, benchLen, 2)
 	}
 }
+
+// BenchmarkCompare is a column against a literal, which is what a filter on a
+// threshold turns into and by far the most common comparison there is.
+func BenchmarkCompare(b *testing.B) {
+	src := benchInts(b, 1)
+	lit := benchLiteral(b, benchLen/2)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		chunkedSink = mustCompare(b, src, lit)
+	}
+}
+
+// BenchmarkCompareColumns is two columns of the same length, where the cursor
+// has to walk both sides rather than sitting still on one of them.
+func BenchmarkCompareColumns(b *testing.B) {
+	src, other := benchInts(b, 1), benchInts(b, 1)
+
+	b.SetBytes(benchLen * 16)
+	b.ReportAllocs()
+	for b.Loop() {
+		chunkedSink = mustCompare(b, src, other)
+	}
+}
+
+// BenchmarkCompareChunked is the case the cursor exists for, where both sides
+// are in many pieces and a walk through either one of them would otherwise cost
+// a binary search per value.
+func BenchmarkCompareChunked(b *testing.B) {
+	src, other := benchInts(b, 64), benchInts(b, 16)
+
+	b.SetBytes(benchLen * 16)
+	b.ReportAllocs()
+	for b.Loop() {
+		chunkedSink = mustCompare(b, src, other)
+	}
+}
+
+func BenchmarkCompareGappy(b *testing.B) {
+	src := benchGappy(b)
+	lit := benchLiteral(b, benchLen/2)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		chunkedSink = mustCompare(b, src, lit)
+	}
+}
+
+func BenchmarkArith(b *testing.B) {
+	src, other := benchInts(b, 1), benchInts(b, 1)
+
+	b.SetBytes(benchLen * 16)
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := kernel.Arith(src, other, kernel.OpAdd)
+		if err != nil {
+			b.Fatalf("Arith: %v", err)
+		}
+		chunkedSink = out
+	}
+}
+
+func BenchmarkAnd(b *testing.B) {
+	x, y := benchMask(b, 2), benchMask(b, 3)
+
+	b.SetBytes(benchLen * 2)
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := kernel.And(x, y)
+		if err != nil {
+			b.Fatalf("And: %v", err)
+		}
+		chunkedSink = out
+	}
+}
+
+// benchLiteral returns a column of one value, which is what a comparison
+// against a number is given.
+func benchLiteral(b *testing.B, v int64) *array.Chunked {
+	b.Helper()
+
+	out, err := array.NewChunked(dtype.Int64, array.Of(v))
+	if err != nil {
+		b.Fatalf("NewChunked: %v", err)
+	}
+	return out
+}
+
+// mustCompare is a greater than, where a type error would be a mistake in the
+// benchmark rather than something being measured. The operator is not a
+// parameter because it is not a variable a benchmark here changes: which of the
+// six it is decides one comparison of an int at the bottom of a loop that reads
+// two columns, so measuring all six would measure the same thing six times.
+func mustCompare(b *testing.B, x, y *array.Chunked) *array.Chunked {
+	b.Helper()
+
+	out, err := kernel.Compare(x, y, kernel.OpGt)
+	if err != nil {
+		b.Fatalf("Compare: %v", err)
+	}
+	return out
+}

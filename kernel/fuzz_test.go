@@ -841,3 +841,237 @@ func FuzzKeepIndex(f *testing.F) {
 		}
 	})
 }
+
+// FuzzCompare checks a comparison against the comparison written out over the
+// two columns, which is the definition rather than another spelling of the
+// implementation. The fuzzer picks the values, the nulls and both sets of chunk
+// boundaries, and the boundaries are what a kernel reading two columns at once
+// gets wrong.
+func FuzzCompare(f *testing.F) {
+	f.Add([]byte{1, 2, 3}, []byte{3, 2, 1}, uint8(0))
+	f.Add([]byte{0, 0, 0, 0, 0}, []byte{7, 7}, uint8(2))
+	f.Add([]byte{}, []byte{}, uint8(4))
+
+	f.Fuzz(func(t *testing.T, x, y []byte, op uint8) {
+		if len(x) > 256 || len(y) > 256 {
+			t.Skip("a big input proves nothing a small one does not")
+		}
+		n := min(len(x), len(y))
+		a, b := smallInts(t, x[:n]), smallInts(t, y[:n])
+		cmp := kernel.CompareOp(op % 6)
+
+		got, err := kernel.Compare(a, b, cmp)
+		if err != nil {
+			t.Fatalf("Compare: %v", err)
+		}
+		if got.Len() != n {
+			t.Fatalf("the result has %d values, want %d", got.Len(), n)
+		}
+
+		for i := range n {
+			if a.IsNull(i) || b.IsNull(i) {
+				if got.IsValid(i) {
+					t.Fatalf("row %d compares a missing value and is not missing", i)
+				}
+				continue
+			}
+			if got.IsNull(i) {
+				t.Fatalf("row %d has two values and no answer", i)
+			}
+			p, q := a.Value[int64](i), b.Value[int64](i)
+			var want bool
+			switch cmp {
+			case kernel.OpEq:
+				want = p == q
+			case kernel.OpNe:
+				want = p != q
+			case kernel.OpLt:
+				want = p < q
+			case kernel.OpLe:
+				want = p <= q
+			case kernel.OpGt:
+				want = p > q
+			default:
+				want = p >= q
+			}
+			if got.Bool(i) != want {
+				t.Fatalf("row %d says %d %s %d is %v", i, p, cmp, q, got.Bool(i))
+			}
+		}
+	})
+}
+
+// FuzzCompareLiteral checks that comparing against a column of one value is the
+// same as comparing against a column of copies of it, which is the whole claim
+// the broadcast makes.
+func FuzzCompareLiteral(f *testing.F) {
+	f.Add([]byte{1, 2, 3}, uint8(2), uint8(3))
+	f.Add([]byte{9, 9, 9, 9}, uint8(0), uint8(1))
+
+	f.Fuzz(func(t *testing.T, x []byte, v, op uint8) {
+		if len(x) > 256 {
+			t.Skip("a big input proves nothing a small one does not")
+		}
+		a := smallInts(t, x)
+		lit := smallInts(t, []byte{v | 1})
+		if lit.Len() != 1 {
+			t.Fatalf("the literal came out %d values long", lit.Len())
+		}
+
+		wide := make([]byte, a.Len())
+		for i := range wide {
+			wide[i] = v | 1
+		}
+		cmp := kernel.CompareOp(op % 6)
+
+		got, err := kernel.Compare(a, lit, cmp)
+		if err != nil {
+			t.Fatalf("Compare: %v", err)
+		}
+		want, err := kernel.Compare(a, smallInts(t, wide), cmp)
+		if err != nil {
+			t.Fatalf("Compare: %v", err)
+		}
+
+		for i := range a.Len() {
+			if got.IsNull(i) != want.IsNull(i) ||
+				(got.IsValid(i) && got.Bool(i) != want.Bool(i)) {
+				t.Fatalf("row %d against a literal is %v, against a column %v",
+					i, valueAt(t, got, i), valueAt(t, want, i))
+			}
+		}
+	})
+}
+
+// FuzzLogic checks the three valued and and or against the table, and then
+// checks De Morgan's law over the two of them, which is the property that
+// catches a wrong answer for the missing values in either one.
+func FuzzLogic(f *testing.F) {
+	f.Add([]byte{1, 2, 3}, []byte{3, 2, 1})
+	f.Add([]byte{0, 1, 2, 3}, []byte{1, 1, 1, 1})
+
+	f.Fuzz(func(t *testing.T, x, y []byte) {
+		if len(x) > 256 || len(y) > 256 {
+			t.Skip("a big input proves nothing a small one does not")
+		}
+		n := min(len(x), len(y))
+		a := boolColumn(t, x[:n], n)
+		b := boolColumn(t, y[:n], n)
+
+		and, err := kernel.And(a, b)
+		if err != nil {
+			t.Fatalf("And: %v", err)
+		}
+		or, err := kernel.Or(a, b)
+		if err != nil {
+			t.Fatalf("Or: %v", err)
+		}
+
+		for i := range n {
+			ak, av := answerAt(a, i)
+			bk, bv := answerAt(b, i)
+
+			switch {
+			case ak && !av, bk && !bv:
+				checkAnswer(t, and, i, "and", true, false)
+			case !ak || !bk:
+				checkAnswer(t, and, i, "and", false, false)
+			default:
+				checkAnswer(t, and, i, "and", true, true)
+			}
+
+			switch {
+			case ak && av, bk && bv:
+				checkAnswer(t, or, i, "or", true, true)
+			case !ak || !bk:
+				checkAnswer(t, or, i, "or", false, false)
+			default:
+				checkAnswer(t, or, i, "or", true, false)
+			}
+		}
+
+		// Not the and of two things is the or of their negations.
+		notAnd, err := kernel.Not(and)
+		if err != nil {
+			t.Fatalf("Not: %v", err)
+		}
+		na, err := kernel.Not(a)
+		if err != nil {
+			t.Fatalf("Not: %v", err)
+		}
+		nb, err := kernel.Not(b)
+		if err != nil {
+			t.Fatalf("Not: %v", err)
+		}
+		orNots, err := kernel.Or(na, nb)
+		if err != nil {
+			t.Fatalf("Or: %v", err)
+		}
+		for i := range n {
+			ok, v := answerAt(notAnd, i)
+			ok2, v2 := answerAt(orNots, i)
+			if ok != ok2 || v != v2 {
+				t.Fatalf("at row %d not(a and b) is %v and not a or not b is %v",
+					i, valueAt(t, notAnd, i), valueAt(t, orNots, i))
+			}
+		}
+	})
+}
+
+// answerAt returns whether value i is present and, when it is, what it is.
+func answerAt(c *array.Chunked, i int) (ok, v bool) {
+	if c.IsNull(i) {
+		return false, false
+	}
+	return true, c.Bool(i)
+}
+
+// checkAnswer fails unless value i of c is the one wanted.
+func checkAnswer(t *testing.T, c *array.Chunked, i int, name string, present, v bool) {
+	t.Helper()
+
+	ok, got := answerAt(c, i)
+	if ok != present || (present && got != v) {
+		t.Fatalf("row %d of the %s is %v, want %v", i, name, describe(ok, got), describe(present, v))
+	}
+}
+
+// describe says what an answer is, including when there is not one.
+func describe(ok, v bool) any {
+	if !ok {
+		return nil
+	}
+	return v
+}
+
+// smallInts builds an int64 column out of the bytes given, one value per byte,
+// with a small range of values so that a comparison lands on equal about as
+// often as it lands to either side of it. A byte divisible by seven is a null
+// and one that ends in four ends a chunk.
+func smallInts(t *testing.T, vs []byte) *array.Chunked {
+	t.Helper()
+
+	b, err := array.NewBuilder(dtype.Int64)
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	var chunks []*array.Array
+	for _, v := range vs {
+		if v%7 == 0 {
+			b.AppendNull()
+		} else {
+			b.Append(int64(v % 5))
+		}
+		if v%5 == 4 {
+			chunks = append(chunks, b.Finish())
+		}
+	}
+	chunks = append(chunks, b.Finish())
+
+	c, err := array.NewChunked(dtype.Int64, chunks...)
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+	return c
+}
