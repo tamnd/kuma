@@ -175,6 +175,94 @@ func FuzzBuilder(f *testing.F) {
 	})
 }
 
+// FuzzChunked checks a sliced chunked column against a flat model. The fuzzer
+// picks the chunk lengths and the range, which is the part that is easy to get
+// wrong by hand: a range that starts on a chunk boundary, one that ends on one,
+// one that falls inside a single chunk and one that covers several whole ones
+// are four different paths and there is no reason to trust that a test written
+// by hand covers all of them.
+func FuzzChunked(f *testing.F) {
+	f.Add([]byte{3, 5, 1, 7}, 2, 11)
+	f.Add([]byte{1}, 0, 1)
+	f.Add([]byte{0, 4, 0}, 1, 3)
+	f.Add([]byte{}, 0, 0)
+
+	f.Fuzz(func(t *testing.T, lengths []byte, i, j int) {
+		if len(lengths) > 64 {
+			t.Skip()
+		}
+
+		var (
+			chunks  []*array.Array
+			present []bool
+			next    int32
+		)
+		for _, n := range lengths {
+			b, err := array.NewBuilder(dtype.Int32)
+			if err != nil {
+				t.Fatalf("NewBuilder: %v", err)
+			}
+			for range int(n) % 40 {
+				if next%5 == 0 {
+					b.AppendNull()
+					present = append(present, false)
+				} else {
+					b.Append(next)
+					present = append(present, true)
+				}
+				next++
+			}
+			chunks = append(chunks, b.Finish())
+		}
+
+		c, err := array.NewChunked(dtype.Int32, chunks...)
+		if err != nil {
+			t.Fatalf("NewChunked: %v", err)
+		}
+		if c.Len() != len(present) {
+			t.Fatalf("%s, want %d values", c, len(present))
+		}
+		if i < 0 || j < i || j > c.Len() {
+			t.Skip()
+		}
+
+		s := c.Slice(i, j)
+		if s.Len() != j-i {
+			t.Fatalf("Slice(%d, %d).Len() = %d, want %d", i, j, s.Len(), j-i)
+		}
+
+		nulls := 0
+		for k := range s.Len() {
+			if !present[i+k] {
+				nulls++
+			}
+			if s.IsValid(k) != present[i+k] {
+				t.Fatalf("Slice(%d, %d).IsValid(%d) = %v, want %v",
+					i, j, k, s.IsValid(k), present[i+k])
+			}
+			if present[i+k] && s.Value[int32](k) != int32(i+k) {
+				t.Fatalf("Slice(%d, %d).Value(%d) = %d, want %d",
+					i, j, k, s.Value[int32](k), i+k)
+			}
+		}
+		if s.NullCount() != nulls {
+			t.Fatalf("Slice(%d, %d).NullCount() = %d, want %d", i, j, s.NullCount(), nulls)
+		}
+
+		// The chunks add up to the column, however the fuzzer chose them.
+		total := 0
+		for _, a := range s.Chunks() {
+			if a.Len() == 0 {
+				t.Fatal("an empty chunk survived")
+			}
+			total += a.Len()
+		}
+		if total != s.Len() {
+			t.Fatalf("the chunks hold %d values, the column says %d", total, s.Len())
+		}
+	})
+}
+
 // FuzzBools is the same property for the one type whose values are bits, where
 // a slice that does not begin on a byte boundary has to shift them.
 func FuzzBools(f *testing.F) {

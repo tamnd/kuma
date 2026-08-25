@@ -48,11 +48,18 @@
 // bytes laid out the way the column wants them, such as one reading a mapped
 // file.
 //
+// # Chunks
+//
+// A Chunked is a column held as several arrays rather than one, which is what
+// Arrow calls a ChunkedArray. A file arrives in record batches, and joining
+// them into one array would mean copying every value to gain nothing. A kernel
+// works on one chunk at a time and a chunk is an ordinary Array, so nothing
+// below this line has to know whether the column it came from was chunked.
+//
 // # What is not here yet
 //
-// The nested types, meaning List, Struct and Map, and ChunkedArray, which is a
-// column too long to be one Array. Both are coming and neither changes the
-// shape of what is here.
+// The nested types, meaning List, Struct and Map. They are coming and they do
+// not change the shape of what is here.
 //
 // Stability: tier 1, stable.
 package array
