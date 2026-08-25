@@ -40,6 +40,11 @@
 // [NUnique]. An aggregation over a whole column is an aggregation over
 // [OneGroup], so there is one of each rather than two.
 //
+// [Join], which works out which rows of two tables go together, in all seven of
+// the ways SQL can. Like a sort it returns positions rather than a table, so
+// building the result is Take's job and a caller who only wants to know what
+// matched does not pay to build one.
+//
 // These are the reference implementations and they are not the fast ones. They
 // append a value at a time, which is the version that is obviously right when
 // read next to the definition of what a gather is. The one that writes a run of

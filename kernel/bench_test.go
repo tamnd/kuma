@@ -594,3 +594,83 @@ func mustGroup(b *testing.B, keys ...*array.Chunked) *kernel.Groups {
 	}
 	return g
 }
+
+// benchSide returns a join side of benchLen rows over one int64 key of n
+// distinct values.
+func benchSide(b *testing.B, n int) kernel.Side {
+	b.Helper()
+
+	c := benchKeys(b, n)
+	return kernel.Side{Rows: c.Len(), Keys: []*array.Chunked{c}}
+}
+
+// BenchmarkJoin is the ordinary case: a key that is unique on the right, so
+// every left row matches once and the output is the size of the left side.
+func BenchmarkJoin(b *testing.B) {
+	left := benchSide(b, benchLen/8)
+	right := benchSide(b, benchLen)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		p, err := kernel.Join(left, right, kernel.InnerJoin)
+		if err != nil {
+			b.Fatalf("Join: %v", err)
+		}
+		indexSink = p.Left
+	}
+}
+
+// BenchmarkJoinLeft is the same join keeping the rows that matched nothing, so
+// the gap to BenchmarkJoin is what the bookkeeping for an unmatched row costs.
+func BenchmarkJoinLeft(b *testing.B) {
+	left := benchSide(b, benchLen/8)
+	right := benchSide(b, benchLen)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		p, err := kernel.Join(left, right, kernel.LeftJoin)
+		if err != nil {
+			b.Fatalf("Join: %v", err)
+		}
+		indexSink = p.Left
+	}
+}
+
+// BenchmarkJoinManyMatches is a thousand distinct keys on both sides, so every
+// left row matches sixty five right rows and the output is sixty five times
+// either input. The cost of a join like this is writing the answer down and
+// almost nothing else, which is the case worth knowing about before somebody
+// joins on a low cardinality column by accident.
+func BenchmarkJoinManyMatches(b *testing.B) {
+	left := benchSide(b, 1000)
+	right := benchSide(b, 1000)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		p, err := kernel.Join(left, right, kernel.InnerJoin)
+		if err != nil {
+			b.Fatalf("Join: %v", err)
+		}
+		indexSink = p.Left
+	}
+}
+
+// BenchmarkJoinSemi takes nothing from the right side and one row per left row
+// at most, so it is the cheapest join and the one a filter should compile to.
+func BenchmarkJoinSemi(b *testing.B) {
+	left := benchSide(b, benchLen/8)
+	right := benchSide(b, benchLen)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		p, err := kernel.Join(left, right, kernel.SemiJoin)
+		if err != nil {
+			b.Fatalf("Join: %v", err)
+		}
+		indexSink = p.Left
+	}
+}
