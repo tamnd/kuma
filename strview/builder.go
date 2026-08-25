@@ -96,19 +96,19 @@ func (b *Builder) blockFor(n int) *buffer.Buffer {
 // Reset drops everything and leaves a builder ready to use again.
 //
 // It gives up the memory rather than keeping it, because the memory may have
-// been handed to a Data by Build and writing into it again would change a
+// been handed to a Data by Finish and writing into it again would change a
 // column somebody else is reading.
 func (b *Builder) Reset() {
 	b.views, b.blocks = nil, nil
 }
 
-// Build returns the values appended so far and resets the builder.
+// Finish returns the values appended so far and resets the builder.
 //
 // The Data takes the builder's memory rather than a copy of it, which is the
 // only reason building a column is one allocation per block instead of two.
-// Build is what makes that safe: the builder comes back empty, so there is no
+// Finish is what makes that safe: the builder comes back empty, so there is no
 // way to write through it into a column that has already been handed out.
-func (b *Builder) Build() *Data {
+func (b *Builder) Finish() *Data {
 	d := &Data{views: b.views, blocks: b.blocks}
 	b.Reset()
 	return d

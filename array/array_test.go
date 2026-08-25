@@ -251,7 +251,7 @@ func TestNewStrings(t *testing.T) {
 	b.Append([]byte("a value that is too long to live inside its view"))
 	b.Append(nil)
 
-	a, err := array.NewStrings(dtype.String, b.Build(), validity(true, true, false))
+	a, err := array.NewStrings(dtype.String, b.Finish(), validity(true, true, false))
 	if err != nil {
 		t.Fatalf("NewStrings: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestNewStringsKinds(t *testing.T) {
 		var b strview.Builder
 		b.AppendString("kuma")
 
-		a, err := array.NewStrings(dt, b.Build(), nil)
+		a, err := array.NewStrings(dt, b.Finish(), nil)
 		if err != nil {
 			t.Fatalf("NewStrings(%s): %v", dt, err)
 		}
@@ -292,7 +292,7 @@ func TestNewStringsKinds(t *testing.T) {
 func TestNewStringsErrors(t *testing.T) {
 	var b strview.Builder
 	b.AppendString("kuma")
-	d := b.Build()
+	d := b.Finish()
 
 	tests := []struct {
 		name string

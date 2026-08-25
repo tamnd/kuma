@@ -14,7 +14,7 @@ func TestBlockBoundary(t *testing.T) {
 		b.AppendString(value)
 	}
 
-	d := b.Build()
+	d := b.Finish()
 	if len(d.blocks) != 3 {
 		t.Fatalf("seven twenty byte values in sixty four byte blocks used %d blocks, want 3",
 			len(d.blocks))
@@ -53,7 +53,7 @@ func TestBlockTakesAValueLargerThanItself(t *testing.T) {
 
 	b.AppendString(long)
 	b.AppendString(long)
-	d := b.Build()
+	d := b.Finish()
 
 	if len(d.blocks) != 2 {
 		t.Fatalf("two oversized values used %d blocks, want 2", len(d.blocks))

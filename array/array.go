@@ -188,7 +188,7 @@ func (a *Array) Clone() *Array {
 		for i := range a.length {
 			b.Append(a.strings.At(a.offset + i))
 		}
-		out.strings = b.Build()
+		out.strings = b.Finish()
 	}
 	return out
 }

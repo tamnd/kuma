@@ -17,7 +17,7 @@ func build(values ...string) *strview.Data {
 	for _, v := range values {
 		b.AppendString(v)
 	}
-	return b.Build()
+	return b.Finish()
 }
 
 // ref hand assembles a long view, so that the tests can describe views no
@@ -197,7 +197,7 @@ func TestEqualAcrossBlocks(t *testing.T) {
 		b.AppendString(strings.Repeat("filler", 1000))
 	}
 	b.AppendString(value)
-	d := b.Build()
+	d := b.Finish()
 
 	last := d.Len() - 1
 	if d.View(0).Block() == d.View(last).Block() {

@@ -19,7 +19,7 @@ func TestBuilder(t *testing.T) {
 		b.AppendString(v)
 	}
 
-	d := b.Build()
+	d := b.Finish()
 	if d.Len() != len(values) {
 		t.Fatalf("Len() = %d, want %d", d.Len(), len(values))
 	}
@@ -51,7 +51,7 @@ func TestBuilderCopiesWhatItIsGiven(t *testing.T) {
 	b.Append(p)
 	copy(p, "OVERWRITTEN")
 
-	if got := string(b.Build().At(0)); got != long {
+	if got := string(b.Finish().At(0)); got != long {
 		t.Errorf("At(0) = %q, want %q", got, long)
 	}
 }
@@ -61,7 +61,7 @@ func TestBuilderZeroValue(t *testing.T) {
 	if b.Len() != 0 {
 		t.Fatalf("the zero Builder has Len %d", b.Len())
 	}
-	if d := b.Build(); d.Len() != 0 {
+	if d := b.Finish(); d.Len() != 0 {
 		t.Fatalf("building the zero Builder gave %d values", d.Len())
 	}
 }
@@ -75,7 +75,7 @@ func TestBuilderGrow(t *testing.T) {
 	for range 100 {
 		b.AppendString("kuma")
 	}
-	d := b.Build()
+	d := b.Finish()
 	if d.Len() != 100 {
 		t.Fatalf("Len() = %d, want 100", d.Len())
 	}
@@ -87,7 +87,7 @@ func TestBuilderGrow(t *testing.T) {
 	b.AppendString("first")
 	b.Grow(10)
 	b.AppendString("second")
-	d = b.Build()
+	d = b.Finish()
 	if got, want := string(d.At(0)), "first"; got != want {
 		t.Errorf("At(0) = %q, want %q", got, want)
 	}
@@ -112,7 +112,7 @@ func TestBuilderReset(t *testing.T) {
 	if b.Len() != 0 {
 		t.Fatalf("Len() = %d after Reset", b.Len())
 	}
-	d := b.Build()
+	d := b.Finish()
 	if d.Len() != 0 || len(d.Blocks()) != 0 {
 		t.Errorf("after Reset the builder still holds %d values and %d blocks",
 			d.Len(), len(d.Blocks()))
@@ -126,7 +126,7 @@ func TestBuilderReset(t *testing.T) {
 func TestBuilderBuildHandsOverItsMemory(t *testing.T) {
 	var b strview.Builder
 	b.AppendString(long)
-	first := b.Build()
+	first := b.Finish()
 
 	if b.Len() != 0 {
 		t.Fatalf("Len() = %d after Build", b.Len())
@@ -135,7 +135,7 @@ func TestBuilderBuildHandsOverItsMemory(t *testing.T) {
 	for range 100 {
 		b.AppendString(strings.Repeat("z", 100))
 	}
-	second := b.Build()
+	second := b.Finish()
 
 	if got := string(first.At(0)); got != long {
 		t.Errorf("the first column now reads %q, want %q", got, long)
@@ -154,7 +154,7 @@ func TestBuilderLongValues(t *testing.T) {
 	b.AppendString(huge)
 	b.AppendString(huge)
 
-	d := b.Build()
+	d := b.Finish()
 	for i := 1; i <= 2; i++ {
 		if got := d.At(i); string(got) != huge {
 			t.Errorf("At(%d) returned %d bytes, want %d", i, len(got), len(huge))
@@ -175,7 +175,7 @@ func TestBuilderManyValues(t *testing.T) {
 		b.AppendString(fmt.Sprintf("value number %d, padded out so it cannot be inlined", i))
 	}
 
-	d := b.Build()
+	d := b.Finish()
 	if len(d.Blocks()) < 2 {
 		t.Fatalf("%d long values fit in %d block, so this test proves nothing", n, len(d.Blocks()))
 	}
@@ -202,7 +202,7 @@ func buildBench(n int) *strview.Data {
 			b.AppendString(fmt.Sprintf("id%08d", i))
 		}
 	}
-	return b.Build()
+	return b.Finish()
 }
 
 func BenchmarkBuilderShort(b *testing.B) {
@@ -220,7 +220,7 @@ func BenchmarkBuilderShort(b *testing.B) {
 		for _, v := range values {
 			bld.AppendString(v)
 		}
-		dataSink = bld.Build()
+		dataSink = bld.Finish()
 	}
 }
 
@@ -239,7 +239,7 @@ func BenchmarkBuilderLong(b *testing.B) {
 		for _, v := range values {
 			bld.AppendString(v)
 		}
-		dataSink = bld.Build()
+		dataSink = bld.Finish()
 	}
 }
 

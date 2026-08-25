@@ -137,7 +137,7 @@ func OfStrings(values ...string) *Array {
 		b.AppendString(v)
 	}
 
-	d := b.Build()
+	d := b.Finish()
 	return &Array{dt: dtype.String, length: d.Len(), strings: d}
 }
 
