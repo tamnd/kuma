@@ -160,3 +160,73 @@ func ExampleNewNull() {
 	// array.Array{null, len 1000, nulls 1000, offset 0}
 	// false true
 }
+
+// ExampleNewChunked shows the shape a reader produces: one array per batch, all
+// of them one column.
+func ExampleNewChunked() {
+	c, err := array.NewChunked(dtype.Int64,
+		array.Of[int64](1, 2, 3),
+		array.Of[int64](4, 5),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println(c)
+	fmt.Println(c.Len(), c.Value[int64](4))
+	// Output:
+	// array.Chunked{int64, len 5, nulls 0, chunks 2}
+	// 5 5
+}
+
+// ExampleChunked_Slice shows what a slice of a chunked column costs. The chunks
+// the range covers whole are the same arrays, shared rather than copied, and
+// only the ones at the ends are cut.
+func ExampleChunked_Slice() {
+	c, err := array.NewChunked(dtype.Int64,
+		array.Of[int64](0, 1, 2),
+		array.Of[int64](3, 4, 5),
+		array.Of[int64](6, 7, 8),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	s := c.Slice(1, 8)
+	fmt.Println(s)
+	fmt.Println(s.Chunk(1) == c.Chunk(1))
+	for _, chunk := range s.Chunks() {
+		fmt.Println(chunk.Values[int64]())
+	}
+	// Output:
+	// array.Chunked{int64, len 7, nulls 0, chunks 3}
+	// true
+	// [1 2]
+	// [3 4 5]
+	// [6 7]
+}
+
+// ExampleChunked_Chunks is the loop a kernel runs. Each chunk is a plain Go
+// slice, and the work happens there rather than one value at a time through the
+// column.
+func ExampleChunked_Chunks() {
+	c, err := array.NewChunked(dtype.Float64,
+		array.Of[float64](1.5, 2.5),
+		array.Of[float64](3.5, 4.5, 5.5),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	sum := 0.0
+	for _, chunk := range c.Chunks() {
+		for _, v := range chunk.Values[float64]() {
+			sum += v
+		}
+	}
+	fmt.Println(sum)
+	// Output: 17.5
+}

@@ -15,10 +15,11 @@ import (
 const benchLen = 1 << 16
 
 var (
-	intSink   int64
-	boolSink  bool
-	countSink int
-	arraySink *array.Array
+	intSink     int64
+	boolSink    bool
+	countSink   int
+	arraySink   *array.Array
+	chunkedSink *array.Chunked
 )
 
 func benchInts(b *testing.B) *array.Array {
@@ -264,5 +265,67 @@ func BenchmarkBytes(b *testing.B) {
 			n += len(a.Bytes(i))
 		}
 		countSink = n
+	}
+}
+
+// benchChunked returns the same 65536 values as benchInts, held as chunks of
+// 8192, which is the morsel size the executor hands to a worker.
+func benchChunked(b *testing.B) *array.Chunked {
+	b.Helper()
+
+	const per = 8192
+	var chunks []*array.Array
+	for start := 0; start < benchLen; start += per {
+		values := make([]int64, per)
+		for i := range values {
+			values[i] = int64(start + i)
+		}
+		chunks = append(chunks, array.Of[int64](values...))
+	}
+
+	c, err := array.NewChunked(dtype.Int64, chunks...)
+	if err != nil {
+		b.Fatalf("NewChunked: %v", err)
+	}
+	return c
+}
+
+// BenchmarkChunkedChunks is the loop a kernel runs, which is the same loop as
+// BenchmarkValues once per chunk and should cost about the same per value.
+func BenchmarkChunkedChunks(b *testing.B) {
+	c := benchChunked(b)
+	b.SetBytes(benchLen * 8)
+	for b.Loop() {
+		var sum int64
+		for _, chunk := range c.Chunks() {
+			for _, v := range chunk.Values[int64]() {
+				sum += v
+			}
+		}
+		intSink = sum
+	}
+}
+
+// BenchmarkChunkedValue is the same sum asked for one value at a time, where
+// every value costs a binary search over the chunks. The gap between this and
+// the one above is what the doc comment on Value is warning about.
+func BenchmarkChunkedValue(b *testing.B) {
+	c := benchChunked(b)
+	b.SetBytes(benchLen * 8)
+	for b.Loop() {
+		var sum int64
+		for i := range c.Len() {
+			sum += c.Value[int64](i)
+		}
+		intSink = sum
+	}
+}
+
+// BenchmarkChunkedSlice cuts a range that spans several chunks, where the work
+// is a binary search and two partial chunks however long the range is.
+func BenchmarkChunkedSlice(b *testing.B) {
+	c := benchChunked(b)
+	for b.Loop() {
+		chunkedSink = c.Slice(1000, 60000)
 	}
 }
