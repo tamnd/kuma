@@ -54,7 +54,8 @@ github.com/tamnd/kuma
   dtype/                        DataType, Schema, Field, coercion rules             T1
   bitmap/                       validity bitmaps, popcount, boolean ops             T1
   buffer/                       aligned allocation, size class pool                 T2
-  array/                        Array, ChunkedArray, builders, StringView           T2
+  strview/                      the string and binary view layout                   T1
+  array/                        Array, ChunkedArray, builders                       T2
 
   kernel/                       the dispatch table and every compute kernel         T3
     kernel.go                   dispatch table, registration, Scalar constraint
