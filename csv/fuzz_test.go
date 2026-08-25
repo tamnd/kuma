@@ -79,8 +79,16 @@ func FuzzWrite(f *testing.F) {
 		case 3:
 			wopts.Delimiter, ropts.Delimiter = ';', ';'
 		}
+		names := make([]string, tbl.NumCols())
 		for i, field := range tbl.Schema.Fields {
-			ropts.Types[field.Name] = tbl.Columns[i].DType()
+			names[i] = roundTrip(field.Name)
+			ropts.Types[names[i]] = tbl.Columns[i].DType()
+		}
+		if len(ropts.Types) != len(names) {
+			// Two names that differ only in a carriage return come back as the
+			// one name, and a file cannot hold two columns called the same
+			// thing, so there is no round trip to check.
+			return
 		}
 
 		var buf bytes.Buffer
@@ -99,7 +107,7 @@ func FuzzWrite(f *testing.F) {
 		}
 
 		for i := range tbl.Columns {
-			if got, want := back.Schema.Fields[i].Name, tbl.Schema.Fields[i].Name; got != want {
+			if got, want := back.Schema.Fields[i].Name, names[i]; got != want {
 				t.Fatalf("column %d came back called %q, want %q", i, got, want)
 			}
 			for j := range tbl.NumRows() {
@@ -132,7 +140,15 @@ func sameValue(t *testing.T, want, got *array.Chunked, i int) bool {
 	if got.IsNull(i) {
 		return false
 	}
-	return strings.ReplaceAll(w, "\r\n", "\n") == value(t, got, i)
+	return roundTrip(w) == value(t, got, i)
+}
+
+// roundTrip is the text that comes back after a write and a read, for a
+// column name as much as for a value. The two are the same question, since a
+// name is a value in the first record, and a carriage return before a newline
+// is the one thing in either that a file cannot carry.
+func roundTrip(s string) string {
+	return strings.ReplaceAll(s, "\r\n", "\n")
 }
 
 // FuzzInfer checks the promise the inference makes: a type worked out from
