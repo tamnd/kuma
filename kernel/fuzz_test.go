@@ -2,6 +2,7 @@ package kernel_test
 
 import (
 	"math"
+	"slices"
 	"testing"
 
 	"github.com/tamnd/kuma/array"
@@ -574,4 +575,141 @@ func aggregate(t *testing.T, name string, f func() (*array.Chunked, error)) *arr
 		t.Fatalf("%s: %v", name, err)
 	}
 	return c
+}
+
+// FuzzJoin builds two sides out of the two inputs and checks the properties
+// every join has, which is more than a table of hand written answers can reach
+// once the fuzzer starts choosing the chunk boundaries and where the nulls go.
+//
+// An inner join contains exactly the pairs whose keys are equal and present, a
+// left join is an inner join plus one unmatched row for each left row that
+// contributed nothing, a semi join is the distinct left rows of an inner join,
+// an anti join is the rest of them, and the two together are every left row
+// exactly once.
+func FuzzJoin(f *testing.F) {
+	f.Add([]byte{1, 2, 3}, []byte{2, 3, 4})
+	f.Add([]byte{1, 1, 1}, []byte{1, 1})
+	f.Add([]byte{255, 1}, []byte{255, 255})
+	f.Add([]byte{}, []byte{1})
+	f.Add([]byte{1}, []byte{})
+
+	f.Fuzz(func(t *testing.T, lb, rb []byte) {
+		if len(lb) > 32 || len(rb) > 32 {
+			t.Skip("a big input proves nothing a small one does not")
+		}
+
+		lk, rk := byteColumn(t, lb), byteColumn(t, rb)
+		left := kernel.Side{Rows: lk.Len(), Keys: []*array.Chunked{lk}}
+		right := kernel.Side{Rows: rk.Len(), Keys: []*array.Chunked{rk}}
+
+		// The pairs an inner join has to produce, worked out the slow and
+		// obvious way. A missing key matches nothing, including another one.
+		var wantL, wantR []int
+		for i := range left.Rows {
+			if lk.IsNull(i) {
+				continue
+			}
+			for j := range right.Rows {
+				if rk.IsNull(j) {
+					continue
+				}
+				if valueAt(t, lk, i) == valueAt(t, rk, j) {
+					wantL = append(wantL, i)
+					wantR = append(wantR, j)
+				}
+			}
+		}
+
+		inner, err := kernel.Join(left, right, kernel.InnerJoin)
+		if err != nil {
+			t.Fatalf("inner join: %v", err)
+		}
+		if !slices.Equal(inner.Left, wantL) || !slices.Equal(inner.Right, wantR) {
+			t.Fatalf("the inner join is %v %v, want %v %v",
+				inner.Left, inner.Right, wantL, wantR)
+		}
+
+		// A left join is the inner join with an unmatched row wherever a left
+		// row produced nothing, and the left column is still in order.
+		outer, err := kernel.Join(left, right, kernel.LeftJoin)
+		if err != nil {
+			t.Fatalf("left join: %v", err)
+		}
+		if !slices.IsSorted(outer.Left) {
+			t.Fatalf("the left join is out of order: %v", outer.Left)
+		}
+		matched := map[int]bool{}
+		for _, i := range wantL {
+			matched[i] = true
+		}
+		want := len(wantL)
+		for i := range left.Rows {
+			if !matched[i] {
+				want++
+			}
+		}
+		if outer.Len() != want {
+			t.Fatalf("the left join has %d rows, want %d", outer.Len(), want)
+		}
+		for k, j := range outer.Right {
+			if j < 0 && matched[outer.Left[k]] {
+				t.Fatalf("left row %d matched and has an unmatched row anyway", outer.Left[k])
+			}
+		}
+
+		// Semi and anti split the left rows in two, each row landing in exactly
+		// one of them, and semi is the ones the inner join used.
+		semi, err := kernel.Join(left, right, kernel.SemiJoin)
+		if err != nil {
+			t.Fatalf("semi join: %v", err)
+		}
+		anti, err := kernel.Join(left, right, kernel.AntiJoin)
+		if err != nil {
+			t.Fatalf("anti join: %v", err)
+		}
+		if semi.Right != nil || anti.Right != nil {
+			t.Fatal("a semi or anti join took something from the right side")
+		}
+		if semi.Len()+anti.Len() != left.Rows {
+			t.Fatalf("semi and anti have %d and %d rows, the left side has %d",
+				semi.Len(), anti.Len(), left.Rows)
+		}
+		for _, i := range semi.Left {
+			if !matched[i] {
+				t.Fatalf("the semi join kept left row %d, which matched nothing", i)
+			}
+		}
+		for _, i := range anti.Left {
+			if matched[i] {
+				t.Fatalf("the anti join kept left row %d, which matched", i)
+			}
+		}
+
+		// An outer join is the left join plus the right rows nothing used, and
+		// every right row appears at least once.
+		full, err := kernel.Join(left, right, kernel.OuterJoin)
+		if err != nil {
+			t.Fatalf("outer join: %v", err)
+		}
+		seen := map[int]bool{}
+		for _, j := range full.Right {
+			seen[j] = true
+		}
+		for j := range right.Rows {
+			if !seen[j] {
+				t.Fatalf("right row %d is in no outer join row", j)
+			}
+		}
+
+		// A right join is the left join of the swapped sides, so the two have
+		// to agree about how many pairs there are.
+		back, err := kernel.Join(right, left, kernel.RightJoin)
+		if err != nil {
+			t.Fatalf("right join: %v", err)
+		}
+		if back.Len() != outer.Len() {
+			t.Fatalf("the right join has %d rows and the left join has %d",
+				back.Len(), outer.Len())
+		}
+	})
 }

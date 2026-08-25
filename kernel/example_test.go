@@ -312,3 +312,90 @@ func ExampleNUnique() {
 	// 1 3 2
 	// 2 3 3
 }
+
+func ExampleJoin() {
+	trades, err := array.NewChunked(dtype.String,
+		array.OfStrings("AAPL", "MSFT", "TSLA"))
+	if err != nil {
+		panic(err)
+	}
+	listed, err := array.NewChunked(dtype.String, array.OfStrings("MSFT", "AAPL"))
+	if err != nil {
+		panic(err)
+	}
+	sector, err := array.NewChunked(dtype.String, array.OfStrings("software", "hardware"))
+	if err != nil {
+		panic(err)
+	}
+
+	p, err := kernel.Join(
+		kernel.Side{Rows: trades.Len(), Keys: []*array.Chunked{trades}},
+		kernel.Side{Rows: listed.Len(), Keys: []*array.Chunked{listed}},
+		kernel.LeftJoin)
+	if err != nil {
+		panic(err)
+	}
+
+	// A position below zero is a null, so the row that matched nothing needs no
+	// handling of its own.
+	symbols := kernel.Take(trades, p.Left)
+	sectors := kernel.Take(sector, p.Right)
+	for i := range p.Len() {
+		if sectors.IsNull(i) {
+			fmt.Println(string(symbols.Bytes(i)), "unknown")
+			continue
+		}
+		fmt.Println(string(symbols.Bytes(i)), string(sectors.Bytes(i)))
+	}
+	// Output:
+	// AAPL hardware
+	// MSFT software
+	// TSLA unknown
+}
+
+// A missing key matches nothing, including another missing key, which is what
+// SQL says. It is not what pandas does, where merging on a column with blanks
+// in it pairs the blanks up with each other.
+func ExampleJoin_missingKeys() {
+	left, err := array.NewChunked(dtype.Int64, array.Of[int64](1, 2))
+	if err != nil {
+		panic(err)
+	}
+
+	b, err := array.NewBuilder(dtype.Int64)
+	if err != nil {
+		panic(err)
+	}
+	b.AppendNull()
+	b.Append[int64](2)
+	right, err := array.NewChunked(dtype.Int64, b.Finish())
+	if err != nil {
+		panic(err)
+	}
+
+	// The left side has no null in it, so this is the right side's null being
+	// asked to match, and the only pair is the two twos.
+	p, err := kernel.Join(
+		kernel.Side{Rows: left.Len(), Keys: []*array.Chunked{left}},
+		kernel.Side{Rows: right.Len(), Keys: []*array.Chunked{right}},
+		kernel.InnerJoin)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(p.Left, p.Right)
+	// Output:
+	// [1] [1]
+}
+
+// A cross join takes row counts rather than keys, because it looks at no values
+// at all. It is the one join that turns two small tables into a large one, so
+// it has to be asked for by name.
+func ExampleJoin_cross() {
+	p, err := kernel.Join(kernel.Side{Rows: 2}, kernel.Side{Rows: 3}, kernel.CrossJoin)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(p.Len(), p.Left, p.Right)
+	// Output:
+	// 6 [0 0 0 1 1 1] [0 1 2 0 1 2]
+}
