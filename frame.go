@@ -2,7 +2,6 @@ package kuma
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/tamnd/kuma/dtype"
 	"github.com/tamnd/kuma/kernel"
@@ -359,20 +358,3 @@ func (f *Frame[S]) Head(n int) *Frame[S] { return f.Slice(0, headEnd(n, f.rows))
 // Tail returns the last n rows, or all of them if the frame is shorter than n.
 // A negative n means all but the first n.
 func (f *Frame[S]) Tail(n int) *Frame[S] { return f.Slice(tailStart(n, f.rows), f.rows) }
-
-// String returns the shape of the frame and its columns, one per line.
-//
-// It is not the table from document 04 yet. The pretty printer that prints the
-// rows is its own piece of work, and this is what a fmt.Println of a frame does
-// until that lands.
-func (f *Frame[S]) String() string {
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "kuma.Frame[%T] %d rows x %d cols", *new(S), f.rows, len(f.cols))
-	for _, c := range f.cols {
-		fmt.Fprintf(&sb, "\n  %s: %s", c.Name(), c.DType())
-		if n := c.NullCount(); n > 0 {
-			fmt.Fprintf(&sb, ", %d null", n)
-		}
-	}
-	return sb.String()
-}

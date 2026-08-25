@@ -254,3 +254,40 @@ func FuzzConcat(f *testing.F) {
 		}
 	})
 }
+
+// FuzzPrint checks that a table is a table whatever is in it.
+//
+// The property is the line count, which is the header, the types, the rule and
+// then one line per row shown. A value carrying a newline or a carriage return
+// would break it, and a value out of an arbitrary file is exactly where one of
+// those comes from.
+func FuzzPrint(f *testing.F) {
+	f.Add("a,b\n1,2\n", uint8(4))
+	f.Add("note\n\"two\nlines\"\n", uint8(1))
+	f.Add("a\n\r\n", uint8(0))
+
+	f.Fuzz(func(t *testing.T, in string, rows uint8) {
+		fr, err := kuma.ReadCSV(strings.NewReader(in), nil)
+		if err != nil {
+			return
+		}
+
+		limit := int(rows)
+		if limit == 0 {
+			limit = 10
+		}
+		shown := fr.NumRows()
+		if shown > limit {
+			shown = limit + 1
+		}
+
+		out := fr.Render(&kuma.PrintOptions{MaxRows: limit})
+		if got, want := strings.Count(out, "\n")+1, shown+5; got != want {
+			t.Fatalf("%d rows of %q printed as %d lines, want %d:\n%s",
+				fr.NumRows(), in, got, want, out)
+		}
+		if strings.HasSuffix(out, "\n") || strings.Contains(out, " \n") {
+			t.Fatalf("printing %q left whitespace at the end of a line:\n%q", in, out)
+		}
+	})
+}

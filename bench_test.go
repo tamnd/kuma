@@ -764,3 +764,33 @@ func BenchmarkFrameIsNull(b *testing.B) {
 		frameSink = f.IsNull()
 	}
 }
+
+// BenchmarkFrameString is a fmt.Println of a frame of sixteen columns and
+// sixty five thousand rows.
+//
+// What it should show is a cost that has nothing to do with how big the frame
+// is, since ten rows are rendered whether the frame holds ten or ten million.
+// A printer that walked the whole frame to work out its widths would show up
+// here as a number that grows with benchLen.
+func BenchmarkFrameString(b *testing.B) {
+	f := benchFrame(b)
+
+	b.SetBytes(int64(len(f.String())))
+	b.ReportAllocs()
+	for b.Loop() {
+		stringSink = f.String()
+	}
+}
+
+// BenchmarkFrameRender is the whole frame rather than a window on it, which is
+// what writing one to a report does. This one is per row and is meant to be.
+func BenchmarkFrameRender(b *testing.B) {
+	f := benchFrame(b).Head(1000)
+	opts := &kuma.PrintOptions{MaxRows: -1, MaxCols: -1}
+
+	b.SetBytes(int64(len(f.Render(opts))))
+	b.ReportAllocs()
+	for b.Loop() {
+		stringSink = f.Render(opts)
+	}
+}

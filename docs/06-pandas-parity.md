@@ -379,7 +379,7 @@ pandas ships around forty `DateOffset` classes. These map to `kuma/calendar` (M8
 - [ ] `read_gbq` `to_gbq` -> use ADBC (adapted, M10)
 - [ ] `to_markdown` -> `ToMarkdown` (M1)
 - [ ] `to_latex` -> `ToLatex` (M10)
-- [ ] `to_string` -> `String` (M1)
+- [x] `to_string` -> `String` (M1)
 - [ ] beyond pandas: Hive partitioned dataset scan (M2 metadata, M9 pruning), Arrow C Data Interface (M2), ADBC driver (M10), Delta and Iceberg readers (post 1.0)
 
 ## 12. Plotting
