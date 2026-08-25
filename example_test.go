@@ -852,3 +852,103 @@ func ExampleHStack() {
 	// Output:
 	// [symbol price] 2
 }
+
+// withGaps returns a frame with a hole in it, built the way a hole usually
+// turns up, which is data from two places that do not agree on the columns.
+func withGaps() *kuma.Frame[kuma.Dynamic] {
+	old, err := kuma.NewFrame(kuma.NewSeries("qty", int64(100), 50).Column())
+	if err != nil {
+		panic(err)
+	}
+	later, err := kuma.NewFrame(
+		kuma.NewSeries("qty", int64(25)).Column(),
+		kuma.NewSeries("fee", 0.5).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	f, err := kuma.ConcatUnion(old, later)
+	if err != nil {
+		panic(err)
+	}
+	return f
+}
+
+func ExampleFrame_FillNull() {
+	got, err := withGaps().FillNull("fee", 0.0)
+	if err != nil {
+		panic(err)
+	}
+
+	fees, err := got.Series[float64]("fee")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(fees.Values(), got.HasNulls())
+	// Output:
+	// [0 0 0.5] false
+}
+
+func ExampleFrame_DropNulls() {
+	got, err := withGaps().DropNulls()
+	if err != nil {
+		panic(err)
+	}
+
+	qty, err := got.Series[int64]("qty")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(qty.Values())
+	// Output:
+	// [25]
+}
+
+func ExampleFrame_KeepAtLeast() {
+	// One value present out of the two columns is enough, which is the pandas
+	// how="all" and keeps every row that is not entirely empty.
+	got, err := withGaps().KeepAtLeast(1)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(got.NumRows())
+	// Output:
+	// 3
+}
+
+func ExampleFrame_NullCounts() {
+	f := withGaps()
+	fmt.Println(f.Names(), f.NullCounts())
+	// Output:
+	// [qty fee] [0 2]
+}
+
+func ExampleSeries_FillNull() {
+	fees, err := withGaps().Series[float64]("fee")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(fees.FillNull(0.25).Values())
+	// Output:
+	// [0.25 0.25 0.5]
+}
+
+func ExampleSeries_ValidMask() {
+	f := withGaps()
+
+	fees, err := f.Series[float64]("fee")
+	if err != nil {
+		panic(err)
+	}
+
+	// The mask goes straight back into Filter, which is the whole point of it
+	// being a series rather than a slice of bool.
+	got, err := f.Filter(fees.ValidMask())
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(got.NumRows())
+	// Output:
+	// 1
+}

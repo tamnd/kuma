@@ -45,6 +45,12 @@
 // building the result is Take's job and a caller who only wants to know what
 // matched does not pay to build one.
 //
+// [IsNull] and [IsNotNull], which turn what is missing into a boolean column,
+// [FillNull], which puts a value where nothing was, and [KeepIndex], which is
+// the positions of the rows that have enough of their values to be worth
+// keeping. The first two are a copy of a bitmap and the last returns positions,
+// so the only one of the three that writes a value per row is the fill.
+//
 // These are the reference implementations and they are not the fast ones. They
 // append a value at a time, which is the version that is obviously right when
 // read next to the definition of what a gather is. The one that writes a run of

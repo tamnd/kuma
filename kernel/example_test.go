@@ -399,3 +399,85 @@ func ExampleJoin_cross() {
 	// Output:
 	// 6 [0 0 0 1 1 1] [0 1 2 0 1 2]
 }
+
+func ExampleIsNull() {
+	b, err := array.NewBuilder(dtype.Int64)
+	if err != nil {
+		panic(err)
+	}
+	b.Append(int64(1))
+	b.AppendNull()
+	b.Append(int64(3))
+
+	qty, err := array.NewChunked(dtype.Int64, b.Finish())
+	if err != nil {
+		panic(err)
+	}
+
+	missing := kernel.IsNull(qty)
+	for i := range missing.Len() {
+		fmt.Println(missing.Bool(i))
+	}
+	// Output:
+	// false
+	// true
+	// false
+}
+
+func ExampleFillNull() {
+	b, err := array.NewBuilder(dtype.Int64)
+	if err != nil {
+		panic(err)
+	}
+	b.Append(int64(1))
+	b.AppendNull()
+	b.Append(int64(3))
+
+	qty, err := array.NewChunked(dtype.Int64, b.Finish())
+	if err != nil {
+		panic(err)
+	}
+
+	filled, err := kernel.FillNull(qty, array.Of(int64(0)))
+	if err != nil {
+		panic(err)
+	}
+	for i := range filled.Len() {
+		fmt.Println(filled.Value[int64](i))
+	}
+	// Output:
+	// 1
+	// 0
+	// 3
+}
+
+// KeepIndex answers over several columns at once, which is what makes it one
+// call rather than a mask per column and then an and.
+func ExampleKeepIndex() {
+	b, err := array.NewBuilder(dtype.Int64)
+	if err != nil {
+		panic(err)
+	}
+	b.Append(int64(1))
+	b.AppendNull()
+	b.Append(int64(3))
+	qty, err := array.NewChunked(dtype.Int64, b.Finish())
+	if err != nil {
+		panic(err)
+	}
+
+	b.AppendNull()
+	b.Append(int64(2))
+	b.Append(int64(3))
+	fee, err := array.NewChunked(dtype.Int64, b.Finish())
+	if err != nil {
+		panic(err)
+	}
+
+	cols := []*array.Chunked{qty, fee}
+	fmt.Println(kernel.KeepIndex(cols, 3, 2))
+	fmt.Println(kernel.KeepIndex(cols, 3, 1))
+	// Output:
+	// [2]
+	// [0 1 2]
+}

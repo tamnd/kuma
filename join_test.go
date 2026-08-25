@@ -50,6 +50,12 @@ func rows(t *testing.T, f *kuma.Frame[kuma.Dynamic]) []string {
 				fmt.Fprintf(&b, "%d", c.Data().Value[int64](i))
 			case dtype.Float64:
 				fmt.Fprintf(&b, "%g", c.Data().Value[float64](i))
+			case dtype.Bool:
+				if c.Data().Bool(i) {
+					b.WriteByte('t')
+					continue
+				}
+				b.WriteByte('f')
 			default:
 				t.Fatalf("no way to print a %s column", c.DType())
 			}
