@@ -306,3 +306,80 @@ func ExampleSeries_Take() {
 	// Output:
 	// [400 100 400]
 }
+
+func ExampleSeries_Cast() {
+	s := kuma.NewSeries("qty", int64(100), 50, 400)
+
+	// The type argument is what the values come back as, and the argument is
+	// what they are stored as.
+	small, err := s.Cast[int32](dtype.Int32)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(small.DType(), small.Values())
+
+	// An int8 holds up to 127, and one of the three rows does not.
+	if _, err := s.Cast[int8](dtype.Int8); err != nil {
+		fmt.Println(err)
+	}
+	// Output:
+	// int32 [100 50 400]
+	// kernel: cannot cast int64 to int8: row 2 is 400: value out of range
+}
+
+func ExampleSeries_Cast_asTime() {
+	// Seconds since the epoch, which is how a file that came out of a database
+	// export usually holds them.
+	s := kuma.NewSeries("seen", int64(1767225600), 1767225660)
+
+	seen, err := s.Cast[time.Time](dtype.Timestamp{Unit: dtype.Second, Zone: "UTC"})
+	if err != nil {
+		panic(err)
+	}
+	for i := range seen.Len() {
+		fmt.Println(seen.Value(i).Format(time.RFC3339))
+	}
+	// Output:
+	// 2026-01-01T00:00:00Z
+	// 2026-01-01T00:01:00Z
+}
+
+func ExampleColumn_TryCast() {
+	c := kuma.NewSeries("qty", "100", "n/a", "400").Column()
+
+	// The row that will not parse becomes a null rather than an error, which is
+	// what makes a file of a million rows survive the one that says n/a.
+	got, err := c.TryCast(dtype.Int64)
+	if err != nil {
+		panic(err)
+	}
+
+	s, err := got.As[int64]()
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(s.Values(), "with", got.NullCount(), "null")
+	// Output:
+	// [100 0 400] with 1 null
+}
+
+func ExampleFrame_Cast() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT").Column(),
+		kuma.NewSeries("qty", int64(100), 50).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	got, err := f.Cast("qty", dtype.Float64)
+	if err != nil {
+		panic(err)
+	}
+	for _, c := range got.Columns() {
+		fmt.Println(c.Name(), c.DType())
+	}
+	// Output:
+	// symbol string
+	// qty float64
+}

@@ -531,3 +531,65 @@ func TestSeriesTakePanics(t *testing.T) {
 	}()
 	kuma.NewSeries("qty", int64(1), 2, 3).Take([]int{3})
 }
+
+func TestSeriesCast(t *testing.T) {
+	s := kuma.NewSeries("qty", int32(1), int32(2), int32(3))
+
+	got, err := s.Cast[int64](dtype.Int64)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if got.Name() != "qty" {
+		t.Errorf("Cast gave a column called %q, want %q", got.Name(), "qty")
+	}
+	if want := []int64{1, 2, 3}; !slices.Equal(got.Values(), want) {
+		t.Errorf("Cast gave %v, want %v", got.Values(), want)
+	}
+	if !dtype.Equal(got.DType(), dtype.Int64) {
+		t.Errorf("Cast gave a %s column, want int64", got.DType())
+	}
+}
+
+// TestSeriesCastReadAs is the reason Cast takes two types. One says what the
+// values are stored as and the other says how they are read back, and a
+// timestamp is the case where the two are genuinely different questions.
+func TestSeriesCastReadAs(t *testing.T) {
+	s := kuma.NewSeries("at", int64(1700000000), int64(1700000001))
+
+	got, err := s.Cast[time.Time](dtype.Timestamp{Unit: dtype.Second})
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if want := time.Unix(1700000000, 0).UTC(); !got.Value(0).Equal(want) {
+		t.Errorf("value 0 is %v, want %v", got.Value(0), want)
+	}
+}
+
+func TestSeriesCastDoesNotFit(t *testing.T) {
+	s := kuma.NewSeries("qty", int64(1), int64(400))
+
+	if _, err := s.Cast[int8](dtype.Int8); err == nil {
+		t.Fatal("Cast of 400 into an int8 succeeded")
+	}
+
+	got, err := s.TryCast[int8](dtype.Int8)
+	if err != nil {
+		t.Fatalf("TryCast: %v", err)
+	}
+	if got.NullCount() != 1 || !got.IsNull(1) {
+		t.Errorf("TryCast gave %d nulls, want the second value missing", got.NullCount())
+	}
+}
+
+// TestSeriesCastWrongReadType is the mistake the two type arguments make
+// possible, and it has to be an error rather than a wrong answer.
+func TestSeriesCastWrongReadType(t *testing.T) {
+	s := kuma.NewSeries("qty", int32(1))
+
+	if _, err := s.Cast[int8](dtype.Int64); err == nil {
+		t.Fatal("reading an int64 column as int8 succeeded")
+	}
+	if _, err := s.TryCast[int8](dtype.Int64); err == nil {
+		t.Fatal("reading an int64 column as int8 succeeded")
+	}
+}

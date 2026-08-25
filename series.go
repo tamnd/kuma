@@ -199,6 +199,34 @@ func (s Series[T]) Filter(mask Series[bool]) (Series[T], error) {
 	return s, nil
 }
 
+// Cast returns the column in the type to, read as a U.
+//
+// The two type arguments are doing different jobs. The argument to is what the
+// values are stored as, so it is the one that says microseconds or twelve
+// bytes, and U is how they are read back, so a cast to a timestamp comes back
+// as a Series[int64] or a Series[time.Time] depending on what the caller means
+// to do next.
+//
+// A value that will not fit is an error naming the row it was in. TryCast is
+// the same cast with that decision reversed, and [kernel.Cast] documents what
+// converts into what.
+func (s Series[T]) Cast[U Value](to dtype.DataType) (Series[U], error) {
+	data, err := kernel.Cast(s.data, to)
+	if err != nil {
+		return Series[U]{}, err
+	}
+	return SeriesFrom[U](s.name, data)
+}
+
+// TryCast is Cast with a value that will not fit becoming a null.
+func (s Series[T]) TryCast[U Value](to dtype.DataType) (Series[U], error) {
+	data, err := kernel.TryCast(s.data, to)
+	if err != nil {
+		return Series[U]{}, err
+	}
+	return SeriesFrom[U](s.name, data)
+}
+
 // Value returns value i. It panics if i is out of range.
 //
 // A missing value reads as the zero value of T, which is why IsNull exists. The

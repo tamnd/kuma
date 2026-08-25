@@ -90,6 +90,35 @@ func (c Column) Take(idx []int) Column {
 	return c
 }
 
+// Cast returns the column with its values in the type to.
+//
+// A value that will not fit is an error naming the row it was in, which is the
+// right default because the alternative changes data quietly. TryCast is the
+// same cast with that decision reversed. [kernel.Cast] documents what converts
+// into what.
+func (c Column) Cast(to dtype.DataType) (Column, error) {
+	data, err := kernel.Cast(c.data, to)
+	if err != nil {
+		return Column{}, err
+	}
+	c.data = data
+	return c, nil
+}
+
+// TryCast is Cast with a value that will not fit becoming a null.
+//
+// This is the one to reach for when the data is known to be dirty and the plan
+// is to count the nulls afterwards, which is a real thing to want when the
+// alternative is a file of a million rows failing on the one that says "N/A".
+func (c Column) TryCast(to dtype.DataType) (Column, error) {
+	data, err := kernel.TryCast(c.data, to)
+	if err != nil {
+		return Column{}, err
+	}
+	c.data = data
+	return c, nil
+}
+
 // String returns a short description of the column, for a log line or a test
 // failure. It is not the values.
 func (c Column) String() string {
