@@ -85,7 +85,7 @@ func schemaOf[S any]() ([]schemaField, error) {
 			continue
 		}
 		if name == "" {
-			name = snakeName(f.Name)
+			name = ColumnName(f.Name)
 		}
 		out = append(out, schemaField{field: f.Name, column: name, typ: f.Type})
 	}
@@ -144,13 +144,17 @@ func canReadType(rt reflect.Type, dt dtype.DataType) bool {
 	}
 }
 
-// snakeName is the column name a field with no tag gets.
+// ColumnName returns the column a struct field binds to when it carries no kuma
+// tag, which is the field name in snake case.
 //
 // It is the same rule the rest of the Go world uses for JSON: OrderID becomes
 // order_id and TS becomes ts. A run of capitals is one word, so HTTPCode is
 // http_code rather than h_t_t_p_code, and a digit stays with the word it
 // follows.
-func snakeName(field string) string {
+//
+// It is exported because kumagen has to name the same columns [Bind] does, and
+// because a program that writes its own schema out has a use for the rule.
+func ColumnName(field string) string {
 	var sb strings.Builder
 	sb.Grow(len(field) + 4)
 

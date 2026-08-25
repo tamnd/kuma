@@ -241,6 +241,18 @@ func ExampleCanRead() {
 	// false
 }
 
+func ExampleColumnName() {
+	// This is the column a field of each of these names binds to when it carries
+	// no kuma tag, and it is the name kumagen writes into the handle.
+	fmt.Println(kuma.ColumnName("Price"))
+	fmt.Println(kuma.ColumnName("OrderID"))
+	fmt.Println(kuma.ColumnName("HTTPCode"))
+	// Output:
+	// price
+	// order_id
+	// http_code
+}
+
 func ExampleFrame_Filter() {
 	f, err := kuma.NewFrame(
 		kuma.NewSeries("symbol", "AAPL", "MSFT", "NVDA").Column(),
