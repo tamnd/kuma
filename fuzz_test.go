@@ -169,3 +169,88 @@ func FuzzColumnError(f *testing.F) {
 		}
 	})
 }
+
+// FuzzConcat checks stacked frames against a flat model of the same values. The
+// fuzzer picks how many frames there are and how many rows each one has, so a
+// frame with no rows in the middle of the list and a list with one frame in it
+// are both reachable.
+func FuzzConcat(f *testing.F) {
+	f.Add([]byte{2, 3})
+	f.Add([]byte{0, 1, 0})
+	f.Add([]byte{5})
+	f.Add([]byte{})
+
+	f.Fuzz(func(t *testing.T, lengths []byte) {
+		if len(lengths) == 0 || len(lengths) > 16 {
+			t.Skip()
+		}
+
+		var (
+			frames []*kuma.Frame[kuma.Dynamic]
+			want   []int64
+			next   int64
+		)
+		for _, n := range lengths {
+			values := make([]int64, int(n)%20)
+			for i := range values {
+				values[i] = next
+				next++
+			}
+			want = append(want, values...)
+
+			frame, err := kuma.NewFrame(kuma.NewSeries("v", values...).Column())
+			if err != nil {
+				t.Fatalf("NewFrame: %v", err)
+			}
+			frames = append(frames, frame)
+		}
+
+		got, err := kuma.Concat(frames...)
+		if err != nil {
+			t.Fatalf("Concat: %v", err)
+		}
+		if got.NumRows() != len(want) {
+			t.Fatalf("there are %d rows, want %d", got.NumRows(), len(want))
+		}
+
+		s, err := got.Series[int64]("v")
+		if err != nil {
+			t.Fatalf("Series: %v", err)
+		}
+		for i, v := range want {
+			if s.Value(i) != v {
+				t.Fatalf("row %d is %d, want %d", i, s.Value(i), v)
+			}
+		}
+
+		// Stacking the same frames in a union has to give the same answer,
+		// since they all hold the same one column.
+		union, err := kuma.ConcatUnion(frames...)
+		if err != nil {
+			t.Fatalf("ConcatUnion: %v", err)
+		}
+		if union.NumRows() != len(want) {
+			t.Fatalf("the union has %d rows, want %d", union.NumRows(), len(want))
+		}
+		if union.NumCols() != 1 {
+			t.Fatalf("the union has %d columns, want 1", union.NumCols())
+		}
+
+		// A slice of the stacked frame is the same rows, which is the check
+		// that the chunk boundaries the stacking created are where it says.
+		if len(want) > 1 {
+			mid := len(want) / 2
+			tail, err := kuma.Concat(got.Slice(0, mid), got.Slice(mid, len(want)))
+			if err != nil {
+				t.Fatalf("Concat of the halves: %v", err)
+			}
+			half, err := tail.Series[int64]("v")
+			if err != nil {
+				t.Fatalf("Series: %v", err)
+			}
+			if !slices.Equal(half.Values(), s.Values()) {
+				t.Fatal("stacking the two halves back up gave different values")
+			}
+		}
+	})
+}

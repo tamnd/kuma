@@ -51,6 +51,21 @@
 // right rows at the end. Use [On] when the two sides call the key different
 // things.
 //
+// # Stacking
+//
+// [Concat] puts frames on top of each other and [HStack] puts them side by
+// side:
+//
+//	week, err := kuma.Concat(monday, tuesday, wednesday)
+//
+// Neither copies anything. A column is stored as a list of chunks, so stacking
+// two frames puts the two lists together and the values stay where they are,
+// which is why reading a directory of files and concatenating them costs about
+// what reading them cost and nothing more. [ConcatUnion] is the version for
+// frames that do not hold the same columns, and it is the only one of the three
+// that has to build anything, being the nulls that stand in for a column a
+// frame does not have.
+//
 // # Types and schemas
 //
 // A frame carries its schema as a type parameter. [Dynamic] is the schema type

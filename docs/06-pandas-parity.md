@@ -37,7 +37,7 @@ a.Add(b)                       // still positional, never aligned behind your ba
 - [x] `merge` -> `Frame.Join` with an explicit join type, plus `InnerJoin`, `LeftJoin` and `CrossJoin` for the common ones (M1). Semi and anti joins are here too, which pandas has no direct spelling for. The typed form over a generated schema is still M3.
 - [ ] `merge_ordered` -> `JoinOrdered` (M8)
 - [ ] `merge_asof` -> `JoinAsof` (M8)
-- [ ] `concat` -> `Concat` for rows, `HStack` for columns, adapted since there is no axis parameter (M1)
+- [x] `concat` -> `Concat` for rows, `HStack` for columns, adapted since there is no axis parameter (M1). `ConcatUnion` is the row version for frames that do not hold the same columns, which is what the pandas default does.
 - [ ] `get_dummies` -> `ToDummies` (M7)
 - [ ] `from_dummies` -> `FromDummies` (M7)
 - [ ] `factorize` -> `Factorize` (M7)

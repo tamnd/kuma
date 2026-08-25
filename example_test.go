@@ -763,3 +763,92 @@ func ExampleOn() {
 	// Output:
 	// symbol qty ticker sector
 }
+
+// Concat stacks frames on top of each other. Nothing is copied: a column is a
+// list of chunks, so stacking two frames puts the two lists together and the
+// values stay where they are.
+func ExampleConcat() {
+	monday, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT").Column(),
+		kuma.NewSeries("qty", int64(100), 50).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+	tuesday, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "NVDA").Column(),
+		kuma.NewSeries("qty", int64(400)).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	week, err := kuma.Concat(monday, tuesday)
+	if err != nil {
+		panic(err)
+	}
+
+	qty, err := week.Series[int64]("qty")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(week.NumRows(), qty.Values())
+	// Output:
+	// 3 [100 50 400]
+}
+
+// ConcatUnion is for frames that do not hold the same columns. The result has
+// every column any of them has, and a frame that lacks one contributes nulls.
+func ExampleConcatUnion() {
+	old, err := kuma.NewFrame(kuma.NewSeries("qty", int64(100), 50).Column())
+	if err != nil {
+		panic(err)
+	}
+	later, err := kuma.NewFrame(
+		kuma.NewSeries("qty", int64(25)).Column(),
+		kuma.NewSeries("fee", 0.5).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	got, err := kuma.ConcatUnion(old, later)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println(got.Names())
+	for i := range got.NumRows() {
+		if got.ColumnAt(1).IsNull(i) {
+			fmt.Println("no fee")
+			continue
+		}
+		fmt.Println(got.ColumnAt(1).Data().Value[float64](i))
+	}
+	// Output:
+	// [qty fee]
+	// no fee
+	// no fee
+	// 0.5
+}
+
+// HStack puts frames side by side, matching them up by position. Use a join
+// when the rows should be matched by a key instead.
+func ExampleHStack() {
+	symbols, err := kuma.NewFrame(kuma.NewSeries("symbol", "AAPL", "MSFT").Column())
+	if err != nil {
+		panic(err)
+	}
+	prices, err := kuma.NewFrame(kuma.NewSeries("price", 189.5, 411.2).Column())
+	if err != nil {
+		panic(err)
+	}
+
+	got, err := kuma.HStack(symbols, prices)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(got.Names(), got.NumRows())
+	// Output:
+	// [symbol price] 2
+}

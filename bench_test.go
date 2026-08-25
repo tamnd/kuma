@@ -578,3 +578,66 @@ func BenchmarkFrameSemiJoin(b *testing.B) {
 		frameSink = out
 	}
 }
+
+// benchParts returns eight frames of the same shape, which is the day of files
+// a concat usually gets handed.
+func benchParts(b *testing.B) []*kuma.Frame[kuma.Dynamic] {
+	b.Helper()
+
+	const parts = 8
+
+	prices := make([]float64, benchLen)
+	for i := range prices {
+		prices[i] = float64(i) / 8
+	}
+
+	out := make([]*kuma.Frame[kuma.Dynamic], parts)
+	for i := range out {
+		f, err := kuma.NewFrame(
+			benchInts(b, 1).Rename("qty").Column(),
+			kuma.NewSeries("price", prices...).Column(),
+		)
+		if err != nil {
+			b.Fatalf("NewFrame: %v", err)
+		}
+		out[i] = f
+	}
+	return out
+}
+
+// BenchmarkConcat is the point of storing a column as a list of chunks. Eight
+// frames of 65536 rows stack into one frame of half a million, and the cost is
+// the two column loops rather than anything to do with the rows.
+func BenchmarkConcat(b *testing.B) {
+	parts := benchParts(b)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := kuma.Concat(parts...)
+		if err != nil {
+			b.Fatalf("Concat: %v", err)
+		}
+		frameSink = out
+	}
+}
+
+// BenchmarkConcatUnion is the same stacking with a column one frame does not
+// have, which is the case that has to build something: the nulls that stand in
+// for it.
+func BenchmarkConcatUnion(b *testing.B) {
+	parts := benchParts(b)
+	odd, err := parts[0].Drop("price")
+	if err != nil {
+		b.Fatalf("Drop: %v", err)
+	}
+	parts[0] = odd
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := kuma.ConcatUnion(parts...)
+		if err != nil {
+			b.Fatalf("ConcatUnion: %v", err)
+		}
+		frameSink = out
+	}
+}
