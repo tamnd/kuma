@@ -177,7 +177,8 @@ a.Add(b)                       // still positional, never aligned behind your ba
 - [ ] `nunique` -> `NUnique` (M7)
 - [ ] `value_counts` -> `ValueCounts` (M7)
 - [ ] `idxmax` `idxmin` -> `IdxMax` `IdxMin`, returning a label with an index or a position without (M7)
-- [ ] `argmax` `argmin` `argsort` -> `ArgMax` `ArgMin` `ArgSort` (M7)
+- [ ] `argmax` `argmin` -> `ArgMax` `ArgMin` (M7)
+- [x] `argsort` -> `SortIndex`, on a series, a column and a frame (adapted, M1)
 - [ ] `autocorr` -> `AutoCorr` (M7)
 - [ ] `nlargest` `nsmallest` -> `TopK` `BottomK` (M7)
 - [ ] `mad` -> removed from pandas, but `MAD` is provided anyway since it is cheap and people ask (M7)
@@ -215,7 +216,7 @@ a.Add(b)                       // still positional, never aligned behind your ba
 
 ### Reshaping and sorting
 
-- [ ] `sort_values` -> `SortBy` and `SortDesc`, with null placement and stability options (M1)
+- [x] `sort_values` -> `Sort`, `SortBy` and `SortDesc`, with null placement per key (adapted, M1). The sort is always stable, so there is no equivalent of the `kind` argument.
 - [ ] `sort_index` -> `SortByIndex`, requires an explicit index (M7)
 - [ ] `stack` `unstack` -> `Stack` `Unstack` (M7)
 - [ ] `swaplevel` `reorder_levels` `droplevel` -> `SwapKeys` `ReorderKeys` `DropKey` over compound index keys (M7)

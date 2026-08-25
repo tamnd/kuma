@@ -248,3 +248,108 @@ func FuzzCastText(f *testing.F) {
 		}
 	})
 }
+
+// FuzzSort checks the three things a sorted order has to be, whatever the
+// values and however the column is cut into chunks: a permutation of the
+// positions, non decreasing in the values, and with the missing values in one
+// block at the end.
+func FuzzSort(f *testing.F) {
+	f.Add([]byte{3, 1, 2}, false, false)
+	f.Add([]byte{9, 9, 9, 9}, true, false)
+	f.Add([]byte{}, false, true)
+	f.Add([]byte{200, 0, 7, 255, 1, 1}, true, true)
+
+	f.Fuzz(func(t *testing.T, values []byte, descending, nullsFirst bool) {
+		if len(values) > 64 {
+			t.Skip("a big input proves nothing a small one does not")
+		}
+
+		src := byteColumn(t, values)
+		o := kernel.Order{Column: src, Descending: descending, NullsFirst: nullsFirst}
+
+		idx, err := kernel.SortIndex(o)
+		if err != nil {
+			t.Fatalf("SortIndex: %v", err)
+		}
+		if len(idx) != src.Len() {
+			t.Fatalf("the order has %d positions, the column has %d values", len(idx), src.Len())
+		}
+
+		seen := make([]bool, len(idx))
+		for _, i := range idx {
+			if seen[i] {
+				t.Fatalf("position %d appears twice", i)
+			}
+			seen[i] = true
+		}
+
+		// Walking the result, a value never comes before one it should come
+		// after, and a null never appears in the middle of the values when it
+		// was asked to go at the end.
+		wasNull := false
+		var last int64
+		first := true
+		for k, i := range idx {
+			if src.IsNull(i) {
+				if !nullsFirst {
+					wasNull = true
+					continue
+				}
+				if !first {
+					t.Fatalf("a null is at position %d, after a value, with nulls first", k)
+				}
+				continue
+			}
+			if wasNull {
+				t.Fatalf("a value is at position %d, after a null, with nulls last", k)
+			}
+
+			v := src.Value[int64](i)
+			if !first {
+				if !descending && v < last {
+					t.Fatalf("value %d is %d, after %d, ascending", k, v, last)
+				}
+				if descending && v > last {
+					t.Fatalf("value %d is %d, after %d, descending", k, v, last)
+				}
+			}
+			last, first = v, false
+		}
+	})
+}
+
+// byteColumn builds an int64 column out of the bytes given, one value per byte,
+// with a null wherever the byte is 255, in as many chunks as it takes.
+//
+// The values repeat, which is the point: a sort of values that are all
+// different never exercises a tie, and the ties are where the stability and the
+// null placement live.
+func byteColumn(t *testing.T, values []byte) *array.Chunked {
+	t.Helper()
+
+	b, err := array.NewBuilder(dtype.Int64)
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	var chunks []*array.Array
+	for i, v := range values {
+		if v == 255 {
+			b.AppendNull()
+		} else {
+			b.Append(int64(v) - 128)
+		}
+		// A chunk boundary every so often, at a place the input decides, so
+		// that a value and the boundary next to it are fuzzed together.
+		if i%7 == 6 {
+			chunks = append(chunks, b.Finish())
+		}
+	}
+	chunks = append(chunks, b.Finish())
+
+	c, err := array.NewChunked(dtype.Int64, chunks...)
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+	return c
+}
