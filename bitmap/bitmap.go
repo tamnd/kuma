@@ -114,6 +114,49 @@ func (b *Bitmap) Clone() *Bitmap {
 	return out
 }
 
+// Slice returns bits i through j-1 as a new bitmap, renumbered so that bit i
+// becomes bit 0. It panics if the range is out of bounds.
+//
+// It copies rather than aliasing. A bitmap could carry a starting bit offset
+// and slice in constant time, which is what an Arrow array does, but then Bytes
+// would no longer return a buffer that begins at bit zero with zeroed padding,
+// and every operation and every caller would have to carry an offset that is
+// almost always zero. Copying costs one byte per eight bits, so slicing a chunk
+// of eight thousand rows moves a kilobyte. The layers above this one keep their
+// own offset for the places where constant time slicing is worth the
+// complexity.
+func (b *Bitmap) Slice(i, j int) *Bitmap {
+	if i < 0 || j < i || j > b.n {
+		panic("bitmap: slice out of range")
+	}
+
+	out := &Bitmap{bits: make([]byte, sizeOf(j-i)), n: j - i}
+	if out.n == 0 {
+		return out
+	}
+
+	// A byte aligned start is a plain copy, and it is the common case because
+	// chunk boundaries are chosen to be round numbers.
+	if i&7 == 0 {
+		copy(out.bits, b.bits[i>>3:])
+		out.clearPadding()
+		return out
+	}
+
+	// Otherwise each output byte is the tail of one input byte and the head of
+	// the next.
+	shift := uint(i & 7)
+	src := b.bits[i>>3:]
+	for k := range out.bits {
+		out.bits[k] = src[k] >> shift
+		if k+1 < len(src) {
+			out.bits[k] |= src[k+1] << (8 - shift)
+		}
+	}
+	out.clearPadding()
+	return out
+}
+
 // And sets b to the intersection of b and other. Both must have the same
 // length. This is the operation that combines two validity bitmaps in a binary
 // kernel, where a result is valid only if both inputs were.
@@ -138,6 +181,15 @@ func (b *Bitmap) AndNot(other *Bitmap) {
 	b.checkSameLen(other)
 	for i := range b.bits {
 		b.bits[i] &^= other.bits[i]
+	}
+}
+
+// Xor sets b to the symmetric difference of b and other, meaning the bits that
+// are set in exactly one of them. Both must have the same length.
+func (b *Bitmap) Xor(other *Bitmap) {
+	b.checkSameLen(other)
+	for i := range b.bits {
+		b.bits[i] ^= other.bits[i]
 	}
 }
 
