@@ -12,7 +12,7 @@ func ExampleBuilder() {
 	b.AppendString("kuma")
 	b.AppendString("a value that is too long to live inside its view")
 
-	d := b.Build()
+	d := b.Finish()
 	for i := range d.Len() {
 		fmt.Printf("%d bytes, inline %v: %s\n", d.View(i).Len(), d.View(i).IsInline(), d.At(i))
 	}
@@ -41,7 +41,7 @@ func ExampleView_prefix() {
 	var b strview.Builder
 	b.AppendString("kuma")
 	b.AppendString("kumamoto prefecture, in the south")
-	d := b.Build()
+	d := b.Finish()
 
 	for i := range d.Len() {
 		p := d.View(i).Prefix()
@@ -57,7 +57,7 @@ func ExampleData_Compare() {
 	for _, s := range []string{"pear", "apple", "a rather longer name than the others", "banana"} {
 		b.AppendString(s)
 	}
-	d := b.Build()
+	d := b.Finish()
 
 	order := make([]int, d.Len())
 	for i := range order {
@@ -79,7 +79,7 @@ func ExampleData_EqualValue() {
 	var b strview.Builder
 	b.AppendString("tokyo")
 	b.AppendString("kumamoto")
-	d := b.Build()
+	d := b.Finish()
 
 	for i := range d.Len() {
 		fmt.Println(string(d.At(i)), d.EqualValue(i, []byte("kumamoto")))
@@ -96,7 +96,7 @@ func ExampleData_EqualValue() {
 func ExampleNewData() {
 	var b strview.Builder
 	b.AppendString("a value that does not fit inline")
-	d := b.Build()
+	d := b.Finish()
 
 	views, blocks := d.Views(), d.Blocks()
 	views[0][12] = 0xff // move the value's offset out past the end of its block

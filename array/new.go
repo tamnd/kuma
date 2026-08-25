@@ -11,6 +11,10 @@ import (
 	"github.com/tamnd/kuma/strview"
 )
 
+// errNilDType is the one error every constructor here can return, since a
+// column with no type is the one mistake that is not about the values.
+var errNilDType = errors.New("array: nil dtype")
+
 // New returns a fixed width array of length values of type dt, holding the
 // values in values and the nulls in valid.
 //
@@ -27,7 +31,7 @@ import (
 // Bool column the values are bits, so it needs one byte per eight values.
 func New(dt dtype.DataType, length int, values *buffer.Buffer, valid *bitmap.Bitmap) (*Array, error) {
 	if dt == nil {
-		return nil, errors.New("array: nil dtype")
+		return nil, errNilDType
 	}
 	if length < 0 {
 		return nil, fmt.Errorf("array: negative length %d", length)
@@ -65,7 +69,7 @@ func New(dt dtype.DataType, length int, values *buffer.Buffer, valid *bitmap.Bit
 // The array takes over d and valid, the same way New does.
 func NewStrings(dt dtype.DataType, d *strview.Data, valid *bitmap.Bitmap) (*Array, error) {
 	if dt == nil {
-		return nil, errors.New("array: nil dtype")
+		return nil, errNilDType
 	}
 	switch dt.Kind() {
 	case dtype.StringKind, dtype.BinaryKind:
@@ -137,7 +141,7 @@ func OfStrings(values ...string) *Array {
 		b.AppendString(v)
 	}
 
-	d := b.Build()
+	d := b.Finish()
 	return &Array{dt: dtype.String, length: d.Len(), strings: d}
 }
 

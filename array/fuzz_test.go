@@ -87,6 +87,94 @@ func FuzzSlice(f *testing.F) {
 	})
 }
 
+// FuzzBuilder drives a builder from a program of opcodes and checks what comes
+// out against a model of the same appends. The interesting part is where the
+// first null lands, because that is where the bitmap appears and everything
+// before it has to be filled in as present, so the fuzzer choosing the position
+// is choosing the case.
+func FuzzBuilder(f *testing.F) {
+	f.Add([]byte{1, 1, 0, 1})
+	f.Add([]byte{0, 0, 0})
+	f.Add([]byte{1, 2, 1})
+	f.Add([]byte{3, 1, 0, 2, 1})
+	f.Add([]byte{})
+
+	f.Fuzz(func(t *testing.T, ops []byte) {
+		b, err := array.NewBuilder(dtype.Int32)
+		if err != nil {
+			t.Fatalf("NewBuilder: %v", err)
+		}
+
+		var (
+			values  []int32
+			present []bool
+		)
+		for _, op := range ops {
+			switch op % 4 {
+			case 0:
+				b.AppendNull()
+				values = append(values, 0)
+				present = append(present, false)
+			case 1:
+				v := int32(op) * 1000
+				b.Append(v)
+				values = append(values, v)
+				present = append(present, true)
+			case 2:
+				n := int(op) % 9
+				b.AppendNulls(n)
+				for range n {
+					values = append(values, 0)
+					present = append(present, false)
+				}
+			case 3:
+				vs := make([]int32, int(op)%5)
+				for k := range vs {
+					vs[k] = int32(op) + int32(k)
+				}
+				b.AppendValues(vs)
+				values = append(values, vs...)
+				for range vs {
+					present = append(present, true)
+				}
+			}
+
+			if b.Len() != len(values) {
+				t.Fatalf("after op %d the builder has %d values, want %d", op, b.Len(), len(values))
+			}
+		}
+
+		a := b.Finish()
+		if a.Len() != len(values) {
+			t.Fatalf("%s, want %d values", a, len(values))
+		}
+
+		nulls := 0
+		for i := range present {
+			if !present[i] {
+				nulls++
+			}
+			if a.IsValid(i) != present[i] {
+				t.Fatalf("IsValid(%d) = %v, want %v", i, a.IsValid(i), present[i])
+			}
+			if got := a.Value[int32](i); got != values[i] {
+				t.Fatalf("Value(%d) = %d, want %d", i, got, values[i])
+			}
+		}
+		if a.NullCount() != nulls {
+			t.Fatalf("NullCount() = %d, want %d", a.NullCount(), nulls)
+		}
+		if nulls == 0 && a.Validity() != nil {
+			t.Fatal("a column with no nulls came out with a validity bitmap")
+		}
+
+		// The builder is empty again, whatever it was handed.
+		if b.Len() != 0 || b.NullCount() != 0 {
+			t.Fatalf("after Finish the builder has %d values and %d nulls", b.Len(), b.NullCount())
+		}
+	})
+}
+
 // FuzzBools is the same property for the one type whose values are bits, where
 // a slice that does not begin on a byte boundary has to shift them.
 func FuzzBools(f *testing.F) {

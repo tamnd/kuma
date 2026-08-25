@@ -55,7 +55,7 @@ func FuzzBuilder(f *testing.F) {
 			t.Fatalf("Builder.Len is %d after %d appends", b.Len(), len(values))
 		}
 
-		d := b.Build()
+		d := b.Finish()
 		if d.Len() != len(values) {
 			t.Fatalf("Data.Len is %d, want %d", d.Len(), len(values))
 		}
@@ -130,7 +130,7 @@ func FuzzBuilder(f *testing.F) {
 			t.Fatalf("Builder.Len is %d after Reset", b.Len())
 		}
 		b.Append([]byte("after the reset"))
-		again := b.Build()
+		again := b.Finish()
 		if got := string(again.At(0)); got != "after the reset" {
 			t.Fatalf("after Reset the builder holds %q", got)
 		}
