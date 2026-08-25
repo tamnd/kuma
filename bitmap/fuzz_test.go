@@ -119,6 +119,19 @@ func FuzzSlice(f *testing.F) {
 		got := src.Slice(i, j)
 		checkEqual(t, got, model[i:j])
 		checkPadding(t, got)
+
+		// CountOnesRange answers the same question without copying, so it has
+		// to give the same number over the same range. The two get their
+		// partial end bytes right in completely different ways, one by shifting
+		// and one by masking, which makes them worth checking against each
+		// other as well as against the model.
+		if n, want := src.CountOnesRange(i, j), model[i:j].countOnes(); n != want {
+			t.Fatalf("CountOnesRange(%d, %d) = %d, want %d", i, j, n, want)
+		}
+		if n := got.CountOnes(); n != src.CountOnesRange(i, j) {
+			t.Fatalf("Slice(%d, %d).CountOnes() = %d but CountOnesRange says %d",
+				i, j, n, src.CountOnesRange(i, j))
+		}
 	})
 }
 
