@@ -20,6 +20,20 @@ func (r reference) countOnes() int {
 	return n
 }
 
+// equalRef is checkEqual without the reporting, for the cases that compare
+// thousands of small bitmaps and only want to know which one differed.
+func equalRef(got *bitmap.Bitmap, want reference) bool {
+	if got.Len() != len(want) {
+		return false
+	}
+	for i := range want {
+		if got.Get(i) != want[i] {
+			return false
+		}
+	}
+	return got.CountOnes() == want.countOnes()
+}
+
 func checkEqual(t *testing.T, got *bitmap.Bitmap, want reference) {
 	t.Helper()
 	if got.Len() != len(want) {
@@ -121,6 +135,7 @@ func TestBooleanOps(t *testing.T) {
 		{"And", (*bitmap.Bitmap).And, func(a, b bool) bool { return a && b }},
 		{"Or", (*bitmap.Bitmap).Or, func(a, b bool) bool { return a || b }},
 		{"AndNot", (*bitmap.Bitmap).AndNot, func(a, b bool) bool { return a && !b }},
+		{"Xor", (*bitmap.Bitmap).Xor, func(a, b bool) bool { return a != b }},
 	}
 
 	for _, tt := range tests {
@@ -182,6 +197,44 @@ func TestFromBytes(t *testing.T) {
 	}
 }
 
+// TestSlice checks every start and end position against a model, because the
+// interesting case is the unaligned one where each output byte is stitched
+// together from two input bytes.
+func TestSlice(t *testing.T) {
+	const n = 70
+	src := bitmap.New(n)
+	model := make(reference, n)
+	for i := range n {
+		model[i] = i%3 == 0 || i%7 == 1
+		src.Set(i, model[i])
+	}
+
+	for i := range n + 1 {
+		for j := i; j <= n; j++ {
+			got := src.Slice(i, j)
+			if !equalRef(got, model[i:j]) {
+				t.Fatalf("Slice(%d, %d) disagrees with the model", i, j)
+			}
+		}
+	}
+
+	// The source must be untouched, since Slice copies.
+	checkEqual(t, src, model)
+}
+
+func TestSlicePadding(t *testing.T) {
+	src := bitmap.NewSet(64)
+	for i := range 64 {
+		for j := i; j <= 64; j++ {
+			got := src.Slice(i, j)
+			if got.CountOnes() != j-i {
+				t.Fatalf("Slice(%d, %d).CountOnes() = %d, want %d",
+					i, j, got.CountOnes(), j-i)
+			}
+		}
+	}
+}
+
 func TestPanics(t *testing.T) {
 	tests := []struct {
 		name string
@@ -193,6 +246,10 @@ func TestPanics(t *testing.T) {
 		{"get negative", func() { bitmap.New(8).Get(-1) }},
 		{"set out of range", func() { bitmap.New(8).Set(8, true) }},
 		{"length mismatch", func() { bitmap.New(8).And(bitmap.New(9)) }},
+		{"xor length mismatch", func() { bitmap.New(8).Xor(bitmap.New(9)) }},
+		{"slice past the end", func() { bitmap.New(8).Slice(0, 9) }},
+		{"slice backwards", func() { bitmap.New(8).Slice(5, 4) }},
+		{"slice negative", func() { bitmap.New(8).Slice(-1, 4) }},
 	}
 
 	for _, tt := range tests {

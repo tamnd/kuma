@@ -47,3 +47,33 @@ func ExampleBitmap_Append() {
 	// Output:
 	// 3 2
 }
+
+func ExampleBitmap_Slice() {
+	valid := bitmap.NewSet(10)
+	valid.Set(4, false)
+	valid.Set(7, false)
+
+	// Rows 3 through 7 of the column, renumbered from zero.
+	window := valid.Slice(3, 8)
+
+	for i := range window.Len() {
+		fmt.Print(window.Get(i), " ")
+	}
+	fmt.Println()
+	// Output:
+	// true false true true false
+}
+
+func ExampleBuilder() {
+	// Reading a column of a thousand values where only the last ten are
+	// missing. The long run of valid values is one call rather than a loop.
+	var b bitmap.Builder
+	b.Grow(1000)
+	b.AppendMany(true, 990)
+	b.AppendMany(false, 10)
+
+	valid := b.Finish()
+	fmt.Println(valid.Len(), valid.CountOnes())
+	// Output:
+	// 1000 990
+}
