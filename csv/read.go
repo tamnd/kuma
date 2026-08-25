@@ -45,6 +45,9 @@ func ReadFile(path string, opts *Options) (*Table, error) {
 // asks for one allocation the size of the file.
 func Read(r io.Reader, opts *Options) (*Table, error) {
 	o := opts.withDefaults()
+	if err := checkDelim(o.Delimiter, o.Comment); err != nil {
+		return nil, err
+	}
 	rd := &reader{opts: o, src: stdcsv.NewReader(r)}
 
 	rd.src.Comma = o.Delimiter

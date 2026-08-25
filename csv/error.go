@@ -24,8 +24,19 @@ var (
 	ErrNoColumn = errors.New("no such column")
 
 	// ErrUnsupportedType is returned when Options.Types names a type this
-	// reader cannot parse text into, such as a list or a struct.
+	// reader cannot parse text into, such as a list or a struct, and when a
+	// column being written holds a type that has no text form at all.
 	ErrUnsupportedType = errors.New("unsupported column type")
+
+	// ErrDelimiter is returned when the delimiter or the comment character
+	// cannot do the job, which means a quote, a line ending, a rune that is
+	// not one, or the same character for both.
+	ErrDelimiter = errors.New("invalid delimiter")
+
+	// ErrTable is returned when a table cannot be written because it does not
+	// hold together: a schema and a list of columns of different lengths, or
+	// columns with different numbers of rows.
+	ErrTable = errors.New("malformed table")
 
 	// ErrValue is what a value that will not parse unwraps to. The error
 	// itself is a *ValueError, which says which line and which column.

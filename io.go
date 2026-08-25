@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/tamnd/kuma/array"
 	"github.com/tamnd/kuma/csv"
 )
 
@@ -39,6 +40,39 @@ func ReadCSVFile(path string, opts *csv.Options) (*Frame[Dynamic], error) {
 		return nil, err
 	}
 	return frameOf(t)
+}
+
+// WriteCSV writes the frame as a comma separated file.
+//
+// A nil options is the useful default: comma separated, a header line of the
+// column names, an empty field where a value is missing, and floats written
+// with the fewest digits that read back as the same value. What else it can do
+// is on [csv.WriteOptions].
+//
+//	err := f.WriteCSV(w, nil)
+//
+// Reading the result back gives the same frame, with one thing to watch: a
+// value that is an empty string comes back as a missing value, because a file
+// cannot tell the two apart. Set [csv.WriteOptions.NullValue] to something
+// else when the difference matters.
+func (f *Frame[S]) WriteCSV(w io.Writer, opts *csv.WriteOptions) error {
+	return csv.Write(w, f.table(), opts)
+}
+
+// WriteCSVFile writes the frame to the file at path, creating it if it is not
+// there and truncating it if it is. It is [Frame.WriteCSV] over that file.
+func (f *Frame[S]) WriteCSVFile(path string, opts *csv.WriteOptions) error {
+	return csv.WriteFile(path, f.table(), opts)
+}
+
+// table returns the frame as the schema and columns the csv package writes.
+// Nothing is copied: a table is a view of the same columns.
+func (f *Frame[S]) table() *csv.Table {
+	cols := make([]*array.Chunked, len(f.cols))
+	for i, c := range f.cols {
+		cols[i] = c.Data()
+	}
+	return &csv.Table{Schema: f.schema, Columns: cols}
 }
 
 // frameOf turns the columns a reader produced into a frame.

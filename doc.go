@@ -82,6 +82,17 @@
 // a chunk at a time and never holds more than one of them, which is what a file
 // larger than memory needs.
 //
+// [Frame.WriteCSV] and [Frame.WriteCSVFile] go the other way, and
+// [csv.WriteOptions] is where the delimiter, the header, what a missing value
+// looks like and how many digits a float gets live:
+//
+//	err := f.WriteCSVFile("out.csv", nil)
+//
+// A frame written and read back is the frame that went in, except that a value
+// that was an empty string comes back missing, since a file cannot tell an
+// empty field from an absent one. Write a null value of your own when that
+// difference matters.
+//
 // # Missing values
 //
 // A missing value is a null, which is a bit in a bitmap beside the data rather

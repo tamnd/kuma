@@ -35,6 +35,18 @@
 // so a file that writes NA can say so, and a file that really does mean the
 // empty string can pass a list that does not contain it.
 //
+// # Writing
+//
+// [Write] takes a table back out to a file. Values go out as they are stored,
+// so a column of numbers is formatted into the output buffer and never becomes
+// a column of strings along the way, and a field is quoted when it holds the
+// delimiter, a quote or a line ending and left alone when it does not.
+//
+// Reading back what was written gives what went in, with one thing that cannot
+// work: an empty string comes back as a missing value, because the file has no
+// way to say which one it meant. [WriteOptions.NullValue] is the way out when
+// the difference matters.
+//
 // # Speed
 //
 // This is the reference reader and it is not the fast one. It is
@@ -43,10 +55,18 @@
 // document 05 is checked against what is here, and where the two disagree this
 // one is right by definition.
 //
+// The writer is not encoding/csv's. That one takes a []string, which would
+// mean a string allocated for every value in the table on the way past, so
+// this one formats into a buffer of its own and hands whole blocks to the
+// writer underneath.
+//
 // Stability: tier 1, stable.
 package csv
 
 import (
+	"fmt"
+	"unicode/utf8"
+
 	"github.com/tamnd/kuma/array"
 	"github.com/tamnd/kuma/dtype"
 )
@@ -152,6 +172,31 @@ func (o *Options) withDefaults() Options {
 		out.NullValues = []string{""}
 	}
 	return out
+}
+
+// checkDelim returns an error when the delimiter or the comment character
+// cannot do the job it has been given. A comment of zero means there is none.
+//
+// The rule is [encoding/csv]'s. A character that is part of the format cannot
+// also be a delimiter, and the two given here cannot be the same character,
+// since a line has to be either a comment or a row of values.
+func checkDelim(delim, comment rune) error {
+	switch {
+	case !validDelim(delim):
+		return fmt.Errorf("csv: %q cannot separate fields: %w", delim, ErrDelimiter)
+	case comment != 0 && !validDelim(comment):
+		return fmt.Errorf("csv: %q cannot start a comment: %w", comment, ErrDelimiter)
+	case comment != 0 && delim == comment:
+		return fmt.Errorf("csv: %q cannot be both the delimiter and the comment: %w",
+			delim, ErrDelimiter)
+	}
+	return nil
+}
+
+// validDelim reports whether r is a character the format leaves free.
+func validDelim(r rune) bool {
+	return r != 0 && r != '"' && r != '\r' && r != '\n' &&
+		r != utf8.RuneError && utf8.ValidRune(r)
 }
 
 // isNull reports whether a field means that nothing is there.

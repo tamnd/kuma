@@ -116,6 +116,114 @@ func TestReadCSVIsAFrameLikeAnyOther(t *testing.T) {
 	}
 }
 
+func TestWriteCSV(t *testing.T) {
+	f, err := kuma.ReadCSV(strings.NewReader("sym,qty\nAAPL,100\nMSFT,\n"), nil)
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+
+	var buf strings.Builder
+	if err := f.WriteCSV(&buf, nil); err != nil {
+		t.Fatalf("WriteCSV: %v", err)
+	}
+	if want := "sym,qty\nAAPL,100\nMSFT,\n"; buf.String() != want {
+		t.Errorf("got\n%s\nwant\n%s", buf.String(), want)
+	}
+}
+
+func TestWriteCSVOptions(t *testing.T) {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("sym", "AAPL", "MSFT").Column(),
+		kuma.NewSeries("px", 1.5, 2.0).Column(),
+	)
+	if err != nil {
+		t.Fatalf("NewFrame: %v", err)
+	}
+
+	var buf strings.Builder
+	err = f.WriteCSV(&buf, &csv.WriteOptions{
+		Delimiter: ';',
+		NoHeader:  true,
+		Precision: 2,
+	})
+	if err != nil {
+		t.Fatalf("WriteCSV: %v", err)
+	}
+	if want := "AAPL;1.50\nMSFT;2.00\n"; buf.String() != want {
+		t.Errorf("got\n%s\nwant\n%s", buf.String(), want)
+	}
+}
+
+func TestWriteCSVErrors(t *testing.T) {
+	f, err := kuma.NewFrame(kuma.NewSeries("sym", "AAPL").Column())
+	if err != nil {
+		t.Fatalf("NewFrame: %v", err)
+	}
+
+	err = f.WriteCSV(&strings.Builder{}, &csv.WriteOptions{Delimiter: '\n'})
+	if !errors.Is(err, csv.ErrDelimiter) {
+		t.Errorf("got %v, want ErrDelimiter", err)
+	}
+}
+
+func TestWriteCSVFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trades.csv")
+	f, err := kuma.ReadCSV(strings.NewReader("sym,qty\nAAPL,100\n"), nil)
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+
+	if err = f.WriteCSVFile(path, nil); err != nil {
+		t.Fatalf("WriteCSVFile: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if want := "sym,qty\nAAPL,100\n"; string(got) != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+
+	if err := f.WriteCSVFile(filepath.Join(path, "under", "a", "file.csv"), nil); err == nil {
+		t.Error("writing under a file that is not a directory worked")
+	}
+}
+
+// TestWriteCSVRoundTrip writes a frame out and reads it back, which is the
+// promise the pair of them makes.
+func TestWriteCSVRoundTrip(t *testing.T) {
+	f, err := kuma.ReadCSV(strings.NewReader(
+		"sym,qty,px,live\nAAPL,100,1.5,true\nMSFT,,2.25,false\nGOOG,300,,true\n"), nil)
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+
+	var buf strings.Builder
+	if err = f.WriteCSV(&buf, nil); err != nil {
+		t.Fatalf("WriteCSV: %v", err)
+	}
+	back, err := kuma.ReadCSV(strings.NewReader(buf.String()), nil)
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+
+	if got, want := back.Schema().String(), f.Schema().String(); got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+	if got, want := back.String(), f.String(); got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
+	}
+
+	qty, err := back.Series[int64]("qty")
+	if err != nil {
+		t.Fatalf("Series: %v", err)
+	}
+	if got := qty.DropNulls().Values(); len(got) != 2 || got[0] != 100 || got[1] != 300 {
+		t.Errorf("got %v, want [100 300]", got)
+	}
+}
+
 // equalStrings reports whether two name lists are the same.
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
