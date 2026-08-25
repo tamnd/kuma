@@ -146,3 +146,66 @@ func ExampleSortIndex_severalKeys() {
 	// Output:
 	// [1 3 2 0]
 }
+
+func ExampleGroupBy() {
+	symbol, err := array.NewChunked(dtype.String,
+		array.OfStrings("NVDA", "AAPL", "NVDA", "AAPL", "NVDA"))
+	if err != nil {
+		panic(err)
+	}
+	qty, err := array.NewChunked(dtype.Int64, array.Of[int64](10, 3, 20, 4, 30))
+	if err != nil {
+		panic(err)
+	}
+
+	g, err := kernel.GroupBy(symbol)
+	if err != nil {
+		panic(err)
+	}
+	total, err := kernel.Sum(qty, g)
+	if err != nil {
+		panic(err)
+	}
+
+	for i := range g.NumGroups() {
+		fmt.Println(string(g.Keys()[0].Bytes(i)), total.Value[int64](i))
+	}
+	// Output:
+	// NVDA 60
+	// AAPL 7
+}
+
+// A grouping is worked out once and handed to as many aggregations as the
+// caller wants, which is the reason it is a value rather than an argument.
+func ExampleGroups() {
+	day, err := array.NewChunked(dtype.Int32, array.Of[int32](1, 1, 2, 2, 2))
+	if err != nil {
+		panic(err)
+	}
+	price, err := array.NewChunked(dtype.Float64, array.Of(9.0, 11.0, 4.0, 6.0, 8.0))
+	if err != nil {
+		panic(err)
+	}
+
+	g, err := kernel.GroupBy(day)
+	if err != nil {
+		panic(err)
+	}
+	mean, err := kernel.Mean(price, g)
+	if err != nil {
+		panic(err)
+	}
+	high, err := kernel.Max(price, g)
+	if err != nil {
+		panic(err)
+	}
+	n := kernel.Count(price, g)
+
+	for i := range g.NumGroups() {
+		fmt.Println(g.Keys()[0].Value[int32](i), mean.Value[float64](i),
+			high.Value[float64](i), n.Value[int64](i))
+	}
+	// Output:
+	// 1 10 11 2
+	// 2 6 8 3
+}
