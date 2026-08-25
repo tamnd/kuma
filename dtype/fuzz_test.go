@@ -70,6 +70,53 @@ func FuzzValidate(f *testing.F) {
 	})
 }
 
+// FuzzCoerce checks the three promises the planner is built on: that Coerce
+// gives the same answer whichever column is named first, that a type it hands
+// back is one both sides can actually be cast to, and that any type at all can
+// be printed.
+//
+// The first one matters because a query does not say which side of a union or
+// a join was written first, and a rule that leans on argument order turns into
+// a plan that succeeds one way and fails the other. The second matters because
+// Coerce runs at plan time and the cast runs later, so a pair where they
+// disagree is a plan that type checks and then cannot be executed.
+func FuzzCoerce(f *testing.F) {
+	f.Add([]byte{0}, []byte{3})
+	f.Add([]byte{26, 3}, []byte{26, 0})
+	f.Add([]byte{31, 6, 12}, []byte{31, 8, 12})
+	f.Add([]byte{29, 0, 3, 0, 29, 0, 3, 1}, []byte{29, 0, 0, 0, 29, 0, 3, 1})
+
+	f.Fuzz(func(t *testing.T, sa, sb []byte) {
+		a := buildType(&seed{b: sa}, 0)
+		b := buildType(&seed{b: sb}, 0)
+
+		got, err := dtype.Coerce(a, b)
+		back, backErr := dtype.Coerce(b, a)
+		if (err == nil) != (backErr == nil) {
+			t.Fatalf("Coerce(%s, %s) = %v but Coerce(%s, %s) = %v", a, b, err, b, a, backErr)
+		}
+		if err != nil {
+			return
+		}
+		if !dtype.Equal(got, back) {
+			t.Errorf("Coerce(%s, %s) = %s but reversed = %s", a, b, got, back)
+		}
+
+		if !dtype.CanCast(a, got) {
+			t.Errorf("Coerce(%s, %s) = %s, which %s cannot be cast to", a, b, got, a)
+		}
+		if !dtype.CanCast(b, got) {
+			t.Errorf("Coerce(%s, %s) = %s, which %s cannot be cast to", a, b, got, b)
+		}
+
+		// Printing is the one cast with no conditions on it, and a good deal
+		// of debugging stops working the day that stops being true.
+		if !dtype.CanCast(got, dtype.String) {
+			t.Errorf("CanCast(%s, string) = false", got)
+		}
+	})
+}
+
 // seed hands out bytes from a fuzz input, repeating the input rather than
 // running out, so that a short input still builds a whole type.
 type seed struct {
