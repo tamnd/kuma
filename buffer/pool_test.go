@@ -26,15 +26,17 @@ func TestPoolGet(t *testing.T) {
 
 func TestPoolReuses(t *testing.T) {
 	var p buffer.Pool
-	first := p.Get(1000)
-	p.Put(first)
 
-	// sync.Pool is allowed to drop anything at any time, so this asks for the
-	// same size until the memory comes back rather than demanding it on the
-	// first try. What is being tested is that Put and Get agree on the size
-	// class, not that sync.Pool has a memory.
+	// sync.Pool keeps a free list per processor and is allowed to drop anything
+	// at any time, so a buffer put back is never promised to the next Get. This
+	// tries a hundred times and needs one of them to come back, because what is
+	// being tested is that Put and Get agree on the size class. If they did not
+	// agree, no attempt would ever succeed, which is the failure worth catching
+	// and the reason this is not written as a single put and a single get.
 	for range 100 {
-		if got := p.Get(1000); got == first {
+		b := p.Get(1000)
+		p.Put(b)
+		if p.Get(1000) == b {
 			return
 		}
 	}
