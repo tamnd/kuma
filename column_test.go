@@ -2,6 +2,7 @@ package kuma_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -127,5 +128,23 @@ func TestColumnString(t *testing.T) {
 	want := `kuma.Column{"qty", int64, len 10, nulls 4}`
 	if got := col.String(); got != want {
 		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestColumnTake(t *testing.T) {
+	c := kuma.NewSeries("qty", int64(10), 20, 30).Column()
+
+	got := c.Take([]int{2, -1, 0})
+	if got.Len() != 3 || got.NullCount() != 1 {
+		t.Fatalf("%s, want 3 values and 1 null", got)
+	}
+	if got.Name() != "qty" {
+		t.Errorf("Take gave a column called %q", got.Name())
+	}
+	if want := []int64{30, 0, 10}; !slices.Equal(got.MustAs[int64]().Values(), want) {
+		t.Errorf("Take gave %v, want %v", got.MustAs[int64]().Values(), want)
+	}
+	if !got.Field().Nullable {
+		t.Error("the field is not nullable, and the column has a null in it")
 	}
 }

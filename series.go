@@ -8,6 +8,7 @@ import (
 	"github.com/tamnd/kuma/array"
 	"github.com/tamnd/kuma/bitmap"
 	"github.com/tamnd/kuma/dtype"
+	"github.com/tamnd/kuma/kernel"
 )
 
 // Series is one named column, read as a Go type.
@@ -165,6 +166,38 @@ func (s Series[T]) Head(n int) Series[T] { return s.Slice(0, headEnd(n, s.Len())
 // Tail returns the last n values, or all of them if there are fewer than n. A
 // negative n means all but the first n.
 func (s Series[T]) Tail(n int) Series[T] { return s.Slice(tailStart(n, s.Len()), s.Len()) }
+
+// Take returns the values at the given positions, in the order given.
+//
+// This is the operation everything that reorders rows is made of. A sort
+// produces the positions and takes them, a join produces the positions and
+// takes them, and this is where the values actually move.
+//
+// A position below zero gives a null, which is what an outer join does with a
+// row that matched nothing. A position at or past the length panics, the same
+// way indexing a slice does.
+//
+// Unlike Slice this copies, since the values it wants are scattered through the
+// column and a scattering is not something a slice header can describe.
+func (s Series[T]) Take(idx []int) Series[T] {
+	checkPositions(idx, s.Len())
+	s.data = kernel.Take(s.data, idx)
+	return s
+}
+
+// Filter returns the values that mask selects, in the order they were in.
+//
+// A null in the mask selects nothing, since a row that nobody can say belongs
+// in the result does not go in the result. It reports an error if the mask is
+// not the same length as the column.
+func (s Series[T]) Filter(mask Series[bool]) (Series[T], error) {
+	if mask.Len() != s.Len() {
+		return Series[T]{}, fmt.Errorf("kuma: a mask of %d values for a column of %d: %w",
+			mask.Len(), s.Len(), ErrLength)
+	}
+	s.data = kernel.Filter(s.data, mask.data)
+	return s, nil
+}
 
 // Value returns value i. It panics if i is out of range.
 //
@@ -407,6 +440,21 @@ func headEnd(n, length int) int {
 		return max(0, length+n)
 	}
 	return min(n, length)
+}
+
+// checkPositions panics if any of the positions is past the end of a column of
+// n values. A position below zero is not an error, it is the way to ask for a
+// null.
+//
+// The kernel checks this too, and the check here is what makes the message name
+// the frame rather than the column, and what makes a take out of a frame with
+// no columns fail the same way as a take out of a frame with some.
+func checkPositions(idx []int, n int) {
+	for _, i := range idx {
+		if i >= n {
+			panic(fmt.Sprintf("kuma: Take position %d out of range, there are %d values", i, n))
+		}
+	}
 }
 
 // tailStart returns where the range Tail asks for begins.

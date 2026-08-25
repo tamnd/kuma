@@ -5,6 +5,7 @@ import (
 
 	"github.com/tamnd/kuma/array"
 	"github.com/tamnd/kuma/dtype"
+	"github.com/tamnd/kuma/kernel"
 )
 
 // Column is one named column of a frame, with no Go type attached.
@@ -72,6 +73,20 @@ func (c Column) Rename(name string) Column {
 // panics unless 0 <= i <= j <= Len.
 func (c Column) Slice(i, j int) Column {
 	c.data = c.data.Slice(i, j)
+	return c
+}
+
+// Take returns the values at the given positions, in the order given, as a
+// column.
+//
+// A position below zero gives a null, which is what an outer join does with a
+// row that matched nothing. A position at or past the length panics.
+//
+// Unlike Slice this copies, because the values it wants are scattered through
+// the column and there is no way to point at a scattering.
+func (c Column) Take(idx []int) Column {
+	checkPositions(idx, c.Len())
+	c.data = kernel.Take(c.data, idx)
 	return c
 }
 
