@@ -641,3 +641,126 @@ func BenchmarkConcatUnion(b *testing.B) {
 		frameSink = out
 	}
 }
+
+// benchGappy returns a frame of benchLen rows where one column in eight has a
+// missing value, which is roughly what a file of real data looks like. A column
+// with nothing missing takes a different path through all of this, so the other
+// column is complete on purpose.
+func benchGappy(b *testing.B) *kuma.Frame[kuma.Dynamic] {
+	b.Helper()
+
+	builder, err := array.NewBuilder(dtype.Int64)
+	if err != nil {
+		b.Fatalf("NewBuilder: %v", err)
+	}
+	builder.Grow(benchLen)
+	for i := range benchLen {
+		if i%8 == 0 {
+			builder.AppendNull()
+			continue
+		}
+		builder.Append(int64(i))
+	}
+
+	data, err := array.NewChunked(dtype.Int64, builder.Finish())
+	if err != nil {
+		b.Fatalf("NewChunked: %v", err)
+	}
+	qty, err := kuma.NewColumn("qty", data)
+	if err != nil {
+		b.Fatalf("NewColumn: %v", err)
+	}
+
+	prices := make([]float64, benchLen)
+	for i := range prices {
+		prices[i] = float64(i) / 8
+	}
+
+	f, err := kuma.NewFrame(qty, kuma.NewSeries("price", prices...).Column())
+	if err != nil {
+		b.Fatalf("NewFrame: %v", err)
+	}
+	return f
+}
+
+// benchGappyColumn is the column of benchGappy that has the holes in it.
+func benchGappyColumn(b *testing.B) kuma.Column {
+	b.Helper()
+
+	c, err := benchGappy(b).Column("qty")
+	if err != nil {
+		b.Fatalf("Column: %v", err)
+	}
+	return c
+}
+
+// BenchmarkColumnNullMask is one bitmap read and one boolean write per row.
+func BenchmarkColumnNullMask(b *testing.B) {
+	c := benchGappyColumn(b)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		columnSink = c.NullMask()
+	}
+}
+
+// BenchmarkColumnValidMaskComplete is the same mask over a column with nothing
+// missing, which skips the bitmap entirely and is the common case.
+func BenchmarkColumnValidMaskComplete(b *testing.B) {
+	f := benchGappy(b)
+	c, err := f.Column("price")
+	if err != nil {
+		b.Fatalf("Column: %v", err)
+	}
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		columnSink = c.ValidMask()
+	}
+}
+
+// BenchmarkColumnFillNull is the gather that does the filling. It reads every
+// row rather than only the missing ones, which is what buys it the same code
+// for every type.
+func BenchmarkColumnFillNull(b *testing.B) {
+	c := benchGappyColumn(b)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := c.FillNull(int64(0))
+		if err != nil {
+			b.Fatalf("FillNull: %v", err)
+		}
+		columnSink = out
+	}
+}
+
+// BenchmarkFrameDropNulls counts the values present in each row and then
+// gathers the rows that passed, over two columns of which only one can fail.
+func BenchmarkFrameDropNulls(b *testing.B) {
+	f := benchGappy(b)
+
+	b.SetBytes(benchLen * 16)
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.DropNulls()
+		if err != nil {
+			b.Fatalf("DropNulls: %v", err)
+		}
+		frameSink = out
+	}
+}
+
+// BenchmarkFrameIsNull is the mask over every column of the frame at once.
+func BenchmarkFrameIsNull(b *testing.B) {
+	f := benchGappy(b)
+
+	b.SetBytes(benchLen * 16)
+	b.ReportAllocs()
+	for b.Loop() {
+		frameSink = f.IsNull()
+	}
+}

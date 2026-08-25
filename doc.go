@@ -66,6 +66,25 @@
 // that has to build anything, being the nulls that stand in for a column a
 // frame does not have.
 //
+// # Missing values
+//
+// A missing value is a null, which is a bit in a bitmap beside the data rather
+// than a value chosen out of the range of the type. That is why there is no
+// NaN standing in for a missing float here and no integer column turning into a
+// float column the moment a value goes missing, both of which pandas does.
+//
+// [Frame.IsNull] and [Frame.IsNotNull] give a frame of boolean columns saying
+// where the holes are, [Column.NullMask] and [Series.ValidMask] do the same for
+// one column, and a mask goes straight back into [Frame.Filter].
+// [Frame.FillNull] puts a value where nothing was, [Frame.DropNulls] takes out
+// the rows that are missing something, and [Frame.KeepAtLeast] is the same with
+// the rule relaxed to a count. None of them looks at a value one at a time: a
+// mask is a copy of the bitmap the column already carries, so it costs a byte
+// per eight rows.
+//
+//	clean, err := prices.DropNulls("price")
+//	filled, err := prices.FillNull("price", 0.0)
+//
 // # Types and schemas
 //
 // A frame carries its schema as a type parameter. [Dynamic] is the schema type

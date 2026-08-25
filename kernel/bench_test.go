@@ -674,3 +674,94 @@ func BenchmarkJoinSemi(b *testing.B) {
 		indexSink = p.Left
 	}
 }
+
+// benchGappy returns a column of benchLen int64 values where one in eight is
+// missing, which is roughly what a file of real data looks like.
+func benchGappy(b *testing.B) *array.Chunked {
+	b.Helper()
+
+	bd, err := array.NewBuilder(dtype.Int64)
+	if err != nil {
+		b.Fatalf("NewBuilder: %v", err)
+	}
+	bd.Grow(benchLen)
+	for i := range benchLen {
+		if i%8 == 0 {
+			bd.AppendNull()
+			continue
+		}
+		bd.Append(int64(i))
+	}
+
+	c, err := array.NewChunked(dtype.Int64, bd.Finish())
+	if err != nil {
+		b.Fatalf("NewChunked: %v", err)
+	}
+	return c
+}
+
+// BenchmarkIsNull is a copy of the validity bitmap with the words inverted, so
+// it is a byte of work per eight rows and the number to watch is the bandwidth
+// rather than the time.
+func BenchmarkIsNull(b *testing.B) {
+	c := benchGappy(b)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		chunkedSink = kernel.IsNull(c)
+	}
+}
+
+// BenchmarkIsNotNullComplete is the same mask over a column with nothing
+// missing, which has no bitmap to read at all.
+func BenchmarkIsNotNullComplete(b *testing.B) {
+	c := benchInts(b, 1)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		chunkedSink = kernel.IsNotNull(c)
+	}
+}
+
+// BenchmarkFillNull is the gather that does the filling, which reads every row
+// rather than only the missing ones. That is what buys it one piece of code for
+// every type.
+func BenchmarkFillNull(b *testing.B) {
+	c := benchGappy(b)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := kernel.FillNull(c, array.Of(int64(0)))
+		if err != nil {
+			b.Fatalf("FillNull: %v", err)
+		}
+		chunkedSink = out
+	}
+}
+
+// BenchmarkKeepIndex is one column that can fail, which is the common case and
+// the one that answers without counting anything.
+func BenchmarkKeepIndex(b *testing.B) {
+	cols := []*array.Chunked{benchGappy(b), benchInts(b, 1)}
+
+	b.SetBytes(benchLen * 16)
+	b.ReportAllocs()
+	for b.Loop() {
+		indexSink = kernel.KeepIndex(cols, benchLen, 2)
+	}
+}
+
+// BenchmarkKeepIndexCounted is two columns that can fail, which is the case
+// that has to add up a count per row before it can answer.
+func BenchmarkKeepIndexCounted(b *testing.B) {
+	cols := []*array.Chunked{benchGappy(b), benchGappy(b)}
+
+	b.SetBytes(benchLen * 16)
+	b.ReportAllocs()
+	for b.Loop() {
+		indexSink = kernel.KeepIndex(cols, benchLen, 2)
+	}
+}

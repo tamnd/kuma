@@ -713,3 +713,131 @@ func FuzzJoin(f *testing.F) {
 		}
 	})
 }
+
+// FuzzNullMask checks the two masks against a walk over the column, which is
+// the definition of what they say rather than another way of writing the word
+// wise implementation.
+func FuzzNullMask(f *testing.F) {
+	f.Add([]byte{3, 0, 4})
+	f.Add([]byte{1, 1, 1, 1})
+	f.Add([]byte{})
+	f.Add([]byte{8, 8})
+
+	f.Fuzz(func(t *testing.T, layout []byte) {
+		if len(layout) > 32 {
+			t.Skip("a big input proves nothing a small one does not")
+		}
+
+		src := column(t, layout)
+		missing := kernel.IsNull(src)
+		present := kernel.IsNotNull(src)
+
+		for _, mask := range []*array.Chunked{missing, present} {
+			if mask.Len() != src.Len() {
+				t.Fatalf("the mask is %d values, want %d", mask.Len(), src.Len())
+			}
+			if mask.NullCount() != 0 {
+				t.Fatalf("the mask has %d nulls in it, want none", mask.NullCount())
+			}
+		}
+
+		for i := range src.Len() {
+			if got := missing.Bool(i); got != src.IsNull(i) {
+				t.Fatalf("IsNull says %v at row %d, want %v", got, i, src.IsNull(i))
+			}
+			if missing.Bool(i) == present.Bool(i) {
+				t.Fatalf("both masks say %v at row %d", missing.Bool(i), i)
+			}
+		}
+	})
+}
+
+// FuzzFillNull checks a fill against a walk over the column it came from, and
+// checks that it is the same answer as filtering the same column would give for
+// the rows that were there.
+func FuzzFillNull(f *testing.F) {
+	f.Add([]byte{3, 0, 4}, int64(0))
+	f.Add([]byte{1, 1, 1, 1}, int64(-7))
+	f.Add([]byte{}, int64(1))
+	f.Add([]byte{8, 8}, int64(1<<40))
+
+	f.Fuzz(func(t *testing.T, layout []byte, fill int64) {
+		if len(layout) > 32 {
+			t.Skip("a big input proves nothing a small one does not")
+		}
+
+		src := column(t, layout)
+		got, err := kernel.FillNull(src, array.Of(fill))
+		if err != nil {
+			t.Fatalf("FillNull: %v", err)
+		}
+
+		if got.Len() != src.Len() {
+			t.Fatalf("the filled column is %d values, want %d", got.Len(), src.Len())
+		}
+		if got.NullCount() != 0 {
+			t.Fatalf("the filled column still has %d nulls", got.NullCount())
+		}
+
+		for i := range src.Len() {
+			want := fill
+			if src.IsValid(i) {
+				want = src.Value[int64](i)
+			}
+			if v := got.Value[int64](i); v != want {
+				t.Fatalf("row %d is %d, want %d", i, v, want)
+			}
+		}
+	})
+}
+
+// FuzzKeepIndex checks the keep against a count per row, which is the rule
+// written out the slow way.
+func FuzzKeepIndex(f *testing.F) {
+	f.Add([]byte{3, 0, 4}, []byte{2, 2}, 1)
+	f.Add([]byte{1, 1, 1, 1}, []byte{1}, 2)
+	f.Add([]byte{}, []byte{}, 1)
+	f.Add([]byte{8, 8}, []byte{4, 4, 4}, 3)
+
+	f.Fuzz(func(t *testing.T, layout, second []byte, present int) {
+		if len(layout) > 32 || len(second) > 32 {
+			t.Skip("a big input proves nothing a small one does not")
+		}
+		if present < -2 || present > 4 {
+			t.Skip("a threshold far outside the column count proves nothing")
+		}
+
+		// Both columns have to be the same length, so the second one is the
+		// first one sliced and stacked back up to it.
+		first := column(t, layout)
+		rest := column(t, second)
+		if rest.Len() != first.Len() {
+			t.Skip("the two columns came out different lengths")
+		}
+
+		cols := []*array.Chunked{first, rest}
+		got := kernel.KeepIndex(cols, first.Len(), present)
+
+		var want []int
+		for i := range first.Len() {
+			n := 0
+			for _, c := range cols {
+				if c.IsValid(i) {
+					n++
+				}
+			}
+			if n >= present {
+				want = append(want, i)
+			}
+		}
+
+		if len(got) != len(want) {
+			t.Fatalf("KeepIndex kept %d rows, want %d", len(got), len(want))
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				t.Fatalf("row %d of the answer is %d, want %d", i, got[i], want[i])
+			}
+		}
+	})
+}

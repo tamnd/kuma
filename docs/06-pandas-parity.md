@@ -48,8 +48,8 @@ a.Add(b)                       // still positional, never aligned behind your ba
 
 ### Missing data and conversion
 
-- [ ] `isna` `isnull` -> `IsNull` (M1)
-- [ ] `notna` `notnull` -> `IsNotNull` (M1)
+- [x] `isna` `isnull` -> `IsNull` (M1). A frame gives a frame of boolean columns, a column gives `NullMask`, since `IsNull` on a column already answers about one row.
+- [x] `notna` `notnull` -> `IsNotNull` (M1). `ValidMask` on a column and a series, which is the mask a filter usually wants.
 - [x] `to_numeric` -> `Cast` with an error policy (M1)
 - [ ] `to_datetime` -> `ParseTimestamp` with format and inference (M8)
 - [ ] `to_timedelta` -> `ParseDuration` (M8)
@@ -90,7 +90,7 @@ a.Add(b)                       // still positional, never aligned behind your ba
 - [ ] `info` -> `Info()` (M1)
 - [ ] `select_dtypes` -> `SelectByType` (M7)
 - [ ] `attrs` `flags` `set_flags` -> `Metadata()`, carried through operations (M7)
-- [ ] `hasnans` -> `HasNulls()` (M1)
+- [x] `hasnans` -> `HasNulls()` (M1). On a frame, a column and a series, and `NullCounts()` on a frame for how many are missing in each column.
 - [ ] `is_unique` -> `IsUnique()` (M7)
 - [ ] `is_monotonic_increasing` `is_monotonic_decreasing` -> `IsSorted(asc)` (M7)
 - [ ] `nbytes` -> `NBytes()` (M1)
@@ -208,8 +208,8 @@ a.Add(b)                       // still positional, never aligned behind your ba
 ### Missing data
 
 - [ ] `bfill` `ffill` -> `BackwardFill` `ForwardFill` (M7)
-- [ ] `dropna` with `how`, `thresh` and `subset` -> `DropNulls` (M1)
-- [ ] `fillna` -> `FillNull`, value or strategy (M1)
+- [x] `dropna` with `how`, `thresh` and `subset` -> `DropNulls` (M1). The subset is the names passed to it, `thresh` is `KeepAtLeast`, and the two settings of `how` are the two ends of `KeepAtLeast` rather than a string.
+- [x] `fillna` -> `FillNull` with a value (M1). The strategies, forward and backward fill, are M7 and are listed above.
 - [ ] `interpolate` -> `Interpolate`, linear, nearest, pad, polynomial and spline (M7)
 - [ ] `replace` -> `Replace` and `ReplaceStrict` (M7)
 - [ ] `pad` `backfill` -> deprecated aliases in pandas, not carried over (adapted)
