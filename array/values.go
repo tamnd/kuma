@@ -93,8 +93,8 @@ func (a *Array) Bools() *bitmap.Bitmap {
 }
 
 // Bytes returns value i of a column whose values are bytes rather than numbers,
-// meaning String, Binary, FixedSizeBinary and the decimals. It panics if the
-// column is something else or if i is out of range.
+// meaning String, Binary, FixedSizeBinary, the decimals and the intervals. It
+// panics if the column is something else or if i is out of range.
 //
 // The result aliases the column and the caller must not modify it. Converting
 // it to a string copies, which is why that is left to the caller rather than
@@ -227,10 +227,12 @@ func dtypeLayout(t dtype.DataType) (layout, bool) {
 
 // rawWidth returns how many bytes one value of a byte valued fixed width type
 // takes, and whether t is one of those. The decimals are here because a decimal
-// is a wide integer that Go has no type for.
+// is a wide integer that Go has no type for, and the intervals because a day
+// time interval is two int32s and a month day nano interval is two int32s and
+// an int64, neither of which is one number either.
 func rawWidth(t dtype.DataType) (int, bool) {
 	switch t.Kind() {
-	case dtype.FixedSizeBinaryKind, dtype.Decimal128Kind, dtype.Decimal256Kind:
+	case dtype.FixedSizeBinaryKind, dtype.Decimal128Kind, dtype.Decimal256Kind, dtype.IntervalKind:
 		return byteWidth(t), true
 	default:
 		return 0, false

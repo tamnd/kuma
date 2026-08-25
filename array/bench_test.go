@@ -165,6 +165,92 @@ func BenchmarkBools(b *testing.B) {
 	}
 }
 
+// benchBuilder returns a builder for dt, or fails the benchmark.
+func benchBuilder(b *testing.B, dt dtype.DataType) *array.Builder {
+	b.Helper()
+	bl, err := array.NewBuilder(dt)
+	if err != nil {
+		b.Fatalf("NewBuilder(%s): %v", dt, err)
+	}
+	return bl
+}
+
+// BenchmarkBuilderAppend builds a chunk one value at a time, which is what a
+// row oriented reader such as CSV does.
+func BenchmarkBuilderAppend(b *testing.B) {
+	bl := benchBuilder(b, dtype.Int64)
+	b.SetBytes(benchLen * 8)
+	for b.Loop() {
+		bl.Grow(benchLen)
+		for i := range benchLen {
+			bl.Append(int64(i))
+		}
+		arraySink = bl.Finish()
+	}
+}
+
+// BenchmarkBuilderAppendNulls is the same loop with every seventh value
+// missing, which is what turns the validity bitmap on and makes every append
+// after it write a bit.
+func BenchmarkBuilderAppendNulls(b *testing.B) {
+	bl := benchBuilder(b, dtype.Int64)
+	b.SetBytes(benchLen * 8)
+	for b.Loop() {
+		bl.Grow(benchLen)
+		for i := range benchLen {
+			if i%7 == 0 {
+				bl.AppendNull()
+				continue
+			}
+			bl.Append(int64(i))
+		}
+		arraySink = bl.Finish()
+	}
+}
+
+// BenchmarkBuilderAppendValues hands the same values over as one slice, which
+// is what a columnar reader such as Parquet or Arrow IPC does. The type is
+// checked once and the values are one copy.
+func BenchmarkBuilderAppendValues(b *testing.B) {
+	values := make([]int64, benchLen)
+	for i := range values {
+		values[i] = int64(i)
+	}
+
+	bl := benchBuilder(b, dtype.Int64)
+	b.SetBytes(benchLen * 8)
+	for b.Loop() {
+		bl.Grow(benchLen)
+		bl.AppendValues(values)
+		arraySink = bl.Finish()
+	}
+}
+
+// BenchmarkBuilderAppendString is the string path, where the work is the view
+// per value and the copy of anything longer than twelve bytes.
+func BenchmarkBuilderAppendString(b *testing.B) {
+	bl := benchBuilder(b, dtype.String)
+	for b.Loop() {
+		bl.Grow(benchLen)
+		for range benchLen {
+			bl.AppendString("kuma")
+		}
+		arraySink = bl.Finish()
+	}
+}
+
+// BenchmarkBuilderAppendBool is the packed path, one bit a value.
+func BenchmarkBuilderAppendBool(b *testing.B) {
+	bl := benchBuilder(b, dtype.Bool)
+	for b.Loop() {
+		bl.Grow(benchLen)
+		for i := range benchLen {
+			bl.AppendBool(i%3 == 0)
+		}
+		arraySink = bl.Finish()
+	}
+}
+
 func BenchmarkBytes(b *testing.B) {
 	values := make([]string, benchLen)
 	for i := range values {

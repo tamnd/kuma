@@ -36,10 +36,23 @@
 // This is the layer the bitmap package's doc comment refers to when it says the
 // layers above keep their own offset.
 //
+// # Building
+//
+// A Builder is how values get in. It is for one dtype, decided when it is made,
+// and it hands its memory over to the Array rather than copying it. A column
+// with no nulls never allocates a validity bitmap, since the builder counts the
+// values until the first null arrives and only fills in the bits before it if
+// one ever does.
+//
+// The constructors are the other way in, for a reader that already has the
+// bytes laid out the way the column wants them, such as one reading a mapped
+// file.
+//
 // # What is not here yet
 //
-// The nested types, meaning List, Struct and Map, and the builders. Both are
-// coming and neither changes the shape of what is here.
+// The nested types, meaning List, Struct and Map, and ChunkedArray, which is a
+// column too long to be one Array. Both are coming and neither changes the
+// shape of what is here.
 //
 // Stability: tier 1, stable.
 package array

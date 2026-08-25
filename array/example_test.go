@@ -99,6 +99,58 @@ func ExampleOfStrings() {
 	// 48 a value that is too long to live inside its view
 }
 
+// ExampleNewBuilder is the way a reader builds a column: make room for the
+// chunk, append values and nulls in the order they arrive, and finish.
+func ExampleNewBuilder() {
+	b, err := array.NewBuilder(dtype.Int64)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	b.Grow(4)
+	b.AppendValues([]int64{10, 20})
+	b.AppendNull()
+	b.Append[int64](40)
+
+	a := b.Finish()
+	fmt.Println(a)
+	for i := range a.Len() {
+		if a.IsNull(i) {
+			fmt.Println("null")
+			continue
+		}
+		fmt.Println(a.Value[int64](i))
+	}
+	// Output:
+	// array.Array{int64, len 4, nulls 1, offset 0}
+	// 10
+	// 20
+	// null
+	// 40
+}
+
+// ExampleBuilder_Finish shows what makes a builder worth reusing: it comes back
+// empty, so the next column starts from nothing rather than from memory the
+// last one is still reading.
+func ExampleBuilder_Finish() {
+	b, err := array.NewBuilder(dtype.String)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	for _, chunk := range [][]string{{"kuma", "bear"}, {"one", "two", "three"}} {
+		for _, s := range chunk {
+			b.AppendString(s)
+		}
+		fmt.Println(b.Finish())
+	}
+	// Output:
+	// array.Array{string, len 2, nulls 0, offset 0}
+	// array.Array{string, len 3, nulls 0, offset 0}
+}
+
 func ExampleNewNull() {
 	a := array.NewNull(1000)
 
