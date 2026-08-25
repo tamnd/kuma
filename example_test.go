@@ -952,3 +952,30 @@ func ExampleSeries_ValidMask() {
 	// Output:
 	// 1
 }
+
+func ExampleReadCSV() {
+	in := `sym,qty,px
+AAPL,100,182.5
+MSFT,,411.2
+GOOG,300,141.8
+`
+
+	f, err := kuma.ReadCSV(strings.NewReader(in), nil)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(f)
+
+	// The columns arrive as themselves, so this is a sum and not a parse.
+	qty, err := f.Series[int64]("qty")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(qty.DropNulls().Values())
+	// Output:
+	// kuma.Frame[kuma.Dynamic] 3 rows x 3 cols
+	//   sym: string
+	//   qty: int64, 1 null
+	//   px: float64
+	// [100 300]
+}

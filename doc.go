@@ -66,6 +66,22 @@
 // that has to build anything, being the nulls that stand in for a column a
 // frame does not have.
 //
+// # Reading a file
+//
+// [ReadCSV] and [ReadCSVFile] read a comma separated file into a frame, working
+// out what each column holds from the first thousand rows:
+//
+//	f, err := kuma.ReadCSVFile("trades.csv", nil)
+//
+// What it decides and how to say otherwise is on [csv.Options], which is where
+// the delimiter, the header, the types, the values that mean nothing is there
+// and the rest of it live. The frame is [Dynamic], because a file is not a Go
+// type and what is in it was decided by whoever wrote it.
+//
+// This reads the whole file. ScanCSV, which arrives with the lazy frame, reads
+// a chunk at a time and never holds more than one of them, which is what a file
+// larger than memory needs.
+//
 // # Missing values
 //
 // A missing value is a null, which is a bit in a bitmap beside the data rather
