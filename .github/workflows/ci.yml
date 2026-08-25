@@ -135,9 +135,14 @@ jobs:
             go doc -all "$pkg" > /dev/null
           done
 
-  fuzz:
-    name: fuzz smoke
+  # The targets are asked for rather than written down, the same way the
+  # nightly workflow asks, so that a package that grows a fuzz target gets it
+  # run without anybody remembering to come here.
+  fuzz-targets:
+    name: list fuzz targets
     runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.list.outputs.list }}
     steps:
       - uses: actions/checkout@v7
 
@@ -146,16 +151,44 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
-      # A short run on every pull request, to catch anything the committed
-      # corpus already covers. The long run is nightly.
-      - name: Fuzz for 30s per target
+      - name: List them
+        id: list
         run: |
+          out=""
           for pkg in $(go list ./...); do
             for target in $(go test -list='Fuzz.*' "$pkg" 2>/dev/null | grep '^Fuzz' || true); do
-              echo "fuzzing $pkg $target"
-              go test "$pkg" -run="^$" -fuzz="^${target}$" -fuzztime=30s
+              dir=".${pkg#github.com/tamnd/kuma}"
+              out="$out{\"pkg\":\"$dir\",\"name\":\"$target\"},"
             done
           done
+          echo "list=[${out%,}]" >> "$GITHUB_OUTPUT"
+
+  # A short run on every pull request, to catch anything the committed corpus
+  # already covers. The long run is nightly.
+  #
+  # One job per target rather than a loop over all of them. The loop was 30
+  # seconds times however many targets exist, which reached eleven minutes and
+  # was most of the wall clock of a pull request on its own. Side by side it is
+  # thirty seconds of fuzzing plus the time it takes to check out and build,
+  # and it stays that way as targets are added.
+  fuzz:
+    name: fuzz smoke (${{ matrix.target.pkg }} ${{ matrix.target.name }})
+    needs: fuzz-targets
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.fuzz-targets.outputs.list) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Fuzz for 30s
+        run: go test ${{ matrix.target.pkg }} -run='^$' -fuzz='^${{ matrix.target.name }}$' -fuzztime=30s
 
   build-matrix:
     name: cross compile
