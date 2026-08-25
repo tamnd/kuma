@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Design questions
+    url: https://github.com/tamnd/kuma/discussions
+    about: Anything about why the design is the way it is. Read docs/ first.

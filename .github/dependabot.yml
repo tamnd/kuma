@@ -1,0 +1,31 @@
+version: 2
+
+updates:
+  # The core module depends on the standard library and nothing else, and that
+  # is a deliberate property rather than an accident of being early. This entry
+  # exists to watch the edges once packages like kuma/parquet acquire their
+  # compression codecs.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: tuesday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    groups:
+      go-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: tuesday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
+    groups:
+      actions:
+        patterns: ["*"]

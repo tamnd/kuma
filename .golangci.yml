@@ -1,0 +1,106 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - copyloopvar
+    - dupword
+    - durationcheck
+    - errorlint
+    - exhaustive
+    - gocheckcompilerdirectives
+    - goconst
+    - gocritic
+    - godot
+    - misspell
+    - nilerr
+    - nolintlint
+    - perfsprint
+    - prealloc
+    - predeclared
+    - revive
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - wastedassign
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+
+    govet:
+      enable-all: true
+      disable:
+        # Field alignment matters for the array structs and nowhere else, and
+        # left on globally it turns every struct into an argument about byte
+        # order rather than about readability.
+        - fieldalignment
+
+    revive:
+      rules:
+        # Every exported identifier gets a doc comment starting with its own
+        # name. This is the standard library convention and it is the only
+        # documentation that people reliably read.
+        - name: exported
+          arguments: [checkPrivateReceivers, disableStutteringCheck]
+        - name: package-comments
+        - name: var-naming
+        - name: indent-error-flow
+        - name: errorf
+        - name: error-return
+        - name: error-naming
+        - name: receiver-naming
+        - name: increment-decrement
+        - name: range
+        - name: unexported-return
+        - name: time-naming
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: unreachable-code
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      disabled-checks:
+        - hugeParam       # fires on the value receivers the typed API needs
+        - rangeValCopy
+        - unnamedResult
+
+    godot:
+      scope: declarations
+      capital: true
+
+    misspell:
+      locale: US
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+
+  exclusions:
+    rules:
+      # Tests get more rope. A test that panics is a test that failed, and
+      # checking every error return in a table test buries the assertion.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - goconst
+          - gocritic
+          - dupword
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/tamnd/kuma

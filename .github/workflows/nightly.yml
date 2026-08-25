@@ -1,0 +1,82 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  # The long fuzz run. Anything it finds gets committed to the corpus so that
+  # the 30 second run on every pull request catches it from then on.
+  fuzz:
+    name: fuzz (${{ matrix.target.pkg }} ${{ matrix.target.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { pkg: ./bitmap, name: FuzzBitmap }
+          - { pkg: ./bitmap, name: FuzzAppend }
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Fuzz for 20 minutes
+        run: go test ${{ matrix.target.pkg }} -run='^$' -fuzz='^${{ matrix.target.name }}$' -fuzztime=20m
+
+      - name: Upload failing corpus
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-corpus-${{ matrix.target.name }}
+          path: testdata/fuzz/
+
+  benchmarks:
+    name: microbenchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # These are the in-repo microbenchmarks only. The comparison against
+      # pandas and Polars lives in tamnd/kuma-bench, because running it here
+      # would mean a Python toolchain in this repository.
+      - name: Run benchmarks
+        run: go test -run='^$' -bench=. -benchmem -count=6 ./... | tee bench.txt
+
+      - name: Upload results
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-${{ github.sha }}
+          path: bench.txt
+          retention-days: 90
+
+  race-stress:
+    name: race under load
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # Repeating the suite is how intermittent races actually get caught. A
+      # single clean -race run proves very little.
+      - name: Test 20 times under race
+        run: go test -race -count=20 -shuffle=on ./...

@@ -1,0 +1,32 @@
+name: Feature request
+description: Something is missing that should not be
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this is a pandas feature, check docs/06-pandas-parity.md first. It is
+        a checklist of the entire pandas API and your feature is probably on it
+        with a milestone attached, in which case comment on that milestone
+        rather than opening this.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and what makes it hard today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you want instead
+      description: A sketch of the API is worth more than a paragraph describing it.
+      render: go
+
+  - type: input
+    id: prior
+    attributes:
+      label: Prior art
+      description: What pandas, Polars, DuckDB or Arrow call this, if they have it.

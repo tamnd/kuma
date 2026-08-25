@@ -1,0 +1,57 @@
+name: Bug report
+description: Something does not work the way the documentation says it does
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: the library is early and most things are not implemented
+        yet. Check the milestones first, because "not built yet" is not a bug.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Smallest reproducer
+      description: |
+        Runnable Go if you can. For anything involving a data file the schema
+        matters more than the data, so a list of columns and dtypes is usually
+        enough.
+      render: go
+    validations:
+      required: true
+
+  - type: input
+    id: goversion
+    attributes:
+      label: Go version
+      description: Output of `go version`.
+      placeholder: go version go1.27.0 darwin/arm64
+    validations:
+      required: true
+
+  - type: dropdown
+    id: simd
+    attributes:
+      label: Was GOEXPERIMENT=simd set
+      options:
+        - "No, the scalar path"
+        - "Yes, the vectorized path"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: kuma version
+      placeholder: v0.1.0, or a commit hash
+    validations:
+      required: true

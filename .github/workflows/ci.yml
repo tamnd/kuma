@@ -1,0 +1,166 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a branch cancels the run that is already going, because there
+# is no point burning runners on a commit nobody is looking at any more.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build
+        run: go build ./...
+
+      # -shuffle=on catches tests that pass only because of the order they run
+      # in, which is the kind of thing that stays hidden until it fails in
+      # someone else's pull request.
+      - name: Test
+        run: go test -race -shuffle=on -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Coverage summary
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          go tool cover -func=coverage.out | tee coverage.txt
+          echo '### Coverage' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -1 coverage.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 7
+
+  # The whole library has to build, test and be usable with no experiment flag
+  # set. That is what makes it safe to depend on an unstable package at all, so
+  # it is checked on every commit rather than nightly.
+  simd:
+    name: simd (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    env:
+      GOEXPERIMENT: simd
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build with simd
+        run: go build ./...
+
+      - name: Test with simd
+        run: go test -race ./...
+
+  vet:
+    name: vet and formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go mod tidy is a no-op
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      # Doc comment completeness is enforced by revive in the lint workflow.
+      # This step only checks that godoc can render the packages at all, which
+      # catches malformed example functions and broken links early.
+      - name: godoc renders
+        run: go doc -all ./... > /dev/null
+
+  fuzz:
+    name: fuzz smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # A short run on every pull request, to catch anything the committed
+      # corpus already covers. The long run is nightly.
+      - name: Fuzz for 30s per target
+        run: |
+          for pkg in $(go list ./...); do
+            for target in $(go test -list='Fuzz.*' "$pkg" 2>/dev/null | grep '^Fuzz' || true); do
+              echo "fuzzing $pkg $target"
+              go test "$pkg" -run="^$" -fuzz="^${target}$" -fuzztime=30s
+            done
+          done
+
+  build-matrix:
+    name: cross compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # The core has no cgo and no build tags that depend on the host, so it
+      # should cross compile everywhere. When that stops being true it will be
+      # a deliberate decision rather than a surprise.
+      - name: Cross compile
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 js/wasm wasip1/wasm; do
+            os=${target%/*}
+            arch=${target#*/}
+            echo "building $target"
+            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build ./...
+          done
