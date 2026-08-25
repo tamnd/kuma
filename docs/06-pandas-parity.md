@@ -402,10 +402,10 @@ Grouped into `kuma/style`, post 1.0. It is genuinely useful for reports and genu
 
 ## 14. Testing helpers
 
-- [ ] `assert_frame_equal` -> `kumatest.EqualFrames` (M1)
-- [ ] `assert_series_equal` -> `kumatest.EqualSeries` (M1)
+- [x] `assert_frame_equal` -> `kumatest.EqualFrames` (M1)
+- [x] `assert_series_equal` -> `kumatest.EqualSeries` (M1)
 - [ ] `assert_index_equal` -> `kumatest.EqualIndex` (M7)
-- [ ] `makeDataFrame` and the random data helpers -> `kumatest.Random` (M1)
+- [x] `makeDataFrame` and the random data helpers -> `kumatest.Random` (M1)
 
 ## 15. Extension points
 

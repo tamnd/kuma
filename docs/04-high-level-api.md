@@ -135,7 +135,7 @@ Dtypes in the header, shape always shown, and `null` rendered differently from `
 
 Ten rows and twelve columns are shown by default, with the rest replaced by a line of dots in the middle, and `Frame.Render` takes a `PrintOptions` when a different amount is wanted. `MaxRows` of -1 means all of them. Numbers print at the shortest text that reads back as the same value rather than rounded to a fixed number of digits, because a printer that rounds will one day show two different numbers as the same during the debugging session where that difference is the whole point. A string that begins or ends in a space is quoted for the same reason.
 
-For tests, `kumatest.Equal` compares two frames and prints the first few rows that differ rather than dumping both of them. Anyone who has debugged a failing pandas test by reading four thousand lines of output knows why this is worth building on day one rather than later.
+For tests, `kumatest.EqualFrames` compares two frames and prints the first few rows that differ rather than dumping both of them. Anyone who has debugged a failing pandas test by reading four thousand lines of output knows why this is worth building on day one rather than later.
 
 ## The dynamic escape hatch
 

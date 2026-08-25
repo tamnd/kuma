@@ -118,6 +118,21 @@ func (c Column) Render(o *PrintOptions) string {
 // as [Frame.String].
 func (c Column) String() string { return c.Render(nil) }
 
+// Text returns value i as the printer writes it, which is the text [Render]
+// would put in that cell, cut short at [PrintOptions.MaxWidth] and quoted if it
+// holds anything that would move the cursor rather than draw. A nil o means the
+// defaults, and a missing value is [PrintOptions.Null]. It panics if i is out
+// of range.
+//
+// This is here for the sake of anything that lays a value out itself rather
+// than through Render. A diff of two frames wants the same text a printed frame
+// shows, and without this it would have to hold its own opinion of how every
+// type in the library reads.
+func (c Column) Text(i int, o *PrintOptions) string {
+	opts := o.withDefaults()
+	return shorten(cellText(c.data, i, &opts), opts.MaxWidth)
+}
+
 // render draws the table under a line that says what it is.
 //
 // Widths are counted in runes, which is right for the text a column name and a

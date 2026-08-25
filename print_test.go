@@ -211,6 +211,77 @@ func TestColumnString(t *testing.T) {
 	}
 }
 
+// TestColumnText checks the promise the method makes, which is that a value
+// asked for on its own is the text a printed frame would show in that cell.
+// Anything laying a frame out itself relies on that, and the only way to hold
+// it is to ask the printer.
+func TestColumnText(t *testing.T) {
+	cols := []kuma.Column{
+		kuma.NewSeries("symbol", "AAPL", "MSFT").Column(),
+		kuma.NewSeries("price", 189.5, 411.25).Column(),
+		kuma.NewSeries("live", true, false).Column(),
+		nullableInts(t, 2).Column(),
+		numbers(t, "when", dtype.Date32, int32(19000), 19001),
+		numbers(t, "at", dtype.Timestamp{Unit: dtype.Millisecond}, int64(1e12), 2e12),
+		numbers(t, "took", dtype.Duration{Unit: dtype.Second}, int64(90), 3600),
+		blobs(t, "raw", dtype.Binary, []byte{0, 1}, []byte("text")),
+		kuma.NewSeries("note", "trailing ", "two\nlines").Column(),
+	}
+
+	opts := &kuma.PrintOptions{MaxWidth: -1}
+	for _, c := range cols {
+		for i := range c.Len() {
+			if got, want := c.Text(i, opts), cell(t, c, i); got != want {
+				t.Errorf("%s value %d is %q on its own and %q in a table",
+					c.DType(), i, got, want)
+			}
+		}
+	}
+}
+
+// TestColumnTextDefaultsAndWidth covers the two options that reach a single
+// value, since the rest of them are about the table around it.
+func TestColumnTextDefaultsAndWidth(t *testing.T) {
+	long := strings.Repeat("x", 100)
+	c := kuma.NewSeries("note", long).Column()
+
+	if got, want := c.Text(0, nil), strings.Repeat("x", 29)+"..."; got != want {
+		t.Errorf("with no options the value is %q, want it cut short to %q", got, want)
+	}
+	if got := c.Text(0, &kuma.PrintOptions{MaxWidth: -1}); got != long {
+		t.Errorf("with MaxWidth -1 the value is %q, want all of it", got)
+	}
+	if got, want := c.Text(0, &kuma.PrintOptions{MaxWidth: 8}), "xxxxx..."; got != want {
+		t.Errorf("with MaxWidth 8 the value is %q, want %q", got, want)
+	}
+
+	missing := nullableInts(t, 2).Column()
+	if got := missing.Text(0, nil); got != "null" {
+		t.Errorf("a missing value is %q, want the default text", got)
+	}
+	if got := missing.Text(0, &kuma.PrintOptions{Null: "NA"}); got != "NA" {
+		t.Errorf("a missing value is %q, want the text that was asked for", got)
+	}
+}
+
+// TestColumnTextOutOfRange is the same answer the rest of the value accessors
+// give, which is that an index outside the column is a mistake in the caller.
+func TestColumnTextOutOfRange(t *testing.T) {
+	c := kuma.NewSeries("qty", int64(1)).Column()
+
+	for _, i := range []int{-1, 1} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("Text(%d) of a column of one value did not panic", i)
+				}
+			}()
+
+			c.Text(i, nil)
+		}()
+	}
+}
+
 // TestPrintNull covers both ways a cell can have nothing in it: a missing value
 // in a column of a real type, and a column whose type is the absence of one.
 func TestPrintNull(t *testing.T) {
