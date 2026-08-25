@@ -490,3 +490,170 @@ func TestSumEveryWidth(t *testing.T) {
 		})
 	}
 }
+
+func TestVarAndStd(t *testing.T) {
+	// The numbers are picked so the answers come out exact in binary. The two
+	// groups have the same spread and different means, which is what a
+	// variance is meant not to notice.
+	g := groupsOf(t, "a", "b", "a", "b", "a", "b")
+	c := col(t, dtype.Float64, []any{2.0, 102.0, 4.0, 104.0, 6.0, 106.0})
+
+	sample, err := kernel.Var(c, g, 1)
+	if err != nil {
+		t.Fatalf("Var: %v", err)
+	}
+	checkAgg(t, sample, []any{4.0, 4.0})
+
+	population, err := kernel.Var(c, g, 0)
+	if err != nil {
+		t.Fatalf("Var: %v", err)
+	}
+	checkAgg(t, population, []any{8.0 / 3, 8.0 / 3})
+
+	sd, err := kernel.Std(c, g, 1)
+	if err != nil {
+		t.Fatalf("Std: %v", err)
+	}
+	checkAgg(t, sd, []any{2.0, 2.0})
+}
+
+// TestVarTooFewValues is the rule that a group with fewer values than the
+// divisor wants has no variance rather than an infinite one.
+func TestVarTooFewValues(t *testing.T) {
+	g := groupsOf(t, "one", "two", "two")
+	c := col(t, dtype.Int64, []any{int64(5), int64(1), int64(3)})
+
+	got, err := kernel.Var(c, g, 1)
+	if err != nil {
+		t.Fatalf("Var: %v", err)
+	}
+	checkAgg(t, got, []any{nil, 2.0})
+
+	// With a ddof of zero the single value has a variance, and it is zero.
+	got, err = kernel.Var(c, g, 0)
+	if err != nil {
+		t.Fatalf("Var: %v", err)
+	}
+	checkAgg(t, got, []any{0.0, 1.0})
+}
+
+// TestVarLargeCloseValues is why this is Welford's method and not a sum of
+// squares. These are eight digit numbers a hundredth apart, which is a column
+// of prices, and totalling their squares in a float64 and subtracting gives
+// minus a sixteenth, a negative variance of a number that cannot have one.
+func TestVarLargeCloseValues(t *testing.T) {
+	g := kernel.OneGroup(3)
+	c := col(t, dtype.Float64, []any{12345678.00, 12345678.01, 12345678.02})
+
+	got, err := kernel.Var(c, g, 1)
+	if err != nil {
+		t.Fatalf("Var: %v", err)
+	}
+	// The tolerance is relative and not exact because a hundredth is not a
+	// float64 to begin with. What matters is the answer being right to seven
+	// digits rather than having the wrong sign.
+	if v := got.Value[float64](0); math.Abs(v-0.0001) > 1e-10 {
+		t.Errorf("the variance is %v, want 0.0001, so the running mean is not doing its job", v)
+	}
+}
+
+func TestVarRefused(t *testing.T) {
+	g := kernel.OneGroup(2)
+
+	if _, err := kernel.Var(col(t, dtype.String, []any{"a", "b"}), g, 1); err == nil {
+		t.Error("the variance of a string column succeeded")
+	}
+	if _, err := kernel.Std(col(t, dtype.Timestamp{Unit: dtype.Nanosecond},
+		[]any{int64(1), int64(2)}), g, 1); err == nil {
+		t.Error("the standard deviation of a timestamp column succeeded")
+	}
+	if _, err := kernel.Var(col(t, dtype.Int64, []any{int64(1), int64(2)}), g, -1); err == nil {
+		t.Error("a negative ddof succeeded")
+	}
+}
+
+func TestNUnique(t *testing.T) {
+	tests := []struct {
+		name string
+		keys []any
+		dt   dtype.DataType
+		vals []any
+		want []any
+	}{
+		{
+			name: "repeats count once",
+			keys: []any{"a", "a", "a", "b"},
+			dt:   dtype.Int64,
+			vals: []any{int64(1), int64(1), int64(2), int64(9)},
+			want: []any{int64(2), int64(1)},
+		},
+		{
+			name: "the missing are not a value",
+			keys: []any{"a", "a", "b", "b"},
+			dt:   dtype.Int64,
+			vals: []any{int64(1), nil, nil, nil},
+			want: []any{int64(1), int64(0)},
+		},
+		{
+			name: "strings",
+			keys: []any{"a", "a", "a"},
+			dt:   dtype.String,
+			vals: []any{"x", "y", "x"},
+			want: []any{int64(2)},
+		},
+		{
+			name: "booleans top out at two",
+			keys: []any{"a", "a", "a", "a"},
+			dt:   dtype.Bool,
+			vals: []any{true, false, true, false},
+			want: []any{int64(2)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := kernel.NUnique(col(t, tt.dt, tt.vals), groupsOf(t, tt.keys...))
+			if err != nil {
+				t.Fatalf("NUnique: %v", err)
+			}
+			checkAgg(t, got, tt.want)
+		})
+	}
+}
+
+// TestNUniqueFloats is the rule that distinct here means what it means to
+// GroupBy, so every NaN is one value and the two zeros are one value.
+func TestNUniqueFloats(t *testing.T) {
+	nan := math.NaN()
+	other := math.Float64frombits(math.Float64bits(nan) | 1)
+	c := col(t, dtype.Float64, []any{nan, other, 0.0, math.Copysign(0, -1), 1.0})
+
+	got, err := kernel.NUnique(c, kernel.OneGroup(5))
+	if err != nil {
+		t.Fatalf("NUnique: %v", err)
+	}
+	checkAgg(t, got, []any{int64(3)})
+}
+
+func TestNUniqueRefused(t *testing.T) {
+	c, err := array.NewChunked(dtype.List{Elem: dtype.Int64})
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+	if _, err := kernel.NUnique(c, kernel.OneGroup(0)); err == nil {
+		t.Error("the distinct count of a list column succeeded")
+	}
+}
+
+func TestNUniqueChunked(t *testing.T) {
+	g := groupsOf(t, "a", "b", "a", "b", "a")
+	c := col(t, dtype.Int64,
+		[]any{int64(1), int64(7)},
+		[]any{int64(1), int64(8), int64(2)})
+
+	got, err := kernel.NUnique(c, g)
+	if err != nil {
+		t.Fatalf("NUnique: %v", err)
+	}
+	checkAgg(t, got, []any{int64(2), int64(2)})
+}

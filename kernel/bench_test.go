@@ -532,6 +532,57 @@ func BenchmarkCount(b *testing.B) {
 	}
 }
 
+// BenchmarkStd is Welford's method, which costs a divide per value, and the gap
+// to Mean is what that divide is worth paying.
+func BenchmarkStd(b *testing.B) {
+	c := benchInts(b, 1)
+	g := mustGroup(b, benchKeys(b, 100))
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := kernel.Std(c, g, 1)
+		if err != nil {
+			b.Fatalf("Std: %v", err)
+		}
+		chunkedSink = out
+	}
+}
+
+// BenchmarkMedian sorts every group, so this is the one aggregation that is not
+// a single pass and the only one whose cost has a log in it.
+func BenchmarkMedian(b *testing.B) {
+	c := benchInts(b, 1)
+	g := mustGroup(b, benchKeys(b, 100))
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := kernel.Median(c, g)
+		if err != nil {
+			b.Fatalf("Median: %v", err)
+		}
+		chunkedSink = out
+	}
+}
+
+// BenchmarkNUnique goes back through the group by encoder and a map, so it is
+// the aggregation that costs about what the grouping did.
+func BenchmarkNUnique(b *testing.B) {
+	c := benchInts(b, 1)
+	g := mustGroup(b, benchKeys(b, 100))
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := kernel.NUnique(c, g)
+		if err != nil {
+			b.Fatalf("NUnique: %v", err)
+		}
+		chunkedSink = out
+	}
+}
+
 // mustGroup is GroupBy where a failure is a broken benchmark rather than a
 // result.
 func mustGroup(b *testing.B, keys ...*array.Chunked) *kernel.Groups {

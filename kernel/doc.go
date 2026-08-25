@@ -36,8 +36,9 @@
 //
 // [GroupBy], which divides rows up by the values of some key columns, and the
 // aggregations that run over what it produces: [Sum], [Mean], [Count], [Size],
-// [Min], [Max], [First] and [Last]. An aggregation over a whole column is an
-// aggregation over [OneGroup], so there is one of each rather than two.
+// [Min], [Max], [First], [Last], [Var], [Std], [Median], [Quantile] and
+// [NUnique]. An aggregation over a whole column is an aggregation over
+// [OneGroup], so there is one of each rather than two.
 //
 // These are the reference implementations and they are not the fast ones. They
 // append a value at a time, which is the version that is obviously right when
