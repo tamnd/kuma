@@ -82,6 +82,13 @@ linters:
     misspell:
       locale: US
 
+    exhaustive:
+      # A switch over a dtype kind that has to handle every kind will say so by
+      # having no default. One that answers a yes or no question lists the cases
+      # it says yes to and defaults to no, and requiring it to name the other
+      # twenty five kinds would bury the answer.
+      default-signifies-exhaustive: true
+
     nolintlint:
       require-explanation: true
       require-specific: true
