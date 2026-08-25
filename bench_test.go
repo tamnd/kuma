@@ -481,3 +481,100 @@ func BenchmarkFrameGroupByAndAgg(b *testing.B) {
 		frameSink = out
 	}
 }
+
+// benchJoinSides returns two frames to join: a large left one with a key that
+// repeats and a small right one with each key once, which is the shape almost
+// every real join has.
+func benchJoinSides(b *testing.B) (left, right *kuma.Frame[kuma.Dynamic]) {
+	b.Helper()
+
+	const groups = 4096
+
+	lk := make([]int64, benchLen)
+	for i := range lk {
+		lk[i] = int64(i % groups)
+	}
+	rk := make([]int64, groups)
+	for i := range rk {
+		rk[i] = int64(i)
+	}
+
+	left, err := kuma.NewFrame(
+		benchKey(b, "k", lk),
+		benchInts(b, 1).Rename("qty").Column(),
+	)
+	if err != nil {
+		b.Fatalf("NewFrame: %v", err)
+	}
+
+	right, err = kuma.NewFrame(
+		benchKey(b, "k", rk),
+		kuma.NewSeries("rate", make([]float64, groups)...).Column(),
+	)
+	if err != nil {
+		b.Fatalf("NewFrame: %v", err)
+	}
+	return left, right
+}
+
+// benchKey builds a named int64 column out of the values given.
+func benchKey(b *testing.B, name string, vals []int64) kuma.Column {
+	b.Helper()
+
+	data, err := array.NewChunked(dtype.Int64, array.Of(vals...))
+	if err != nil {
+		b.Fatalf("NewChunked: %v", err)
+	}
+	c, err := kuma.NewColumn(name, data)
+	if err != nil {
+		b.Fatalf("NewColumn: %v", err)
+	}
+	return c
+}
+
+// BenchmarkFrameInnerJoin is the whole join end to end, the kernel working out
+// the pairs and then a gather over every column of both sides.
+func BenchmarkFrameInnerJoin(b *testing.B) {
+	left, right := benchJoinSides(b)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := left.InnerJoin(right, "k")
+		if err != nil {
+			b.Fatalf("InnerJoin: %v", err)
+		}
+		frameSink = out
+	}
+}
+
+// BenchmarkFrameLeftJoin is the same join keeping the left rows that matched
+// nothing, which here is none of them, so the difference from the inner join is
+// the cost of the bookkeeping rather than of any extra rows.
+func BenchmarkFrameLeftJoin(b *testing.B) {
+	left, right := benchJoinSides(b)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := left.LeftJoin(right, "k")
+		if err != nil {
+			b.Fatalf("LeftJoin: %v", err)
+		}
+		frameSink = out
+	}
+}
+
+// BenchmarkFrameSemiJoin takes nothing from the right side, so it is the join
+// without the gather, and the gap between it and the inner join is what
+// building the table costs.
+func BenchmarkFrameSemiJoin(b *testing.B) {
+	left, right := benchJoinSides(b)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := left.Join(right, kuma.Using("k"), kuma.SemiJoin)
+		if err != nil {
+			b.Fatalf("Join: %v", err)
+		}
+		frameSink = out
+	}
+}

@@ -36,6 +36,21 @@
 // the groups come out in the order they first appear, which is deterministic
 // without being sorted. Sort the result when the order matters.
 //
+// # Joining
+//
+// [Frame.Join] puts two frames together on the columns they share, in all seven
+// of the ways SQL can, and [Frame.InnerJoin] and [Frame.LeftJoin] are the two
+// that come up often enough to have names:
+//
+//	got, err := trades.InnerJoin(sectors, "symbol")
+//
+// A missing key matches nothing, including another missing key, which is what
+// SQL says and what keeps a join from gluing together every row whose field was
+// left blank. Output order is the left frame's row order, with the matches of
+// one left row in the right frame's order, and an outer join puts the unmatched
+// right rows at the end. Use [On] when the two sides call the key different
+// things.
+//
 // # Types and schemas
 //
 // A frame carries its schema as a type parameter. [Dynamic] is the schema type

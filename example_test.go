@@ -632,3 +632,134 @@ func ExampleGroupedFrame_Count() {
 	// ok 3
 	// error 2
 }
+
+// A join puts two frames together on the columns they share. This is an inner
+// join, so a trade in a symbol the reference data has never heard of is not in
+// the answer.
+func ExampleFrame_Join() {
+	trades, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT", "AAPL", "NVDA").Column(),
+		kuma.NewSeries("qty", int64(100), 50, 25, 400).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+	sectors, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "MSFT", "AAPL").Column(),
+		kuma.NewSeries("sector", "software", "hardware").Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	got, err := trades.InnerJoin(sectors, "symbol")
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println(strings.Join(got.Names(), " "))
+	for i := range got.NumRows() {
+		fmt.Println(string(got.ColumnAt(0).Data().Bytes(i)),
+			got.ColumnAt(1).Data().Value[int64](i),
+			string(got.ColumnAt(2).Data().Bytes(i)))
+	}
+	// Output:
+	// symbol qty sector
+	// AAPL 100 hardware
+	// MSFT 50 software
+	// AAPL 25 hardware
+}
+
+// A left join keeps every left row whether it matched or not, and the columns
+// that came from the right side are missing where nothing did.
+func ExampleFrame_LeftJoin() {
+	trades, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "NVDA").Column(),
+		kuma.NewSeries("qty", int64(100), 400).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+	sectors, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL").Column(),
+		kuma.NewSeries("sector", "hardware").Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	got, err := trades.LeftJoin(sectors, "symbol")
+	if err != nil {
+		panic(err)
+	}
+
+	for i := range got.NumRows() {
+		sector := "unknown"
+		if !got.ColumnAt(2).IsNull(i) {
+			sector = string(got.ColumnAt(2).Data().Bytes(i))
+		}
+		fmt.Println(string(got.ColumnAt(0).Data().Bytes(i)), sector)
+	}
+	// Output:
+	// AAPL hardware
+	// NVDA unknown
+}
+
+// A semi join answers which of these have one, and takes nothing from the right
+// side. An anti join is the other half of the same question.
+func ExampleFrame_Join_semi() {
+	orders, err := kuma.NewFrame(
+		kuma.NewSeries("id", int64(1), 2, 3).Column(),
+		kuma.NewSeries("customer", "ann", "bob", "cat").Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+	shipped, err := kuma.NewFrame(kuma.NewSeries("id", int64(3), 1).Column())
+	if err != nil {
+		panic(err)
+	}
+
+	for _, how := range []kuma.JoinType{kuma.SemiJoin, kuma.AntiJoin} {
+		got, err := orders.Join(shipped, kuma.Using("id"), how)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Print(how, ":")
+		for i := range got.NumRows() {
+			fmt.Print(" ", string(got.ColumnAt(1).Data().Bytes(i)))
+		}
+		fmt.Println()
+	}
+	// Output:
+	// semi: ann cat
+	// anti: bob
+}
+
+// When the two sides call the key different things, name both. Both columns are
+// kept, since a caller who wrote two names probably wants to see both.
+func ExampleOn() {
+	trades, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL").Column(),
+		kuma.NewSeries("qty", int64(100)).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+	sectors, err := kuma.NewFrame(
+		kuma.NewSeries("ticker", "AAPL").Column(),
+		kuma.NewSeries("sector", "hardware").Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	got, err := trades.Join(sectors,
+		[]kuma.On{{Left: "symbol", Right: "ticker"}}, kuma.InnerJoin)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(strings.Join(got.Names(), " "))
+	// Output:
+	// symbol qty ticker sector
+}
