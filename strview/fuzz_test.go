@@ -55,10 +55,7 @@ func FuzzBuilder(f *testing.F) {
 			t.Fatalf("Builder.Len is %d after %d appends", b.Len(), len(values))
 		}
 
-		d, err := b.Build()
-		if err != nil {
-			t.Fatalf("Build on values the builder made itself: %v", err)
-		}
+		d := b.Build()
 		if d.Len() != len(values) {
 			t.Fatalf("Data.Len is %d, want %d", d.Len(), len(values))
 		}
@@ -122,19 +119,28 @@ func FuzzBuilder(f *testing.F) {
 			t.Fatalf("NewData rejected what Builder produced: %v", err)
 		}
 
-		// Reset leaves a builder that is not carrying anything over from the
-		// values before it.
+		// Build hands its memory to the Data, so it has to leave the builder
+		// empty. A builder that came back still holding those views would let
+		// the next Append write into a column that has already been handed out.
+		if b.Len() != 0 {
+			t.Fatalf("Builder.Len is %d after Build", b.Len())
+		}
 		b.Reset()
 		if b.Len() != 0 {
 			t.Fatalf("Builder.Len is %d after Reset", b.Len())
 		}
 		b.Append([]byte("after the reset"))
-		again, err := b.Build()
-		if err != nil {
-			t.Fatalf("Build after Reset: %v", err)
-		}
+		again := b.Build()
 		if got := string(again.At(0)); got != "after the reset" {
 			t.Fatalf("after Reset the builder holds %q", got)
+		}
+
+		// And the column built before is still what it was, which is the
+		// property that handing the memory over is only safe because of.
+		for i, want := range values {
+			if got := d.At(i); !bytes.Equal(got, want) {
+				t.Fatalf("At(%d) = %q after the builder was used again, want %q", i, got, want)
+			}
 		}
 	})
 }
