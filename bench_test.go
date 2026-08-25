@@ -28,6 +28,7 @@ var (
 
 	floatSeriesSink kuma.Series[float64]
 	indexSink       []int
+	groupSink       *kuma.GroupedFrame[kuma.Dynamic]
 )
 
 // benchInts returns a column of benchLen int64 values in the given number of
@@ -376,5 +377,107 @@ func BenchmarkSeriesSort(b *testing.B) {
 			b.Fatalf("Sort: %v", err)
 		}
 		seriesSink = got
+	}
+}
+
+// benchGrouped returns a frame of a key column of a hundred distinct values and
+// two columns to aggregate, already grouped, which is the shape of every group
+// by anybody writes.
+func benchGrouped(b *testing.B) *kuma.GroupedFrame[kuma.Dynamic] {
+	b.Helper()
+
+	keys := make([]int64, benchLen)
+	for i := range keys {
+		keys[i] = int64(i % 100)
+	}
+	k, err := array.NewChunked(dtype.Int64, array.Of(keys...))
+	if err != nil {
+		b.Fatalf("NewChunked: %v", err)
+	}
+	key, err := kuma.NewColumn("k", k)
+	if err != nil {
+		b.Fatalf("NewColumn: %v", err)
+	}
+
+	f, err := kuma.NewFrame(key,
+		benchInts(b, 1).Rename("qty").Column(),
+		benchInts(b, 1).Rename("price").Column())
+	if err != nil {
+		b.Fatalf("NewFrame: %v", err)
+	}
+
+	g, err := f.GroupBy("k")
+	if err != nil {
+		b.Fatalf("GroupBy: %v", err)
+	}
+	return g
+}
+
+// BenchmarkFrameGroupBy is the grouping on its own, which is the expensive half
+// of a group by and the half that does not get cheaper as more is asked of it.
+func BenchmarkFrameGroupBy(b *testing.B) {
+	f := benchGrouped(b).Frame()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		g, err := f.GroupBy("k")
+		if err != nil {
+			b.Fatalf("GroupBy: %v", err)
+		}
+		groupSink = g
+	}
+}
+
+// BenchmarkFrameAgg is one aggregation over a grouping that already exists, so
+// the gap to BenchmarkFrameGroupBy is what asking a second question costs.
+func BenchmarkFrameAgg(b *testing.B) {
+	g := benchGrouped(b)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := g.Agg(kuma.Sum("qty"))
+		if err != nil {
+			b.Fatalf("Agg: %v", err)
+		}
+		frameSink = out
+	}
+}
+
+// BenchmarkFrameAggSeveral asks four questions of one grouping, which is what
+// the whole design is for: the grouping is paid for once.
+func BenchmarkFrameAggSeveral(b *testing.B) {
+	g := benchGrouped(b)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := g.Agg(
+			kuma.Sum("qty").As("total"),
+			kuma.Mean("price").As("avg"),
+			kuma.Max("price").As("high"),
+			kuma.Size(),
+		)
+		if err != nil {
+			b.Fatalf("Agg: %v", err)
+		}
+		frameSink = out
+	}
+}
+
+// BenchmarkFrameGroupByAndAgg is the whole thing end to end, which is the
+// number to compare against a pandas groupby.
+func BenchmarkFrameGroupByAndAgg(b *testing.B) {
+	f := benchGrouped(b).Frame()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		g, err := f.GroupBy("k")
+		if err != nil {
+			b.Fatalf("GroupBy: %v", err)
+		}
+		out, err := g.Agg(kuma.Sum("qty").As("total"), kuma.Mean("price").As("avg"))
+		if err != nil {
+			b.Fatalf("Agg: %v", err)
+		}
+		frameSink = out
 	}
 }

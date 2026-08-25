@@ -19,6 +19,23 @@
 //		// v is a float64 read straight out of the column.
 //	}
 //
+// # Grouping
+//
+// [Frame.GroupBy] divides the rows up and hands back a [GroupedFrame], which
+// holds the division so that asking it several questions costs one grouping
+// rather than several:
+//
+//	g, err := prices.GroupBy("symbol")
+//	totals, err := g.Agg(
+//		kuma.Sum("qty").As("total"),
+//		kuma.Mean("price").As("avg"),
+//		kuma.Size(),
+//	)
+//
+// A missing key is a group of its own rather than a row that disappears, and
+// the groups come out in the order they first appear, which is deterministic
+// without being sorted. Sort the result when the order matters.
+//
 // # Types and schemas
 //
 // A frame carries its schema as a type parameter. [Dynamic] is the schema type

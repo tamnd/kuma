@@ -3,6 +3,7 @@ package kuma_test
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/tamnd/kuma"
@@ -465,4 +466,169 @@ func ExampleSeries_SortIndex() {
 	fmt.Println(idx)
 	// Output:
 	// [2 1 0]
+}
+
+func ExampleFrame_GroupBy() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT", "AAPL", "NVDA", "MSFT").Column(),
+		kuma.NewSeries("qty", int64(100), 50, 25, 400, 75).Column(),
+		kuma.NewSeries("price", 189.5, 411.2, 190.1, 121.0, 410.0).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	g, err := f.GroupBy("symbol")
+	if err != nil {
+		panic(err)
+	}
+	got, err := g.Agg(
+		kuma.Sum("qty").As("total"),
+		kuma.Mean("price").As("avg"),
+		kuma.Size(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println(strings.Join(got.Names(), " "))
+	for i := range got.NumRows() {
+		fmt.Println(string(got.ColumnAt(0).Data().Bytes(i)),
+			got.ColumnAt(1).Data().Value[int64](i),
+			got.ColumnAt(2).Data().Value[float64](i),
+			got.ColumnAt(3).Data().Value[int64](i))
+	}
+	// Output:
+	// symbol total avg size
+	// AAPL 125 189.8 2
+	// MSFT 125 410.6 2
+	// NVDA 400 121 1
+}
+
+// Groups come out in the order they first appear, which is deterministic
+// without being sorted. Sort the result when the order matters.
+func ExampleFrame_GroupBy_sorted() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("region", "west", "east", "west", "north").Column(),
+		kuma.NewSeries("sales", 10.0, 40.0, 30.0, 20.0).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	g, err := f.GroupBy("region")
+	if err != nil {
+		panic(err)
+	}
+	totals, err := g.Agg(kuma.Sum("sales"))
+	if err != nil {
+		panic(err)
+	}
+	got, err := totals.SortDesc("sales")
+	if err != nil {
+		panic(err)
+	}
+
+	for i := range got.NumRows() {
+		fmt.Println(string(got.ColumnAt(0).Data().Bytes(i)),
+			got.ColumnAt(1).Data().Value[float64](i))
+	}
+	// Output:
+	// west 40
+	// east 40
+	// north 20
+}
+
+// A grouping is worked out once and answers as many questions as it is asked,
+// which is why GroupBy hands one back instead of doing everything at once.
+func ExampleGroupedFrame_Agg() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("host", "a", "b", "a", "b", "a").Column(),
+		kuma.NewSeries("ms", 12.0, 240.0, 15.0, 11.0, 19.0).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	g, err := f.GroupBy("host")
+	if err != nil {
+		panic(err)
+	}
+	got, err := g.Agg(
+		kuma.Median("ms").As("p50"),
+		kuma.Quantile("ms", 0.9, kuma.Linear).As("p90"),
+		kuma.Max("ms").As("worst"),
+		kuma.Count("ms").As("n"),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println(strings.Join(got.Names(), " "))
+	for i := range got.NumRows() {
+		fmt.Println(string(got.ColumnAt(0).Data().Bytes(i)),
+			got.ColumnAt(1).Data().Value[float64](i),
+			got.ColumnAt(2).Data().Value[float64](i),
+			got.ColumnAt(3).Data().Value[float64](i),
+			got.ColumnAt(4).Data().Value[int64](i))
+	}
+	// Output:
+	// host p50 p90 worst n
+	// a 15 18.2 19 3
+	// b 125.5 217.1 240 2
+}
+
+// Aggregating two things about one column needs at least one of them named,
+// because otherwise both result columns want to be called price.
+func ExampleAggregation_As() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("day", int32(1), 1, 2, 2).Column(),
+		kuma.NewSeries("price", 9.0, 11.0, 4.0, 8.0).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	g, err := f.GroupBy("day")
+	if err != nil {
+		panic(err)
+	}
+	if _, clash := g.Agg(kuma.Min("price"), kuma.Max("price")); clash != nil {
+		fmt.Println(clash)
+	}
+
+	got, err := g.Agg(kuma.Min("price").As("low"), kuma.Max("price").As("high"))
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(strings.Join(got.Names(), " "))
+	// Output:
+	// kuma: two columns are called "price": duplicate column
+	// day low high
+}
+
+func ExampleGroupedFrame_Count() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("status", "ok", "ok", "error", "ok", "error").Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	g, err := f.GroupBy("status")
+	if err != nil {
+		panic(err)
+	}
+	got, err := g.Count()
+	if err != nil {
+		panic(err)
+	}
+
+	for i := range got.NumRows() {
+		fmt.Println(string(got.ColumnAt(0).Data().Bytes(i)),
+			got.ColumnAt(1).Data().Value[int64](i))
+	}
+	// Output:
+	// ok 3
+	// error 2
 }
