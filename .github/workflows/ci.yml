@@ -18,6 +18,14 @@ concurrency:
 env:
   GOTOOLCHAIN: local
 
+# Windows runners default to PowerShell, which splits an argument like
+# -coverprofile=coverage.out in a way that hands go test a package named
+# ".out". Using bash everywhere means one command that behaves the same on all
+# four runners rather than a Windows special case in every step.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   test:
     name: test (${{ matrix.os }})
@@ -47,10 +55,12 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           go tool cover -func=coverage.out | tee coverage.txt
-          echo '### Coverage' >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -1 coverage.txt >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo '### Coverage'
+            echo '```'
+            tail -1 coverage.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest'
@@ -117,8 +127,13 @@ jobs:
       # Doc comment completeness is enforced by revive in the lint workflow.
       # This step only checks that godoc can render the packages at all, which
       # catches malformed example functions and broken links early.
+      # go doc takes one package at a time, so this is a loop rather than the
+      # ./... you would expect.
       - name: godoc renders
-        run: go doc -all ./... > /dev/null
+        run: |
+          for pkg in $(go list ./...); do
+            go doc -all "$pkg" > /dev/null
+          done
 
   fuzz:
     name: fuzz smoke

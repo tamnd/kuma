@@ -77,6 +77,8 @@ linters:
       scope: declarations
       capital: true
 
+    # Go source and doc comments follow the standard library, which is US
+    # English. The prose in docs/ is not linted and is written normally.
     misspell:
       locale: US
 
@@ -87,14 +89,16 @@ linters:
 
   exclusions:
     rules:
-      # Tests get more rope. A test that panics is a test that failed, and
-      # checking every error return in a table test buries the assertion.
+      # Tests get more rope. A test that panics is a test that failed, checking
+      # every error return in a table test buries the assertion, and
+      # preallocating a reference model obscures the thing being modelled.
       - path: _test\.go
         linters:
           - errcheck
           - goconst
           - gocritic
           - dupword
+          - prealloc
 
 formatters:
   enable:

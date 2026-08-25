@@ -67,7 +67,7 @@ func (b *Bitmap) Len() int { return b.n }
 func (b *Bitmap) Bytes() []byte { return b.bits }
 
 // Get reports whether bit i is set. It panics if i is out of range, matching
-// the behaviour of an ordinary slice index.
+// the behavior of an ordinary slice index.
 func (b *Bitmap) Get(i int) bool {
 	if uint(i) >= uint(b.n) {
 		panic("bitmap: index out of range")
