@@ -511,3 +511,70 @@ func TestFrameTakePanics(t *testing.T) {
 		})
 	}
 }
+
+func TestFrameCast(t *testing.T) {
+	f := mustFrame(t,
+		kuma.NewSeries("symbol", "AAPL", "MSFT").Column(),
+		kuma.NewSeries("qty", int32(100), int32(250)).Column(),
+	)
+
+	got, err := f.Cast("qty", dtype.Int64)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if names := got.Names(); !slices.Equal(names, []string{"symbol", "qty"}) {
+		t.Errorf("Cast gave the columns %v, want symbol and qty in that order", names)
+	}
+	if dt := got.ColumnAt(1).DType(); !dtype.Equal(dt, dtype.Int64) {
+		t.Errorf("qty is a %s column, want int64", dt)
+	}
+	if dt := f.ColumnAt(1).DType(); !dtype.Equal(dt, dtype.Int32) {
+		t.Error("Cast changed the frame it was called on")
+	}
+	if got.NumRows() != 2 {
+		t.Errorf("Cast gave %d rows, want 2", got.NumRows())
+	}
+
+	// The schema is read off the data, so it has to say int64 as well.
+	if dt := got.Schema().Fields[1].Type; !dtype.Equal(dt, dtype.Int64) {
+		t.Errorf("the schema says qty is a %s, want int64", dt)
+	}
+}
+
+func TestFrameCastErrors(t *testing.T) {
+	f := mustFrame(t,
+		kuma.NewSeries("qty", int64(1), int64(400)).Column(),
+	)
+
+	if _, err := f.Cast("nope", dtype.Int64); !errors.Is(err, kuma.ErrNoColumn) {
+		t.Errorf("casting a column that is not there gave %v, want ErrNoColumn", err)
+	}
+	if _, err := f.TryCast("nope", dtype.Int64); !errors.Is(err, kuma.ErrNoColumn) {
+		t.Errorf("casting a column that is not there gave %v, want ErrNoColumn", err)
+	}
+
+	if _, err := f.Cast("qty", dtype.Int8); err == nil {
+		t.Fatal("casting 400 into an int8 succeeded")
+	} else if !strings.Contains(err.Error(), `"qty"`) {
+		t.Errorf("the message is %q, want it to name the column", err.Error())
+	}
+
+	got, err := f.TryCast("qty", dtype.Int8)
+	if err != nil {
+		t.Fatalf("TryCast: %v", err)
+	}
+	if got.ColumnAt(0).NullCount() != 1 {
+		t.Errorf("TryCast gave %d nulls, want 1", got.ColumnAt(0).NullCount())
+	}
+}
+
+// mustFrame is NewFrame where a failure is a broken test rather than a result.
+func mustFrame(t *testing.T, cols ...kuma.Column) *kuma.Frame[kuma.Dynamic] {
+	t.Helper()
+
+	f, err := kuma.NewFrame(cols...)
+	if err != nil {
+		t.Fatalf("NewFrame: %v", err)
+	}
+	return f
+}

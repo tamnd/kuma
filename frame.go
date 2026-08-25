@@ -296,6 +296,46 @@ func (f *Frame[S]) Filter(mask Series[bool]) (*Frame[S], error) {
 	return f.Take(kernel.Indices(mask.data)), nil
 }
 
+// Cast returns a frame with the named column in the type to. The column keeps
+// its position and everything else is left alone.
+//
+// The result is a Dynamic frame because the schema changed. A typed frame is a
+// promise about what the columns are, and a cast is exactly the operation that
+// makes that promise out of date, so the type has to be established again.
+//
+// A value that will not fit is an error naming the row it was in. TryCast is
+// the same cast with that decision reversed, and [kernel.Cast] documents what
+// converts into what.
+func (f *Frame[S]) Cast(name string, to dtype.DataType) (*Frame[Dynamic], error) {
+	return f.recast(name, to, Column.Cast)
+}
+
+// TryCast is Cast with a value that will not fit becoming a null.
+func (f *Frame[S]) TryCast(name string, to dtype.DataType) (*Frame[Dynamic], error) {
+	return f.recast(name, to, Column.TryCast)
+}
+
+// recast is the half of Cast and TryCast that finds the column and puts the
+// frame back together.
+func (f *Frame[S]) recast(name string, to dtype.DataType,
+	conv func(Column, dtype.DataType) (Column, error),
+) (*Frame[Dynamic], error) {
+	i, ok := f.index[name]
+	if !ok {
+		return nil, noColumn("Cast", name, f.Names())
+	}
+
+	c, err := conv(f.cols[i], to)
+	if err != nil {
+		return nil, fmt.Errorf("kuma: casting column %q: %w", name, err)
+	}
+
+	cols := make([]Column, len(f.cols))
+	copy(cols, f.cols)
+	cols[i] = c
+	return newFrame[Dynamic](cols)
+}
+
 // rebuild returns a frame of the given columns, which have to be the columns of
 // f in the same order under the same names and are allowed to hold different
 // rows.

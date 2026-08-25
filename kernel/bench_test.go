@@ -164,3 +164,61 @@ func benchMask(b *testing.B, n int) *array.Chunked {
 	}
 	return out
 }
+
+func BenchmarkCastWiden(b *testing.B) {
+	src := benchInts(b, 1)
+
+	b.SetBytes(benchLen * 8)
+	for b.Loop() {
+		chunkedSink = mustCast(b, src, dtype.Float64)
+	}
+}
+
+func BenchmarkCastNarrow(b *testing.B) {
+	src := benchInts(b, 1)
+
+	b.SetBytes(benchLen * 8)
+	for b.Loop() {
+		chunkedSink = mustCast(b, src, dtype.Uint32)
+	}
+}
+
+// BenchmarkCastReinterpret is the cheapest cast there is, since the bytes do
+// not change at all and the only work is the range check and the copy.
+func BenchmarkCastReinterpret(b *testing.B) {
+	src := benchInts(b, 1)
+
+	b.SetBytes(benchLen * 8)
+	for b.Loop() {
+		chunkedSink = mustCast(b, src, dtype.Timestamp{Unit: dtype.Nanosecond})
+	}
+}
+
+func BenchmarkCastToText(b *testing.B) {
+	src := benchInts(b, 1)
+
+	for b.Loop() {
+		chunkedSink = mustCast(b, src, dtype.String)
+	}
+}
+
+// BenchmarkCastParse is the one that matters for a reader, since every number
+// in a CSV file arrives as text and goes through here.
+func BenchmarkCastParse(b *testing.B) {
+	src := mustCast(b, benchInts(b, 1), dtype.String)
+
+	for b.Loop() {
+		chunkedSink = mustCast(b, src, dtype.Int64)
+	}
+}
+
+// mustCast is Cast where a failure is a broken benchmark rather than a result.
+func mustCast(b *testing.B, c *array.Chunked, to dtype.DataType) *array.Chunked {
+	b.Helper()
+
+	out, err := kernel.Cast(c, to)
+	if err != nil {
+		b.Fatalf("Cast to %s: %v", to, err)
+	}
+	return out
+}

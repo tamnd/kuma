@@ -25,6 +25,8 @@ var (
 	columnSink  kuma.Column
 	frameSink   *kuma.Frame[kuma.Dynamic]
 	stringsSink []string
+
+	floatSeriesSink kuma.Series[float64]
 )
 
 // benchInts returns a column of benchLen int64 values in the given number of
@@ -295,4 +297,37 @@ func benchOrder(n int) []int {
 	r := rand.New(rand.NewPCG(1, 2))
 	r.Shuffle(len(idx), func(i, j int) { idx[i], idx[j] = idx[j], idx[i] })
 	return idx
+}
+
+// BenchmarkSeriesCast is a cast through the root package, which is the same
+// kernel with a series wrapped around it. The gap between this and the kernel
+// benchmark of the same name is what the wrapping costs.
+func BenchmarkSeriesCast(b *testing.B) {
+	s := benchInts(b, 1)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		got, err := s.Cast[float64](dtype.Float64)
+		if err != nil {
+			b.Fatalf("Cast: %v", err)
+		}
+		floatSeriesSink = got
+	}
+}
+
+// BenchmarkFrameCast casts one column of sixteen. The other fifteen are shared
+// with the frame that went in, so this measures a cast plus the cost of a new
+// frame rather than sixteen casts.
+func BenchmarkFrameCast(b *testing.B) {
+	f := benchFrame(b)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		got, err := f.Cast("c00", dtype.Float64)
+		if err != nil {
+			b.Fatalf("Cast: %v", err)
+		}
+		frameSink = got
+	}
 }

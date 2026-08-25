@@ -61,3 +61,46 @@ func ExampleIndices() {
 	// Output:
 	// [1 2 4]
 }
+
+func ExampleCast() {
+	read, _ := array.NewChunked(dtype.String, array.OfStrings("189", "411", "190"))
+
+	prices, err := kernel.Cast(read, dtype.Int32)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	for i := range prices.Len() {
+		fmt.Println(prices.Value[int32](i))
+	}
+	// Output:
+	// 189
+	// 411
+	// 190
+}
+
+// A value with no answer in the new type stops the cast and says which row it
+// was, which is what makes a bad file findable.
+func ExampleCast_doesNotFit() {
+	read, _ := array.NewChunked(dtype.String, array.OfStrings("189", "n/a", "190"))
+
+	_, err := kernel.Cast(read, dtype.Int32)
+	fmt.Println(err)
+	// Output:
+	// kernel: cannot cast string to int32: row 1 is "n/a": invalid syntax
+}
+
+// TryCast is the same cast with the bad row becoming a null, which is what to
+// reach for when the plan is to count them afterwards.
+func ExampleTryCast() {
+	read, _ := array.NewChunked(dtype.String, array.OfStrings("189", "n/a", "190"))
+
+	prices, err := kernel.TryCast(read, dtype.Int32)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(prices.Len(), "values,", prices.NullCount(), "of them missing")
+	// Output:
+	// 3 values, 1 of them missing
+}

@@ -183,6 +183,13 @@ func valueBytes(dt dtype.DataType, length int) (int, error) {
 		if !ok {
 			return 0, fmt.Errorf("array: a %s column is not supported yet", dt)
 		}
+		// A negative width is only reachable through a type someone built by
+		// hand and never validated, and it has to be caught here because a
+		// negative number of bytes is a panic several layers down where nothing
+		// remembers what the type was.
+		if bits < 0 {
+			return 0, fmt.Errorf("array: a %s column is %d bits wide", dt, bits)
+		}
 		if bits%8 != 0 {
 			return 0, fmt.Errorf("array: a %s column is %d bits wide, which is not a whole number of bytes", dt, bits)
 		}

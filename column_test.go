@@ -148,3 +148,29 @@ func TestColumnTake(t *testing.T) {
 		t.Error("the field is not nullable, and the column has a null in it")
 	}
 }
+
+func TestColumnCast(t *testing.T) {
+	c := kuma.NewSeries("qty", "1", "2", "x").Column()
+
+	if _, err := c.Cast(dtype.Int64); err == nil {
+		t.Fatal("Cast of a column with an x in it succeeded")
+	}
+
+	got, err := c.TryCast(dtype.Int64)
+	if err != nil {
+		t.Fatalf("TryCast: %v", err)
+	}
+	if got.Name() != "qty" {
+		t.Errorf("TryCast gave a column called %q, want %q", got.Name(), "qty")
+	}
+	if got.NullCount() != 1 {
+		t.Errorf("TryCast gave %d nulls, want 1", got.NullCount())
+	}
+	if c.NullCount() != 0 {
+		t.Error("TryCast changed the column it was called on")
+	}
+
+	if _, err := got.Cast(dtype.Binary); err == nil {
+		t.Fatal("a cast from int64 to binary succeeded")
+	}
+}

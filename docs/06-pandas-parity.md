@@ -50,7 +50,7 @@ a.Add(b)                       // still positional, never aligned behind your ba
 
 - [ ] `isna` `isnull` -> `IsNull` (M1)
 - [ ] `notna` `notnull` -> `IsNotNull` (M1)
-- [ ] `to_numeric` -> `Cast` with an error policy (M1)
+- [x] `to_numeric` -> `Cast` with an error policy (M1)
 - [ ] `to_datetime` -> `ParseTimestamp` with format and inference (M8)
 - [ ] `to_timedelta` -> `ParseDuration` (M8)
 - [ ] `array` -> `NewSeries[T]` (M1)
@@ -99,7 +99,7 @@ a.Add(b)                       // still positional, never aligned behind your ba
 
 ### Conversion
 
-- [ ] `astype` -> `Cast` (M1)
+- [x] `astype` -> `Cast` (M1)
 - [ ] `convert_dtypes` `infer_objects` -> `ShrinkDtypes()`, adapted since there is no object dtype to convert away from (M7)
 - [ ] `copy` -> not needed, frames are immutable (adapted, M1)
 - [ ] `to_numpy` -> `Values()` (M1)

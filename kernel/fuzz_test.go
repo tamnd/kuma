@@ -144,3 +144,107 @@ func boolColumn(t *testing.T, choices []byte, n int) *array.Chunked {
 	}
 	return mask
 }
+
+// FuzzCastNumber casts an int64 column to a numeric type the fuzzer picks, and
+// checks the two properties a cast has.
+//
+// Nothing is dropped: the result is as long as the source and a null stays a
+// null. Nothing is changed: a value that arrives becomes the same value when it
+// is cast back, which is the whole promise for a destination it fits in.
+//
+// The loose cast is the one under test because it is the one that has to answer
+// for every value rather than stopping at the first awkward one, so a run gets
+// through the whole column instead of finding the same first row every time.
+func FuzzCastNumber(f *testing.F) {
+	f.Add([]byte{3, 0, 4}, uint8(0))
+	f.Add([]byte{5}, uint8(9))
+	f.Add([]byte{2, 2}, uint8(4))
+
+	f.Fuzz(func(t *testing.T, layout []byte, pick uint8) {
+		if len(layout) > 32 {
+			t.Skip("a big input proves nothing a small one does not")
+		}
+
+		to := castTargets[int(pick)%len(castTargets)]
+		src := column(t, layout)
+
+		got, err := kernel.TryCast(src, to)
+		if err != nil {
+			t.Fatalf("TryCast to %s: %v", to, err)
+		}
+		if got.Len() != src.Len() {
+			t.Fatalf("the result has %d values, want %d", got.Len(), src.Len())
+		}
+
+		// Back the way it came. A float32 loses digits on the way out and does
+		// not come home, so the round trip is only asked of the types that hold
+		// an int64 exactly.
+		if to.Kind() == dtype.Float32Kind {
+			return
+		}
+		back, err := kernel.TryCast(got, dtype.Int64)
+		if err != nil {
+			t.Fatalf("TryCast back to int64: %v", err)
+		}
+
+		for i := range src.Len() {
+			if src.IsNull(i) {
+				if !got.IsNull(i) {
+					t.Fatalf("value %d was missing and came back as %v", i, valueAt(t, got, i))
+				}
+				continue
+			}
+			if got.IsNull(i) {
+				// The value did not fit, which is allowed, and the only way
+				// that can be true of an int64 is a narrower destination.
+				continue
+			}
+			if have, want := valueAt(t, back, i), valueAt(t, src, i); have != want {
+				t.Errorf("value %d went to %s and came back as %v, want %v", i, to, have, want)
+			}
+		}
+	})
+}
+
+// castTargets is what FuzzCastNumber picks from. Every one of them holds at
+// least some int64 values exactly, so a value that survives the trip out has to
+// survive the trip home.
+var castTargets = []dtype.DataType{
+	dtype.Int8, dtype.Int16, dtype.Int32, dtype.Int64,
+	dtype.Uint8, dtype.Uint16, dtype.Uint32, dtype.Uint64,
+	dtype.Float32, dtype.Float64,
+	dtype.Timestamp{Unit: dtype.Nanosecond},
+}
+
+// FuzzCastText writes numbers out as text and reads them back, which is the
+// round trip a CSV file is and the one where a lost digit is a wrong number
+// rather than a parse error.
+func FuzzCastText(f *testing.F) {
+	f.Add([]byte{3, 0, 4})
+	f.Add([]byte{7})
+	f.Add([]byte{})
+
+	f.Fuzz(func(t *testing.T, layout []byte) {
+		if len(layout) > 32 {
+			t.Skip("a big input proves nothing a small one does not")
+		}
+
+		src := column(t, layout)
+
+		text, err := kernel.Cast(src, dtype.String)
+		if err != nil {
+			t.Fatalf("Cast to text: %v", err)
+		}
+		back, err := kernel.Cast(text, dtype.Int64)
+		if err != nil {
+			t.Fatalf("Cast back from text: %v", err)
+		}
+
+		for i := range src.Len() {
+			if have, want := valueAt(t, back, i), valueAt(t, src, i); have != want {
+				t.Errorf("value %d printed as %v and read back as %v, want %v",
+					i, valueAt(t, text, i), have, want)
+			}
+		}
+	})
+}
