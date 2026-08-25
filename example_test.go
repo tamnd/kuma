@@ -3,6 +3,7 @@ package kuma_test
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -978,4 +979,23 @@ GOOG,300,141.8
 	//   qty: int64, 1 null
 	//   px: float64
 	// [100 300]
+}
+
+func ExampleFrame_WriteCSV() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("sym", "AAPL", "MSFT", "GOOG").Column(),
+		kuma.NewSeries[int64]("qty", 100, 200, 300).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	if err := f.WriteCSV(os.Stdout, nil); err != nil {
+		panic(err)
+	}
+	// Output:
+	// sym,qty
+	// AAPL,100
+	// MSFT,200
+	// GOOG,300
 }

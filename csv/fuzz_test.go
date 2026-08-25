@@ -1,10 +1,14 @@
 package csv
 
 import (
+	"bytes"
 	stdcsv "encoding/csv"
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/tamnd/kuma/array"
+	"github.com/tamnd/kuma/dtype"
 )
 
 // FuzzRead checks that whatever the input, a read either fails or produces a
@@ -44,6 +48,91 @@ func FuzzRead(f *testing.F) {
 			t.Fatalf("read %d rows, want %d", tbl.NumRows(), want)
 		}
 	})
+}
+
+// FuzzWrite checks the round trip: a table written out and read back in is the
+// table that went in.
+//
+// The types are handed to the read on the way back rather than inferred again,
+// since the question here is whether the values survived the file and not
+// whether a column of ones and zeros still looks like a column of numbers the
+// second time around.
+func FuzzWrite(f *testing.F) {
+	f.Add("a,b\n1,2\n", uint8(0))
+	f.Add("sym,qty\nAAPL,100\nMSFT,\n", uint8(1))
+	f.Add("a\n\"b\nc\"\n", uint8(2))
+	f.Add("px\n1.5\n-0.0\n", uint8(3))
+
+	f.Fuzz(func(t *testing.T, in string, mode uint8) {
+		tbl, err := Read(strings.NewReader(in), nil)
+		if err != nil {
+			return
+		}
+
+		wopts := &WriteOptions{}
+		ropts := &Options{Types: make(map[string]dtype.DataType, tbl.NumCols())}
+		switch mode % 4 {
+		case 1:
+			wopts.QuoteAll = true
+		case 2:
+			wopts.CRLF = true
+		case 3:
+			wopts.Delimiter, ropts.Delimiter = ';', ';'
+		}
+		for i, field := range tbl.Schema.Fields {
+			ropts.Types[field.Name] = tbl.Columns[i].DType()
+		}
+
+		var buf bytes.Buffer
+		if err = Write(&buf, tbl, wopts); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		text := buf.String()
+
+		back, err := Read(&buf, ropts)
+		if err != nil {
+			t.Fatalf("reading back %q: %v", text, err)
+		}
+		if back.NumCols() != tbl.NumCols() || back.NumRows() != tbl.NumRows() {
+			t.Fatalf("wrote %d by %d as %q and read back %d by %d",
+				tbl.NumRows(), tbl.NumCols(), text, back.NumRows(), back.NumCols())
+		}
+
+		for i := range tbl.Columns {
+			if got, want := back.Schema.Fields[i].Name, tbl.Schema.Fields[i].Name; got != want {
+				t.Fatalf("column %d came back called %q, want %q", i, got, want)
+			}
+			for j := range tbl.NumRows() {
+				if !sameValue(t, tbl.Columns[i], back.Columns[i], j) {
+					t.Fatalf("row %d of column %d was %q and came back %q, in %q",
+						j, i, value(t, tbl.Columns[i], j), value(t, back.Columns[i], j), text)
+				}
+			}
+		}
+	})
+}
+
+// sameValue reports whether value i came back as itself, allowing for the two
+// things a file cannot carry.
+//
+// An empty string comes back missing, because a field with nothing in it is the
+// only way a file has of saying either. A carriage return before a newline
+// comes back as the newline alone, because a reader cannot tell one inside a
+// value from the line ending it has to normalize.
+func sameValue(t *testing.T, want, got *array.Chunked, i int) bool {
+	t.Helper()
+	if want.IsNull(i) {
+		return got.IsNull(i)
+	}
+
+	w := value(t, want, i)
+	if w == "" {
+		return got.IsNull(i)
+	}
+	if got.IsNull(i) {
+		return false
+	}
+	return strings.ReplaceAll(w, "\r\n", "\n") == value(t, got, i)
 }
 
 // FuzzInfer checks the promise the inference makes: a type worked out from

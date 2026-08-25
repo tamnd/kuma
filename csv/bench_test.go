@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/tamnd/kuma/array"
 	"github.com/tamnd/kuma/csv"
 	"github.com/tamnd/kuma/dtype"
 )
@@ -169,6 +170,112 @@ func BenchmarkRecords(b *testing.B) {
 			}
 			fieldSink = len(rec)
 		}
+	}
+}
+
+// benchTable reads a generated file into the table the write benchmarks write.
+func benchTable(b *testing.B, kinds ...string) *csv.Table {
+	b.Helper()
+	t, err := csv.Read(bytes.NewReader(benchFile(kinds...)), nil)
+	if err != nil {
+		b.Fatalf("Read: %v", err)
+	}
+	return t
+}
+
+// benchWrite writes the same table over and over into a writer that throws it
+// away, so what is measured is the formatting rather than a disk.
+func benchWrite(b *testing.B, t *csv.Table, opts *csv.WriteOptions) {
+	b.Helper()
+
+	var n countingWriter
+	if err := csv.Write(&n, t, opts); err != nil {
+		b.Fatalf("Write: %v", err)
+	}
+	b.SetBytes(int64(n))
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		if err := csv.Write(io.Discard, t, opts); err != nil {
+			b.Fatalf("Write: %v", err)
+		}
+	}
+}
+
+// countingWriter measures how big the output is, which is what the throughput
+// figures are per second of.
+type countingWriter int
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	*w += countingWriter(len(p))
+	return len(p), nil
+}
+
+func BenchmarkWrite(b *testing.B) {
+	benchWrite(b, benchTable(b, "string", "int", "float", "bool"), nil)
+}
+
+func BenchmarkWriteInts(b *testing.B) {
+	benchWrite(b, benchTable(b, "int", "int", "int", "int"), nil)
+}
+
+func BenchmarkWriteFloats(b *testing.B) {
+	benchWrite(b, benchTable(b, "float", "float", "float", "float"), nil)
+}
+
+func BenchmarkWriteStrings(b *testing.B) {
+	benchWrite(b, benchTable(b, "string", "string", "string", "string"), nil)
+}
+
+func BenchmarkWriteGappy(b *testing.B) {
+	benchWrite(b, benchTable(b, "gappy", "gappy", "gappy", "gappy"), nil)
+}
+
+func BenchmarkWriteQuoteAll(b *testing.B) {
+	benchWrite(b, benchTable(b, "string", "int", "float", "bool"),
+		&csv.WriteOptions{QuoteAll: true})
+}
+
+// BenchmarkWriteRecords is what the same table costs through
+// [encoding/csv.Writer], which takes a []string and so allocates a string for
+// every value on the way past. It is the reason this package has a writer of
+// its own.
+func BenchmarkWriteRecords(b *testing.B) {
+	t := benchTable(b, "string", "int", "float", "bool")
+	rows := t.NumRows()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		w := stdcsv.NewWriter(io.Discard)
+		rec := make([]string, t.NumCols())
+		for i := range rows {
+			for j, c := range t.Columns {
+				rec[j] = fieldText(c, i)
+			}
+			if err := w.Write(rec); err != nil {
+				b.Fatalf("Write: %v", err)
+			}
+		}
+		w.Flush()
+	}
+}
+
+// fieldText renders one value the way a program with no library would have to,
+// which is one string per value.
+func fieldText(c *array.Chunked, i int) string {
+	if c.IsNull(i) {
+		return ""
+	}
+	switch c.DType().Kind() {
+	case dtype.Int64Kind:
+		return strconv.FormatInt(c.Value[int64](i), 10)
+	case dtype.Float64Kind:
+		return strconv.FormatFloat(c.Value[float64](i), 'g', -1, 64)
+	case dtype.BoolKind:
+		return strconv.FormatBool(c.Bool(i))
+	default:
+		return string(c.Bytes(i))
 	}
 }
 

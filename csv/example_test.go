@@ -3,6 +3,7 @@ package csv_test
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/tamnd/kuma/csv"
@@ -76,6 +77,49 @@ func ExampleRead_noHeader() {
 	fmt.Println(t.Schema)
 	// Output:
 	// schema<sym: string not null, qty: int64 not null>
+}
+
+func ExampleWrite() {
+	in := "sym,qty,px\nAAPL,100,182.5\nMSFT,,411.2\n"
+
+	t, err := csv.Read(strings.NewReader(in), nil)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	// The table goes back out as it came in. A missing quantity is an empty
+	// field again, since that is what the file said in the first place.
+	if err := csv.Write(os.Stdout, t, nil); err != nil {
+		fmt.Println(err)
+	}
+	// Output:
+	// sym,qty,px
+	// AAPL,100,182.5
+	// MSFT,,411.2
+}
+
+func ExampleWrite_options() {
+	in := "sym,qty,px\nAAPL,100,182.5\nMSFT,,411.2\n"
+
+	t, err := csv.Read(strings.NewReader(in), nil)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	err = csv.Write(os.Stdout, t, &csv.WriteOptions{
+		Delimiter: '\t',
+		NullValue: "NA",
+		Precision: 2,
+	})
+	if err != nil {
+		fmt.Println(err)
+	}
+	// Output:
+	// sym	qty	px
+	// AAPL	100	182.50
+	// MSFT	NA	411.20
 }
 
 func ExampleValueError() {
