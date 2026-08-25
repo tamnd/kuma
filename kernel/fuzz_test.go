@@ -1,6 +1,7 @@
 package kernel_test
 
 import (
+	"math"
 	"testing"
 
 	"github.com/tamnd/kuma/array"
@@ -470,6 +471,107 @@ func sameLength(t *testing.T, values []byte, n int) *array.Chunked {
 	c, err := array.NewChunked(dtype.Int64, chunks...)
 	if err != nil {
 		t.Fatalf("NewChunked: %v", err)
+	}
+	return c
+}
+
+// FuzzAggregate checks the things that have to hold between the aggregations
+// whatever the values are, since the answers themselves are not something a
+// fuzzer can know.
+//
+// The properties are that a quantile never goes down as q goes up, that the
+// median and every quantile sit between the smallest value and the largest, that
+// a distinct count is between zero and the number of values that are there, that
+// a variance is never negative, and that squaring the standard deviation gives
+// the variance back.
+func FuzzAggregate(f *testing.F) {
+	f.Add([]byte{1, 1, 2}, []byte{9})
+	f.Add([]byte{0}, []byte{255})
+	f.Add([]byte{7, 7, 7, 7}, []byte{1, 200, 3, 4})
+	f.Add([]byte{}, []byte{})
+
+	f.Fuzz(func(t *testing.T, keys, values []byte) {
+		if len(keys) > 64 {
+			t.Skip("a big input proves nothing a small one does not")
+		}
+
+		k := byteColumn(t, keys)
+		g, err := kernel.GroupBy(k)
+		if err != nil {
+			t.Fatalf("GroupBy: %v", err)
+		}
+		v := sameLength(t, values, k.Len())
+
+		low := aggregate(t, "Min", func() (*array.Chunked, error) { return kernel.Min(v, g) })
+		high := aggregate(t, "Max", func() (*array.Chunked, error) { return kernel.Max(v, g) })
+		count := kernel.Count(v, g)
+		distinct := aggregate(t, "NUnique", func() (*array.Chunked, error) { return kernel.NUnique(v, g) })
+		variance := aggregate(t, "Var", func() (*array.Chunked, error) { return kernel.Var(v, g, 0) })
+		sd := aggregate(t, "Std", func() (*array.Chunked, error) { return kernel.Std(v, g, 0) })
+
+		// Every q the loop below asks for, in order, with the median where it
+		// belongs so it is checked against its neighbors too.
+		var qs []*array.Chunked
+		for _, q := range []float64{0, 0.25, 0.5, 0.75, 1} {
+			if q == 0.5 {
+				qs = append(qs, aggregate(t, "Median",
+					func() (*array.Chunked, error) { return kernel.Median(v, g) }))
+				continue
+			}
+			qs = append(qs, aggregate(t, "Quantile",
+				func() (*array.Chunked, error) { return kernel.Quantile(v, g, q, kernel.Linear) }))
+		}
+
+		for id := range g.NumGroups() {
+			n := count.Value[int64](id)
+			if d := distinct.Value[int64](id); d < 0 || d > n {
+				t.Fatalf("group %d has %d values and %d distinct ones", id, n, d)
+			}
+
+			if n == 0 {
+				// Nothing to be the smallest of, so every one of these is
+				// missing and there is nothing else to check.
+				for _, c := range append([]*array.Chunked{low, high, variance, sd}, qs...) {
+					if !c.IsNull(id) {
+						t.Fatalf("group %d has no values and an answer anyway", id)
+					}
+				}
+				continue
+			}
+
+			if x := variance.Value[float64](id); x < 0 {
+				t.Fatalf("group %d has a variance of %v", id, x)
+			}
+			if s, x := sd.Value[float64](id), variance.Value[float64](id); math.Abs(s*s-x) > 1e-9*(1+x) {
+				t.Fatalf("group %d has a standard deviation of %v and a variance of %v", id, s, x)
+			}
+
+			smallest, largest := float64(low.Value[int64](id)), float64(high.Value[int64](id))
+			last := math.Inf(-1)
+			for i, c := range qs {
+				got := c.Value[float64](id)
+				if got < smallest || got > largest {
+					t.Fatalf("quantile %d of group %d is %v, outside %v to %v",
+						i, id, got, smallest, largest)
+				}
+				if got < last {
+					t.Fatalf("quantile %d of group %d is %v, below the one before it at %v",
+						i, id, got, last)
+				}
+				last = got
+			}
+		}
+	})
+}
+
+// aggregate runs one aggregation where a failure means the fuzzer found a bug
+// rather than a column these do not work on, since the column is always int64.
+func aggregate(t *testing.T, name string, f func() (*array.Chunked, error)) *array.Chunked {
+	t.Helper()
+
+	c, err := f()
+	if err != nil {
+		t.Fatalf("%s: %v", name, err)
 	}
 	return c
 }

@@ -209,3 +209,106 @@ func ExampleGroups() {
 	// 1 10 11 2
 	// 2 6 8 3
 }
+
+func ExampleQuantile() {
+	latency, err := array.NewChunked(dtype.Float64,
+		array.Of(12.0, 19.0, 15.0, 240.0, 14.0, 17.0, 13.0, 16.0, 18.0, 11.0))
+	if err != nil {
+		panic(err)
+	}
+
+	whole := kernel.OneGroup(latency.Len())
+	for _, q := range []float64{0.5, 0.9, 0.99} {
+		got, err := kernel.Quantile(latency, whole, q, kernel.Linear)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Printf("%.2f %.2f\n", q, got.Value[float64](0))
+	}
+	// Output:
+	// 0.50 15.50
+	// 0.90 41.10
+	// 0.99 220.11
+}
+
+// The five interpolations differ only when the quantile falls between two
+// values, which is most of the time on a small group. Lower and higher pick one
+// of the neighbors, midpoint splits them evenly whatever the fraction was, and
+// nearest picks the closer one.
+func ExampleInterpolation() {
+	c, err := array.NewChunked(dtype.Float64, array.Of(1.0, 2.0, 3.0, 4.0))
+	if err != nil {
+		panic(err)
+	}
+
+	g := kernel.OneGroup(c.Len())
+	for _, how := range []kernel.Interpolation{
+		kernel.Linear, kernel.Lower, kernel.Higher, kernel.Nearest, kernel.Midpoint,
+	} {
+		got, err := kernel.Quantile(c, g, 0.25, how)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println(how, got.Value[float64](0))
+	}
+	// Output:
+	// linear 1.75
+	// lower 1
+	// higher 2
+	// nearest 2
+	// midpoint 1.5
+}
+
+// A ddof of one is the sample standard deviation and a ddof of zero is the
+// population one. The first divides by the number of values less one, which is
+// the right thing when the values are a sample of something larger, and it is
+// what pandas and Polars do when nobody says otherwise.
+func ExampleStd() {
+	c, err := array.NewChunked(dtype.Float64, array.Of(2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0))
+	if err != nil {
+		panic(err)
+	}
+
+	g := kernel.OneGroup(c.Len())
+	sample, err := kernel.Std(c, g, 1)
+	if err != nil {
+		panic(err)
+	}
+	population, err := kernel.Std(c, g, 0)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println(sample.Value[float64](0), population.Value[float64](0))
+	// Output:
+	// 2.138089935299395 2
+}
+
+func ExampleNUnique() {
+	visitor, err := array.NewChunked(dtype.String,
+		array.OfStrings("ana", "bo", "ana", "cy", "bo", "ana"))
+	if err != nil {
+		panic(err)
+	}
+	day, err := array.NewChunked(dtype.Int32, array.Of[int32](1, 1, 1, 2, 2, 2))
+	if err != nil {
+		panic(err)
+	}
+
+	g, err := kernel.GroupBy(day)
+	if err != nil {
+		panic(err)
+	}
+	seen, err := kernel.NUnique(visitor, g)
+	if err != nil {
+		panic(err)
+	}
+	n := kernel.Count(visitor, g)
+
+	for i := range g.NumGroups() {
+		fmt.Println(g.Keys()[0].Value[int32](i), n.Value[int64](i), seen.Value[int64](i))
+	}
+	// Output:
+	// 1 3 2
+	// 2 3 3
+}
