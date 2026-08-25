@@ -2,6 +2,7 @@ package buffer_test
 
 import (
 	"bytes"
+	"runtime"
 	"testing"
 	"unsafe"
 
@@ -301,6 +302,35 @@ func TestWrapEmpty(t *testing.T) {
 	b := buffer.Wrap(nil)
 	if b.Len() != 0 || !b.Aligned() {
 		t.Errorf("Wrap(nil) gave Len %d Aligned %v", b.Len(), b.Aligned())
+	}
+}
+
+// TestNewDoesNotOverAllocate is the regression test for the memory a buffer
+// costs beyond the bytes it hands out. Asking the allocator for 63 bytes of
+// slack pushed a 4096 byte request into the 4864 byte size class, which is 19
+// percent of the buffer rather than the one percent the 63 bytes suggest, and
+// an engine holding gigabytes of columns cannot pay that quietly.
+//
+// The threshold is halfway between the two, so this fails when the padded path
+// comes back for every allocation and not when something allocated a little
+// extra somewhere.
+func TestNewDoesNotOverAllocate(t *testing.T) {
+	const (
+		runs = 1000
+		size = 4096
+	)
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	for range runs {
+		sink = buffer.New(size)
+	}
+	runtime.ReadMemStats(&after)
+
+	per := float64(after.TotalAlloc-before.TotalAlloc) / runs
+	if per > 4500 {
+		t.Errorf("New(%d) costs %.0f bytes of allocator memory, want close to %d", size, per, size)
 	}
 }
 

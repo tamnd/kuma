@@ -14,10 +14,15 @@
 // every kernel needs a scalar tail loop, and the tail loop is where the bugs
 // are.
 //
-// Alignment is not free. Go's allocator promises 8 byte alignment and nothing
-// stronger, so an aligned buffer asks for 63 bytes more than it needs and
-// starts partway in. On the chunk sizes this engine works in, tens of
-// kilobytes at a time, that is a rounding error against what it buys.
+// Go's allocator promises 8 byte alignment and nothing stronger, so the
+// portable way to get more is to ask for 63 bytes extra and start at the first
+// aligned address inside them. That turned out to cost far more than 63 bytes,
+// because the extra request lands in the next allocator size class: measured,
+// 19 percent on a 4 kilobyte buffer and 12.5 percent on a 64 kilobyte one. So
+// the buffer asks for exactly what it wants first and checks where it landed,
+// which in practice is on a boundary every time, and only pays for the padding
+// when it is not. The check costs one comparison and the fallback is still
+// there, because none of what makes the check succeed is anything Go promises.
 //
 // There is no reference counting. Buffers are ordinary Go memory and the
 // garbage collector already knows how to free them. Arrow implementations in
@@ -102,12 +107,7 @@ func (b *Buffer) Padded() []byte { return b.buf }
 // Aligned reports whether the buffer starts on an Alignment boundary. It is
 // true for every buffer this package allocates, and it is worth asking about a
 // wrapped one.
-func (b *Buffer) Aligned() bool {
-	if len(b.buf) == 0 {
-		return true
-	}
-	return uintptr(unsafe.Pointer(&b.buf[0]))&(Alignment-1) == 0
-}
+func (b *Buffer) Aligned() bool { return isAligned(b.buf) }
 
 // Grow makes room for n more bytes without adding them, reallocating if it has
 // to. It is worth calling when the final size is known.
@@ -177,6 +177,43 @@ func roundUp(n int) int { return (n + Alignment - 1) &^ (Alignment - 1) }
 
 // alignedBytes returns size zeroed bytes starting on an Alignment boundary.
 //
+// It asks for exactly what it wants first and keeps the answer if it lands on a
+// boundary, which in practice it nearly always does. Go's allocator rounds a
+// request up to a size class, every size class above a few hundred bytes is a
+// multiple of 64, and the objects in a class sit at multiples of the class size
+// from a page aligned base. So a request for a multiple of 64 comes back
+// aligned, and every request this package makes is a multiple of 64.
+//
+// None of that is written down anywhere Go promises to keep, which is why this
+// checks rather than assumes and why padded is still here. The check costs one
+// comparison. Assuming it instead would be a correctness bug on the day the
+// allocator changes, and skipping it would cost real memory: the padded path
+// pushes a 4096 byte request into the 4864 byte size class and a 65536 byte one
+// onto an extra page, which measured at 19 and 12.5 percent of the buffer.
+func alignedBytes(size int) []byte {
+	if size == 0 {
+		return nil
+	}
+	return alignOrPad(make([]byte, size), size)
+}
+
+// alignOrPad keeps buf when the allocator already put it on a boundary, and
+// allocates the padded way when it did not.
+//
+// It is separate from alignedBytes so that a test can hand it a slice that is
+// deliberately off a boundary. The fallback would otherwise never run on any Go
+// release this has been tried on, and an untested fallback is not a fallback,
+// it is code that will be broken on the day it is finally needed.
+func alignOrPad(buf []byte, size int) []byte {
+	if isAligned(buf) {
+		return buf
+	}
+	return paddedBytes(size)
+}
+
+// paddedBytes returns size zeroed bytes starting on an Alignment boundary,
+// without depending on where the allocator puts anything.
+//
 // The only portable way to beat the allocator's 8 byte promise is to ask for
 // Alignment-1 extra bytes and start at the first aligned address inside them.
 // The address is read once, to work out how far in that is, and everything
@@ -187,11 +224,18 @@ func roundUp(n int) int { return (n + Alignment - 1) &^ (Alignment - 1) }
 //
 // The result has its capacity trimmed to its length, so appending to it
 // allocates rather than quietly running into the padding at the end.
-func alignedBytes(size int) []byte {
-	if size == 0 {
-		return nil
-	}
+func paddedBytes(size int) []byte {
 	raw := make([]byte, size+Alignment-1)
 	off := int(-uintptr(unsafe.Pointer(&raw[0])) & (Alignment - 1))
 	return raw[off : off+size : off+size]
+}
+
+// isAligned reports whether p starts on an Alignment boundary. An empty slice
+// has no first byte to ask about and counts as aligned, since there is nothing
+// there for a kernel to load.
+func isAligned(p []byte) bool {
+	if len(p) == 0 {
+		return true
+	}
+	return uintptr(unsafe.Pointer(&p[0]))&(Alignment-1) == 0
 }
