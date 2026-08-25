@@ -19,6 +19,36 @@
 //		// v is a float64 read straight out of the column.
 //	}
 //
+// # Filtering and expressions
+//
+// A query is written against column handles rather than strings. A handle is a
+// name and a Go type, so [F64] names a column of float64 values and the methods
+// on it build a condition:
+//
+//	dear, err := prices.Filter(kuma.F64("price").Gt(150))
+//
+// The comparisons are Eq, Ne, Lt, Le, Gt and Ge, the arithmetic is Add, Sub,
+// Mul, Div and Mod, and each of them has an Expr version that takes another
+// expression instead of a literal, so Gt(150) compares against a number and
+// GtExpr(cost) compares against a column. And, Or and Not put conditions
+// together, IsNull and IsNotNull ask about the holes, and [Frame.Eval] and
+// [Frame.WithExpr] work an expression out as a column rather than as a filter:
+//
+//	f, err := prices.WithExpr("notional", kuma.F64("price").MulExpr(kuma.F64("qty")))
+//
+// A literal takes the type of the column it is used with, so comparing a uint32
+// column against 0 leaves it a uint32 column, and a literal that cannot be used
+// with the column is an error rather than a rounding. A row where either side
+// is missing gives a missing answer rather than a false, so [Frame.Filter]
+// drops it: a row nobody can say belongs in the result does not go in it, and a
+// condition and its negation do not add up to the frame. [Frame.FilterMask] is
+// the version that takes a mask that is already worked out.
+//
+// [Bind] checks a frame against a Go struct and gives back the same frame with
+// that struct as its schema, after which a handle written for the struct works
+// on it and a handle written for anything else does not compile. [Dyn] is the
+// handle for a column whose type is only known when the file is read.
+//
 // # Grouping
 //
 // [Frame.GroupBy] divides the rows up and hands back a [GroupedFrame], which
@@ -143,9 +173,12 @@
 //
 // A frame carries its schema as a type parameter. [Dynamic] is the schema type
 // meaning not known at compile time, which is what reading an arbitrary file
-// gives you, and it is what the string based methods here are for. The typed
-// column handles that make a wrong column name a compile error are generated
-// from a Go struct, and they are described in docs/03-typed-api.md.
+// gives you, and it is what the string based methods here are for. [Bind] is
+// the way from there to a frame with a Go struct as its schema, and after it a
+// handle written for another schema is a compile error rather than a wrong
+// answer. The handles are [NewF64Col] and the rest, or the light [F64] and the
+// rest for a Dynamic frame, and kumagen writes them out of a tagged struct so
+// that a program does not have to. Document 03 has the design.
 //
 // The Go type a column is read as is not always the type it is stored as. A
 // timestamp, a duration, a date and a time of day are all int64 values with a

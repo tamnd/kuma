@@ -190,6 +190,22 @@ func TestSeriesNulls(t *testing.T) {
 	}
 }
 
+// TestSeriesValuesOfBits is the one type Values cannot hand back the memory of.
+// A bool column is a bitmap rather than a byte per value, so the slice has to
+// be built a value at a time, and the shape of the frame it came out of makes
+// no difference to that.
+func TestSeriesValuesOfBits(t *testing.T) {
+	s := kuma.NewSeries("listed", true, false, true, true)
+
+	got := s.Values()
+	if want := []bool{true, false, true, true}; !slices.Equal(got, want) {
+		t.Errorf("Values() = %v, want %v", got, want)
+	}
+	if got := s.Slice(1, 3).Values(); !slices.Equal(got, []bool{false, true}) {
+		t.Errorf("the values of a slice are %v, want [false true]", got)
+	}
+}
+
 // TestSeriesValuesSharesMemory is the promise in document 04: the values of a
 // column held in one chunk are the memory itself, not a copy of it.
 func TestSeriesValuesSharesMemory(t *testing.T) {

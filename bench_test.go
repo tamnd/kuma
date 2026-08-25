@@ -29,6 +29,7 @@ var (
 	floatSeriesSink kuma.Series[float64]
 	indexSink       []int
 	groupSink       *kuma.GroupedFrame[kuma.Dynamic]
+	boundSink       *kuma.Frame[benchRow]
 )
 
 // benchInts returns a column of benchLen int64 values in the given number of
@@ -270,7 +271,9 @@ func BenchmarkFrameTake(b *testing.B) {
 	}
 }
 
-func BenchmarkFrameFilter(b *testing.B) {
+// BenchmarkFrameFilterMask is a filter by a mask that is already worked out,
+// which is the gather on its own with nothing in front of it.
+func BenchmarkFrameFilterMask(b *testing.B) {
 	f := benchFrame(b)
 
 	keep := make([]bool, benchLen)
@@ -281,12 +284,87 @@ func BenchmarkFrameFilter(b *testing.B) {
 
 	b.ReportAllocs()
 	for b.Loop() {
-		out, err := f.Filter(mask)
+		out, err := f.FilterMask(mask)
+		if err != nil {
+			b.Fatalf("FilterMask: %v", err)
+		}
+		frameSink = out
+	}
+}
+
+// BenchmarkFrameFilterExpr is the same gather with a condition in front of it,
+// so the gap between this and BenchmarkFrameFilterMask is what working the
+// condition out costs. Half the rows are kept in both, since the gather is
+// paid per row that comes back.
+func BenchmarkFrameFilterExpr(b *testing.B) {
+	f := benchFrame(b)
+	cond := kuma.I64("c00").Lt(benchLen / 2)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.Filter(cond)
 		if err != nil {
 			b.Fatalf("Filter: %v", err)
 		}
 		frameSink = out
 	}
+}
+
+// BenchmarkFrameFilterExprTwo is two conditions and an and, which is the shape
+// most predicates have and the one that has to walk the tree.
+func BenchmarkFrameFilterExprTwo(b *testing.B) {
+	f := benchFrame(b)
+	cond := kuma.I64("c00").Lt(benchLen / 2).And(kuma.I64("c01").Ge(1))
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.Filter(cond)
+		if err != nil {
+			b.Fatalf("Filter: %v", err)
+		}
+		frameSink = out
+	}
+}
+
+// BenchmarkFrameEval is arithmetic over two columns, which is the other half of
+// what an expression is for.
+func BenchmarkFrameEval(b *testing.B) {
+	f := benchFrame(b)
+	e := kuma.I64("c00").MulExpr(kuma.I64("c01"))
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.Eval(e)
+		if err != nil {
+			b.Fatalf("Eval: %v", err)
+		}
+		columnSink = out
+	}
+}
+
+// BenchmarkBind is the check a frame goes through on its way into the typed
+// world. It is per column rather than per row, and it is here to keep it that
+// way.
+func BenchmarkBind(b *testing.B) {
+	f := benchFrame(b)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := kuma.Bind[benchRow](f)
+		if err != nil {
+			b.Fatalf("Bind: %v", err)
+		}
+		boundSink = out
+	}
+}
+
+// benchRow is the schema BenchmarkBind binds to, which is three of the sixteen
+// columns benchFrame has.
+type benchRow struct {
+	C00 int64 `kuma:"c00"`
+	C01 int64 `kuma:"c01"`
+	C02 int64 `kuma:"c02"`
 }
 
 // benchOrder returns the positions of every row, shuffled, which is the order a

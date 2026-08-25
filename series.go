@@ -270,19 +270,23 @@ func (s Series[T]) Value(i int) T {
 // For a column of numbers held in one chunk, which is what a column that has
 // been through a filter or a select is, this is the memory itself: no copy, no
 // allocation, and 64 byte aligned. A column in several chunks is copied into
-// one slice, and so is a column of strings or of times, since neither of those
-// is stored as a Go value.
+// one slice, and so is a column of conditions, of strings or of times, since
+// none of those is stored as a Go value.
 //
 // The result of the no copy case must not be modified. A Series is immutable
 // and this is the one place that promise is left to the caller.
 func (s Series[T]) Values() []T {
+	// A bool is a bit rather than a value and a string or a time is not a
+	// number, so the memory of those is not a []T and has to be read a value at
+	// a time. Everything between the two is.
+	number := s.read > readBool && s.read < readString
 	chunks := s.data.Chunks()
-	if s.read < readString && len(chunks) == 1 {
+	if number && len(chunks) == 1 {
 		return numbers[T](chunks[0])
 	}
 
 	out := make([]T, s.data.Len())
-	if s.read < readString {
+	if number {
 		// Numbers still come out a chunk at a time rather than a value at a
 		// time, since each chunk is already a slice of exactly this type.
 		n := 0

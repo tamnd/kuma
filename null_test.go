@@ -282,7 +282,7 @@ func TestSeriesValidMaskFilters(t *testing.T) {
 		t.Fatalf("Series: %v", err)
 	}
 
-	got, err := f.Filter(qty.ValidMask())
+	got, err := f.FilterMask(qty.ValidMask())
 	if err != nil {
 		t.Fatalf("Filter: %v", err)
 	}
