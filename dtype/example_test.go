@@ -75,6 +75,55 @@ func ExampleValidate() {
 	// <nil>
 }
 
+func ExampleCoerce() {
+	// An int64 column and a float64 column have nothing in common that keeps
+	// every value, so the caller is told to say which one they meant. pandas
+	// would return float64 here and round the low bits off any id large enough
+	// to matter.
+	fmt.Println(dtype.Coerce(dtype.Int64, dtype.Float64))
+
+	// A column read as all nulls, which is what an empty JSON array gives,
+	// takes the type of whatever it is concatenated with.
+	fmt.Println(dtype.Coerce(dtype.List{Elem: dtype.Null}, dtype.List{Elem: dtype.Int64}))
+
+	// Dictionary encoding is how the values are stored and not what they are.
+	fmt.Println(dtype.Coerce(dtype.Dictionary{Index: dtype.Uint32, Value: dtype.String}, dtype.String))
+	// Output:
+	// <nil> dtype: cannot combine int64 and float64, cast one side explicitly
+	// list<int64> <nil>
+	// string <nil>
+}
+
+func ExampleCoerceLiteral() {
+	// Comparing a uint32 column against the literal 0 is not a type error and
+	// does not widen the column.
+	fmt.Println(dtype.CoerceLiteral(dtype.Uint32, dtype.Int64))
+
+	// A float literal against an integer column is refused, because 1.5 has no
+	// int64 spelling and rounding it quietly is the mistake this package is
+	// trying not to make.
+	fmt.Println(dtype.CoerceLiteral(dtype.Int64, dtype.Float64))
+	// Output:
+	// uint32 <nil>
+	// <nil> dtype: cannot use a float64 literal with a int64 column, cast the column or write a int64 literal
+}
+
+func ExampleCanCast() {
+	// A cast is what the caller writes when Coerce has refused, so it allows
+	// much more. Whether a particular row survives is decided when the values
+	// are read.
+	fmt.Println(dtype.CanCast(dtype.Int64, dtype.Float64))
+	fmt.Println(dtype.CanCast(dtype.String, dtype.Timestamp{Unit: dtype.Microsecond}))
+
+	// A duration is a span and a timestamp is a point, and turning one into the
+	// other needs an origin that nobody has stated.
+	fmt.Println(dtype.CanCast(dtype.Duration{Unit: dtype.Second}, dtype.Timestamp{Unit: dtype.Second}))
+	// Output:
+	// true
+	// true
+	// false
+}
+
 func ExampleBits() {
 	// Bool is one bit per value, not one byte, which anything sizing a buffer
 	// has to know.
