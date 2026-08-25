@@ -1,0 +1,4 @@
+# The golden files under kumagen are compared byte for byte with what the
+# generator writes, so they have to arrive the way they were committed rather
+# than with the line endings of whatever machine checked them out.
+*.golden -text
