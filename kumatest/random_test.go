@@ -78,22 +78,29 @@ func TestRandomIsTheSameFrameEveryTime(t *testing.T) {
 // TestRandomIsTheSameFrameOnEveryMachine pins a small frame down to its text,
 // which is the part a test on another machine or another Go release could lose
 // without anything else noticing.
+//
+// The float columns are the reason this is worth pinning. A multiply followed
+// by an add is one instruction on some machines and two on others, and the last
+// bit of the result differs between them, so a frame built out of that
+// arithmetic is not the same frame everywhere.
 func TestRandomIsTheSameFrameOnEveryMachine(t *testing.T) {
 	f := kumatest.Random(&kumatest.RandomOptions{
-		Rows:  3,
-		Types: []dtype.DataType{dtype.Int64, dtype.String, dtype.Bool},
-		Names: []string{"qty", "symbol", "filled"},
+		Rows: 3,
+		Types: []dtype.DataType{
+			dtype.Int64, dtype.String, dtype.Bool, dtype.Float64, dtype.Float32,
+		},
+		Names: []string{"qty", "symbol", "filled", "price", "size"},
 		Seed:  1,
 	})
 
-	const want = `kuma.Frame[kuma.Dynamic] 3 rows x 3 cols
+	const want = `kuma.Frame[kuma.Dynamic] 3 rows x 5 cols
 
-     qty | symbol                          | filled
-   int64 | string                          | bool
----------+---------------------------------+-------
-   85520 | lnyhyiguqesyjpcldyroeoqqhcaaaki | true
-  468274 | ifsoyg                          | true
-  117310 | gxkvjbsc                        | false`
+     qty | symbol                          | filled |   price |    size
+   int64 | string                          | bool   | float64 | float32
+---------+---------------------------------+--------+---------+--------
+   85520 | lnyhyiguqesyjpcldyroeoqqhcaaaki | true   |  -873.2 |  -586.6
+  468274 | ifsoyg                          | true   |  -844.6 | -823.15
+  117310 | gxkvjbsc                        | false  | -529.19 |  988.21`
 
 	if got := f.Render(nil); got != want {
 		t.Errorf("the frame is\n%s\nand it should be\n%s", got, want)

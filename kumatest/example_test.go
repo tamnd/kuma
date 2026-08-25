@@ -80,13 +80,13 @@ func ExampleRandom() {
 	// Output:
 	// kuma.Frame[kuma.Dynamic] 4 rows x 3 cols
 	//
-	//   symbol           |               price |     qty
-	//   string           |             float64 |   int64
-	// -------------------+---------------------+--------
-	//   kipdofjfprafdrec |   829.6145620744104 |    null
-	//   txxyqr           | -127.18329193832912 |  404700
-	//   iyqm             |   67.56055252312532 |  191080
-	//   vpekp            |  -931.7938029315353 | -326703
+	//   symbol           |   price |     qty
+	//   string           | float64 |   int64
+	// -------------------+---------+--------
+	//   kipdofjfprafdrec | -545.01 |    null
+	//   txxyqr           | -287.66 |  404700
+	//   iyqm             | -457.49 |  191080
+	//   vpekp            |   572.3 | -326703
 }
 
 // This example asks for the difference as text rather than reporting it, which

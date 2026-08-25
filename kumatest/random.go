@@ -182,9 +182,9 @@ func appendRandom(b *array.Builder, dt dtype.DataType, r *rand.Rand) {
 	case dtype.Uint64Kind:
 		b.Append(uint64(r.IntN(numberSpread)))
 	case dtype.Float32Kind:
-		b.Append(float32(r.Float64()*2*floatSpread - floatSpread))
+		b.Append(float32(hundredths(r)))
 	case dtype.Float64Kind:
-		b.Append(r.Float64()*2*floatSpread - floatSpread)
+		b.Append(hundredths(r))
 	case dtype.StringKind:
 		b.AppendString(word(r))
 	case dtype.BinaryKind:
@@ -199,6 +199,19 @@ func appendRandom(b *array.Builder, dt dtype.DataType, r *rand.Rand) {
 		// forgetting this switch.
 		panic(fmt.Sprintf("kumatest: no random value for a %s column", dt))
 	}
+}
+
+// hundredths returns a number between plus and minus floatSpread with two
+// decimal places, which is what a price looks like and what a column of them
+// reads as.
+//
+// It is drawn as a whole number and divided rather than scaled from a fraction,
+// because a multiply followed by an add may be fused into one operation on a
+// machine that has the instruction and not on one that does not, and the last
+// bit of the result then depends on which machine ran the test. A single
+// division is a single rounding everywhere.
+func hundredths(r *rand.Rand) float64 {
+	return float64(r.Int64N(2*floatSpread*100+1)-floatSpread*100) / 100
 }
 
 // word returns a run of letters, usually short enough to live inside a string
