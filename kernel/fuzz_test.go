@@ -353,3 +353,123 @@ func byteColumn(t *testing.T, values []byte) *array.Chunked {
 	}
 	return c
 }
+
+// FuzzGroupBy checks the definition of a grouping against the grouping itself:
+// two rows are in the same group exactly when their keys are equal, which is a
+// walk over every pair rather than another way of writing the implementation.
+//
+// It also adds the groups up and checks the total against the total of the
+// whole column, since an aggregation that loses a row or counts one twice is
+// the failure worth catching and it does not show up in the group numbers.
+func FuzzGroupBy(f *testing.F) {
+	f.Add([]byte{1, 1, 2}, []byte{9})
+	f.Add([]byte{255, 255, 0}, []byte{1, 2, 3})
+	f.Add([]byte{}, []byte{})
+	f.Add([]byte{5, 5, 5, 5, 5, 5, 5, 5}, []byte{255, 1, 255})
+
+	f.Fuzz(func(t *testing.T, keys, values []byte) {
+		if len(keys) > 64 {
+			t.Skip("a big input proves nothing a small one does not")
+		}
+
+		k := byteColumn(t, keys)
+		g, err := kernel.GroupBy(k)
+		if err != nil {
+			t.Fatalf("GroupBy: %v", err)
+		}
+		if g.Len() != k.Len() {
+			t.Fatalf("the grouping covers %d rows, the column has %d", g.Len(), k.Len())
+		}
+
+		ids := g.IDs()
+		for i := range ids {
+			for j := range ids {
+				same := valueAt(t, k, i) == valueAt(t, k, j)
+				if (ids[i] == ids[j]) != same {
+					t.Fatalf("rows %d and %d are %v and %v, in groups %d and %d",
+						i, j, valueAt(t, k, i), valueAt(t, k, j), ids[i], ids[j])
+				}
+			}
+		}
+
+		// The key of a group is the key of its rows, and the sizes are how many
+		// of them there are.
+		sizes := make([]int, g.NumGroups())
+		for _, id := range ids {
+			sizes[id]++
+		}
+		for id := range g.NumGroups() {
+			if sizes[id] != g.Sizes()[id] {
+				t.Fatalf("group %d has %d rows, Sizes says %d", id, sizes[id], g.Sizes()[id])
+			}
+			want := valueAt(t, k, g.FirstRows()[id])
+			if got := valueAt(t, g.Keys()[0], id); got != want {
+				t.Fatalf("the key of group %d is %v, want %v", id, got, want)
+			}
+		}
+
+		// Now a column of its own to add up, cut into chunks the fuzzer picks,
+		// so the walk over the values and the walk over the groups have to line
+		// up whatever shape either of them is.
+		v := sameLength(t, values, k.Len())
+		parts, err := kernel.Sum(v, g)
+		if err != nil {
+			t.Fatalf("Sum: %v", err)
+		}
+		whole, err := kernel.Sum(v, kernel.OneGroup(v.Len()))
+		if err != nil {
+			t.Fatalf("Sum over one group: %v", err)
+		}
+
+		var total int64
+		for i := range parts.Len() {
+			total += parts.Value[int64](i)
+		}
+		if whole.Len() == 0 {
+			if total != 0 {
+				t.Fatalf("the groups add up to %d with no rows to add up", total)
+			}
+			return
+		}
+		if want := whole.Value[int64](0); total != want {
+			t.Fatalf("the groups add up to %d, the whole column adds up to %d", total, want)
+		}
+	})
+}
+
+// sameLength returns an int64 column of exactly n values built out of the bytes
+// given, repeating or stopping as it has to, with a null wherever the byte is
+// 255.
+func sameLength(t *testing.T, values []byte, n int) *array.Chunked {
+	t.Helper()
+
+	b, err := array.NewBuilder(dtype.Int64)
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	var chunks []*array.Array
+	for i := range n {
+		v := byte(0)
+		if len(values) > 0 {
+			v = values[i%len(values)]
+		}
+		if v == 255 {
+			b.AppendNull()
+		} else {
+			b.Append(int64(v) - 128)
+		}
+		// A chunk boundary at a different spacing from the one the keys use, so
+		// that the two walks are never in step.
+		if i%3 == 2 {
+			chunks = append(chunks, b.Finish())
+		}
+	}
+	chunks = append(chunks, b.Finish())
+
+	c, err := array.NewChunked(dtype.Int64, chunks...)
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+	return c
+}

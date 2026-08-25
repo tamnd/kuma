@@ -1,6 +1,7 @@
 package kernel_test
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"testing"
 
@@ -368,4 +369,177 @@ func BenchmarkSortLowCardinality(b *testing.B) {
 		}
 		indexSink = idx
 	}
+}
+
+var groupsSink *kernel.Groups
+
+// benchKeys returns a key column of n distinct values spread over the benchmark
+// length, which is the shape a group by meets: a symbol, a day, a customer.
+func benchKeys(b *testing.B, n int) *array.Chunked {
+	b.Helper()
+
+	bd, err := array.NewBuilder(dtype.Int64)
+	if err != nil {
+		b.Fatalf("NewBuilder: %v", err)
+	}
+	for i := range benchLen {
+		bd.Append(int64(i % n))
+	}
+
+	out, err := array.NewChunked(dtype.Int64, bd.Finish())
+	if err != nil {
+		b.Fatalf("NewChunked: %v", err)
+	}
+	return out
+}
+
+// benchStringKeys is the same spread of distinct values as text, which is the
+// case that goes through the length prefixed encoding.
+func benchStringKeys(b *testing.B, n int) *array.Chunked {
+	b.Helper()
+
+	bd, err := array.NewBuilder(dtype.String)
+	if err != nil {
+		b.Fatalf("NewBuilder: %v", err)
+	}
+	for i := range benchLen {
+		bd.AppendString(fmt.Sprintf("key-%06d", i%n))
+	}
+
+	out, err := array.NewChunked(dtype.String, bd.Finish())
+	if err != nil {
+		b.Fatalf("NewChunked: %v", err)
+	}
+	return out
+}
+
+// BenchmarkGroupBy is the ordinary case: one integer key of a hundred distinct
+// values, which is what db-benchmark calls a low cardinality group by.
+func BenchmarkGroupBy(b *testing.B) {
+	c := benchKeys(b, 100)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		g, err := kernel.GroupBy(c)
+		if err != nil {
+			b.Fatalf("GroupBy: %v", err)
+		}
+		groupsSink = g
+	}
+}
+
+// BenchmarkGroupByHighCardinality is a key that is nearly unique, so almost
+// every row builds a group and the map does the most work it can.
+func BenchmarkGroupByHighCardinality(b *testing.B) {
+	c := benchKeys(b, benchLen)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		g, err := kernel.GroupBy(c)
+		if err != nil {
+			b.Fatalf("GroupBy: %v", err)
+		}
+		groupsSink = g
+	}
+}
+
+func BenchmarkGroupByStrings(b *testing.B) {
+	c := benchStringKeys(b, 100)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		g, err := kernel.GroupBy(c)
+		if err != nil {
+			b.Fatalf("GroupBy: %v", err)
+		}
+		groupsSink = g
+	}
+}
+
+// BenchmarkGroupByTwoKeys is what the second key costs, which is the encoding
+// and the wider map key rather than a second pass.
+func BenchmarkGroupByTwoKeys(b *testing.B) {
+	first := benchKeys(b, 100)
+	second := benchStringKeys(b, 10)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		g, err := kernel.GroupBy(first, second)
+		if err != nil {
+			b.Fatalf("GroupBy: %v", err)
+		}
+		groupsSink = g
+	}
+}
+
+func BenchmarkSum(b *testing.B) {
+	c := benchInts(b, 1)
+	g := mustGroup(b, benchKeys(b, 100))
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := kernel.Sum(c, g)
+		if err != nil {
+			b.Fatalf("Sum: %v", err)
+		}
+		chunkedSink = out
+	}
+}
+
+func BenchmarkMean(b *testing.B) {
+	c := benchInts(b, 1)
+	g := mustGroup(b, benchKeys(b, 100))
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := kernel.Mean(c, g)
+		if err != nil {
+			b.Fatalf("Mean: %v", err)
+		}
+		chunkedSink = out
+	}
+}
+
+// BenchmarkMax is the aggregation that goes through the sort comparison, so it
+// is the slow one and the gap to Sum is what that costs.
+func BenchmarkMax(b *testing.B) {
+	c := benchInts(b, 1)
+	g := mustGroup(b, benchKeys(b, 100))
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := kernel.Max(c, g)
+		if err != nil {
+			b.Fatalf("Max: %v", err)
+		}
+		chunkedSink = out
+	}
+}
+
+func BenchmarkCount(b *testing.B) {
+	c := benchInts(b, 1)
+	g := mustGroup(b, benchKeys(b, 100))
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		chunkedSink = kernel.Count(c, g)
+	}
+}
+
+// mustGroup is GroupBy where a failure is a broken benchmark rather than a
+// result.
+func mustGroup(b *testing.B, keys ...*array.Chunked) *kernel.Groups {
+	b.Helper()
+
+	g, err := kernel.GroupBy(keys...)
+	if err != nil {
+		b.Fatalf("GroupBy: %v", err)
+	}
+	return g
 }
