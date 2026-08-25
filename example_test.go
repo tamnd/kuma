@@ -1,0 +1,235 @@
+package kuma_test
+
+import (
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/tamnd/kuma"
+	"github.com/tamnd/kuma/dtype"
+)
+
+func ExampleNewSeries() {
+	s := kuma.NewSeries("price", 189.5, 411.2, 190.1)
+
+	fmt.Println(s.Name(), s.Len(), s.DType())
+	fmt.Println(s.Value(1))
+	// Output:
+	// price 3 float64
+	// 411.2
+}
+
+// ExampleSeries_Values shows the door out to a hand written kernel. The slice
+// is the column's own memory rather than a copy of it.
+func ExampleSeries_Values() {
+	s := kuma.NewSeries("qty", int64(100), 50, 25, 400)
+
+	var total int64
+	for _, v := range s.Values() {
+		total += v
+	}
+	fmt.Println(total)
+	// Output:
+	// 575
+}
+
+func ExampleSeries_Head() {
+	s := kuma.NewSeries("qty", int64(1), 2, 3, 4, 5)
+
+	fmt.Println(s.Head(2).Values())
+	fmt.Println(s.Tail(2).Values())
+	fmt.Println(s.Head(-1).Values())
+	// Output:
+	// [1 2]
+	// [4 5]
+	// [1 2 3 4]
+}
+
+// ExampleSeriesFrom shows a column stored as one type being read as another.
+// A timestamp is int64 values with a meaning attached, so it reads as a
+// time.Time and as the int64 underneath, and neither of those copies anything.
+func ExampleSeriesFrom() {
+	ts := kuma.NewSeries("ts",
+		time.Date(2026, 8, 25, 9, 30, 0, 0, time.UTC),
+		time.Date(2026, 8, 25, 9, 31, 0, 0, time.UTC),
+	)
+
+	nanos, err := kuma.SeriesFrom[int64]("ts", ts.Data())
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println(ts.Value(0).Format(time.RFC3339))
+	fmt.Println(nanos.Value(0))
+	// Output:
+	// 2026-08-25T09:30:00Z
+	// 1787650200000000000
+}
+
+func ExampleNewFrame() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT", "NVDA").Column(),
+		kuma.NewSeries("price", 189.5, 411.2, 121.0).Column(),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println(f)
+	// Output:
+	// kuma.Frame[kuma.Dynamic] 3 rows x 2 cols
+	//   symbol: string
+	//   price: float64
+}
+
+func ExampleFrame_Series() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT", "NVDA").Column(),
+		kuma.NewSeries("price", 189.5, 411.2, 121.0).Column(),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	prices, err := f.Series[float64]("price")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println(prices.Values())
+	// Output:
+	// [189.5 411.2 121]
+}
+
+func ExampleFrame_Select() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT").Column(),
+		kuma.NewSeries("price", 189.5, 411.2).Column(),
+		kuma.NewSeries("qty", int64(100), 50).Column(),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	out, err := f.Select("qty", "symbol")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println(out.Names())
+	// Output:
+	// [qty symbol]
+}
+
+func ExampleFrame_WithColumn() {
+	f, err := kuma.NewFrame(kuma.NewSeries("price", 10.0, 20.0).Column())
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	// The values of a new column are worked out in Go and handed back as a
+	// column, which is what an expression will do for you once M3 lands.
+	prices, err := f.Series[float64]("price")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	taxed := make([]float64, prices.Len())
+	for i, p := range prices.Values() {
+		taxed[i] = p * 1.1
+	}
+
+	out, err := f.WithColumn(kuma.NewSeries("taxed", taxed...).Column())
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	taxes, err := out.Series[float64]("taxed")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(out.Names(), taxes.Values())
+	// Output:
+	// [price taxed] [11 22]
+}
+
+func ExampleFrame_Head() {
+	f, err := kuma.NewFrame(kuma.NewSeries("qty", int64(1), 2, 3, 4, 5).Column())
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println(f.Head(2).NumRows(), f.Tail(1).NumRows(), f.Slice(1, 4).NumRows())
+	// Output:
+	// 2 1 3
+}
+
+// ExampleColumnError is the error a wrong column name gives. It lists what the
+// frame holds and points at the name that is one letter away, because that is
+// what turns a five minute detour into a five second one.
+func ExampleColumnError() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL").Column(),
+		kuma.NewSeries("price", 189.5).Column(),
+		kuma.NewSeries("qty", int64(100)).Column(),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	_, err = f.Select("symbol", "prices")
+	fmt.Println(err)
+	fmt.Println(errors.Is(err, kuma.ErrNoColumn))
+	// Output:
+	// kuma: column "prices" not found in Select
+	//   available: symbol, price, qty
+	//   did you mean: price?
+	// true
+}
+
+func ExampleColumn_As() {
+	c := kuma.NewSeries("qty", int64(100), 50).Column()
+
+	if _, err := c.As[float64](); err != nil {
+		fmt.Println(err)
+	}
+
+	s, err := c.As[int64]()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(s.Values())
+	// Output:
+	// kuma: column "qty" is a int64 column, which does not read as a float64: wrong type
+	// [100 50]
+}
+
+func ExampleDTypeOf() {
+	fmt.Println(kuma.DTypeOf[float64]())
+	fmt.Println(kuma.DTypeOf[time.Time]())
+	// Output:
+	// float64
+	// timestamp[ns, tz=UTC]
+}
+
+func ExampleCanRead() {
+	// A date is int32 days since the epoch, so it reads as an int32 without
+	// anything being copied or converted.
+	fmt.Println(kuma.CanRead[int32](dtype.Date32))
+	fmt.Println(kuma.CanRead[int64](dtype.Float64))
+	// Output:
+	// true
+	// false
+}
