@@ -119,13 +119,6 @@ func (c Column) TryCast(to dtype.DataType) (Column, error) {
 	return c, nil
 }
 
-// String returns a short description of the column, for a log line or a test
-// failure. It is not the values.
-func (c Column) String() string {
-	return fmt.Sprintf("kuma.Column{%q, %s, len %d, nulls %d}",
-		c.name, c.data.DType(), c.data.Len(), c.data.NullCount())
-}
-
 // As returns the column as a Series[T], which is how the values are read as a
 // Go type.
 //

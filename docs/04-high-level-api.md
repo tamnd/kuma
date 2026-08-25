@@ -120,17 +120,20 @@ These are shipping features, not debugging tools, and they exist from the milest
 ## Display
 
 ```
-Frame[Bar] 4 rows x 3 cols
+kuma.Frame[market.Bar] 4 rows x 3 cols
 
-  symbol | minute              | volume
-  str    | datetime[us, UTC]   | f64
-  -------+---------------------+---------
-  AAPL   | 2026-08-25 09:30:00 | 1.24e7
-  MSFT   | 2026-08-25 09:30:00 | 8.91e6
-  null   | 2026-08-25 09:31:00 | 4.02e6
+  symbol | minute                |   volume
+  string | timestamp[us, tz=UTC] |  float64
+---------+-----------------------+---------
+  AAPL   | 2026-08-25 09:30:00   | 1.24e+07
+  MSFT   | 2026-08-25 09:30:00   | 8.91e+06
+  null   | 2026-08-25 09:31:00   | 4.02e+06
+  GOOG   | 2026-08-25 09:31:00   |  5.5e+06
 ```
 
-Dtypes in the header, shape always shown, and `null` rendered differently from `NaN` because they are different things. `Frame` implements `fmt.Stringer`.
+Dtypes in the header, shape always shown, and `null` rendered differently from `NaN` because they are different things. The names in the type row are the ones the schema prints, so there is no second vocabulary of abbreviations to learn. `Frame` implements `fmt.Stringer`, and `Series` and `Column` print the same way as a table of one column.
+
+Ten rows and twelve columns are shown by default, with the rest replaced by a line of dots in the middle, and `Frame.Render` takes a `PrintOptions` when a different amount is wanted. `MaxRows` of -1 means all of them. Numbers print at the shortest text that reads back as the same value rather than rounded to a fixed number of digits, because a printer that rounds will one day show two different numbers as the same during the debugging session where that difference is the whole point. A string that begins or ends in a space is quoted for the same reason.
 
 For tests, `kumatest.Equal` compares two frames and prints the first few rows that differ rather than dumping both of them. Anyone who has debugged a failing pandas test by reading four thousand lines of output knows why this is worth building on day one rather than later.
 

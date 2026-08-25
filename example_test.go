@@ -82,8 +82,13 @@ func ExampleNewFrame() {
 	fmt.Println(f)
 	// Output:
 	// kuma.Frame[kuma.Dynamic] 3 rows x 2 cols
-	//   symbol: string
-	//   price: float64
+	//
+	//   symbol |   price
+	//   string | float64
+	// ---------+--------
+	//   AAPL   |   189.5
+	//   MSFT   |   411.2
+	//   NVDA   |     121
 }
 
 func ExampleFrame_Series() {
@@ -975,9 +980,13 @@ GOOG,300,141.8
 	fmt.Println(qty.DropNulls().Values())
 	// Output:
 	// kuma.Frame[kuma.Dynamic] 3 rows x 3 cols
-	//   sym: string
-	//   qty: int64, 1 null
-	//   px: float64
+	//
+	//   sym    |   qty |      px
+	//   string | int64 | float64
+	// ---------+-------+--------
+	//   AAPL   |   100 |   182.5
+	//   MSFT   |  null |   411.2
+	//   GOOG   |   300 |   141.8
 	// [100 300]
 }
 

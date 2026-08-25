@@ -400,25 +400,6 @@ func TestFramePanics(t *testing.T) {
 	}
 }
 
-func TestFrameString(t *testing.T) {
-	f, err := kuma.NewFrame(
-		kuma.NewSeries("symbol", "AAPL", "MSFT").Column(),
-		nullableInts(t, 2).Column(),
-	)
-	if err != nil {
-		t.Fatalf("NewFrame: %v", err)
-	}
-
-	want := strings.Join([]string{
-		"kuma.Frame[kuma.Dynamic] 2 rows x 2 cols",
-		"  symbol: string",
-		"  qty: int64, 1 null",
-	}, "\n")
-	if got := f.String(); got != want {
-		t.Errorf("String() =\n%s\nwant\n%s", got, want)
-	}
-}
-
 func TestFrameTake(t *testing.T) {
 	f := trades(t)
 

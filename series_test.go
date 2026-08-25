@@ -411,15 +411,6 @@ func TestSeriesFromErrors(t *testing.T) {
 	})
 }
 
-func TestSeriesString(t *testing.T) {
-	s := nullableInts(t, 10)
-
-	want := `kuma.Series[int64]{"qty", len 10, nulls 4}`
-	if got := s.String(); got != want {
-		t.Errorf("String() = %q, want %q", got, want)
-	}
-}
-
 // TestSeriesValidityOfAnEmptyColumn covers the case where there is nothing to
 // have a bitmap for, which is a column that has been sliced down to nothing.
 func TestSeriesValidityOfAnEmptyColumn(t *testing.T) {

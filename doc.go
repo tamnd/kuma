@@ -93,6 +93,33 @@
 // empty field from an absent one. Write a null value of your own when that
 // difference matters.
 //
+// # Looking at a frame
+//
+// A frame prints as a table, so fmt.Println is a real way to find out what a
+// query did:
+//
+//	kuma.Frame[kuma.Dynamic] 3 rows x 3 cols
+//
+//	  sym    |   qty |      px
+//	  string | int64 | float64
+//	---------+-------+--------
+//	  AAPL   |   100 |   182.5
+//	  MSFT   |  null |   411.2
+//	  GOOG   |   300 |   141.8
+//
+// The types are in the header and a missing value shows as null, which is not
+// the same cell as an empty string and does not look like one. Ten rows and
+// twelve columns are shown by default and the rest are a line of dots in the
+// middle. [Frame.Render] takes a [PrintOptions] when a different amount is
+// wanted, and MaxRows of -1 means the whole thing.
+//
+// Numbers print at the shortest text that reads back as the same number rather
+// than rounded to a fixed number of digits, so two values that differ in the
+// last place look different. A string that begins or ends in a space is quoted
+// for the same reason, that space being invisible in a table where every cell
+// is padded with spaces anyway. [Series] and [Column] print the same way, as a
+// table of one column.
+//
 // # Missing values
 //
 // A missing value is a null, which is a bit in a bitmap beside the data rather

@@ -122,15 +122,6 @@ func TestColumnSliceAndRename(t *testing.T) {
 	}
 }
 
-func TestColumnString(t *testing.T) {
-	col := nullableInts(t, 10).Column()
-
-	want := `kuma.Column{"qty", int64, len 10, nulls 4}`
-	if got := col.String(); got != want {
-		t.Errorf("String() = %q, want %q", got, want)
-	}
-}
-
 func TestColumnTake(t *testing.T) {
 	c := kuma.NewSeries("qty", int64(10), 20, 30).Column()
 

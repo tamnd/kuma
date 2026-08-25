@@ -142,13 +142,6 @@ func (s Series[T]) Column() Column {
 	return Column{name: s.name, data: s.data}
 }
 
-// String returns a short description of the column, for a log line or a test
-// failure. It is not the values.
-func (s Series[T]) String() string {
-	return fmt.Sprintf("kuma.Series[%s]{%q, len %d, nulls %d}",
-		s.DType(), s.name, s.Len(), s.NullCount())
-}
-
 // Slice returns the values from i up to but not including j, as a series. It
 // panics unless 0 <= i <= j <= Len.
 //
