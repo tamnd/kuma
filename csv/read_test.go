@@ -249,6 +249,105 @@ func TestRead(t *testing.T) {
 	}
 }
 
+func TestReadColumns(t *testing.T) {
+	in := "sym,px,qty,venue\nAAPL,150.25,10,XNAS\nMSFT,100.5,20,XNYS\n"
+
+	// The order asked for is the order they come out in, not the order the
+	// file has them.
+	tbl := read(t, in, &Options{Columns: []string{"qty", "sym"}})
+	want(t, tbl, "qty int64 [10 20]", "sym string [AAPL MSFT]")
+
+	// Naming all of them in file order is reading the whole file.
+	all := read(t, in, &Options{Columns: []string{"sym", "px", "qty", "venue"}})
+	want(t, all, show(t, read(t, in, nil))...)
+}
+
+// TestReadColumnsLeavesTheRestAlone is the point of the option. A column that
+// was not asked for is not looked at, so a file with a column that would not
+// parse still reads as long as nobody wants that column.
+func TestReadColumnsLeavesTheRestAlone(t *testing.T) {
+	in := "qty,note\n1,fine\n2,also fine\n"
+
+	tbl := read(t, in, &Options{
+		Columns: []string{"qty"},
+		Types:   map[string]dtype.DataType{"note": dtype.Int64},
+	})
+	want(t, tbl, "qty int64 [1 2]")
+
+	// The same file with that column read is the error the type asks for, so
+	// the test above passed for the right reason.
+	_, err := Read(strings.NewReader(in), &Options{
+		Types: map[string]dtype.DataType{"note": dtype.Int64},
+	})
+	if !errors.Is(err, ErrValue) {
+		t.Fatalf("got %v, want an ErrValue", err)
+	}
+}
+
+// TestReadColumnsDecidesOnWhatItReads checks that inference is over the
+// selected columns rather than over the file. A column that is left out cannot
+// change the type of one that is kept.
+func TestReadColumnsDecidesOnWhatItReads(t *testing.T) {
+	in := "a,b\n1,x\n2,y\n"
+	tbl := read(t, in, &Options{Columns: []string{"b", "a"}})
+	want(t, tbl, "b string [x y]", "a int64 [1 2]")
+
+	fields := tbl.Schema.Fields
+	if len(fields) != 2 || fields[0].Name != "b" || fields[1].Name != "a" {
+		t.Errorf("the schema is %v, want b then a", fields)
+	}
+}
+
+// TestReadColumnsWithNames is the two options together, where the file is
+// renamed on the way in and the selection is by the new names, since those are
+// the names the table will have.
+func TestReadColumnsWithNames(t *testing.T) {
+	tbl := read(t, "a,b,c\n1,2,3\n", &Options{
+		Names:   []string{"one", "two", "three"},
+		Columns: []string{"three", "one"},
+	})
+	want(t, tbl, "three int64 [3]", "one int64 [1]")
+}
+
+func TestReadColumnsWithNoHeader(t *testing.T) {
+	tbl := read(t, "1,2,3\n4,5,6\n", &Options{
+		NoHeader: true,
+		Columns:  []string{"column_2"},
+	})
+	want(t, tbl, "column_2 int64 [2 5]")
+}
+
+// TestReadColumnsAndMissingValues checks the bookkeeping that goes with a
+// selection, since the null count decides what the schema says about a column
+// and it is read from a different field now.
+func TestReadColumnsAndMissingValues(t *testing.T) {
+	tbl := read(t, "a,b,c\n1,,3\n4,,6\n", &Options{Columns: []string{"c", "b"}})
+	want(t, tbl, "c int64 [3 6]", "b string [. .]")
+
+	if tbl.Schema.Fields[0].Nullable {
+		t.Error("c has nothing missing and is nullable")
+	}
+	if !tbl.Schema.Fields[1].Nullable {
+		t.Error("b is missing everywhere and is not nullable")
+	}
+}
+
+// TestReadColumnsAcrossChunks reads more rows than fit in a chunk, which is the
+// case where the selection has to hold from one chunk to the next.
+func TestReadColumnsAcrossChunks(t *testing.T) {
+	var in strings.Builder
+	in.WriteString("a,b\n")
+	for i := range 10 {
+		in.WriteString(strconv.Itoa(i) + ",x\n")
+	}
+
+	tbl := read(t, in.String(), &Options{Columns: []string{"b"}, ChunkSize: 4})
+	want(t, tbl, "b string [x x x x x x x x x x]")
+	if got := tbl.Columns[0].NumChunks(); got != 3 {
+		t.Errorf("got %d chunks, want 3", got)
+	}
+}
+
 func TestReadTypes(t *testing.T) {
 	in := "i8,i16,i32,i64,u8,u16,u32,u64,f32,f64,b,s,raw\n" +
 		"-1,-2,-3,-4,1,2,3,4,1.5,2.5,t,hello,bytes\n"
@@ -468,6 +567,18 @@ func TestReadErrors(t *testing.T) {
 			name: "not enough names",
 			in:   "a,b\n1,2\n",
 			opts: &Options{Names: []string{"only"}},
+			is:   ErrNames,
+		},
+		{
+			name: "asking for a column that is not there",
+			in:   "a\n1\n",
+			opts: &Options{Columns: []string{"a", "b"}},
+			is:   ErrNoColumn,
+		},
+		{
+			name: "asking for the same column twice",
+			in:   "a,b\n1,2\n",
+			opts: &Options{Columns: []string{"a", "a"}},
 			is:   ErrNames,
 		},
 		{
