@@ -132,9 +132,9 @@ a.Add(b)                       // still positional, never aligned behind your ba
 
 ### Binary operators
 
-- [ ] `add` `sub` `mul` `div` `truediv` `floordiv` `mod` `pow` -> `Add` `Sub` `Mul` `Div` `TrueDiv` `FloorDiv` `Mod` `Pow` (M1)
-- [ ] the `r` prefixed reflected variants -> not needed, argument order is explicit in Go (adapted, M1)
-- [ ] `lt` `gt` `le` `ge` `ne` `eq` -> `Lt` `Gt` `Le` `Ge` `Ne` `Eq` (M1)
+- [x] `add` `sub` `mul` `div` `mod` -> `Add` `Sub` `Mul` `Div` `Mod` on a column handle or an expression, with an `AddExpr` and friends for the two column form (M1). Integer division truncates the way Go does, so it is the `floordiv` of pandas rather than `div`. `truediv`, a `pow` and the frame wide forms that take another frame are still to do.
+- [x] the `r` prefixed reflected variants -> not needed, argument order is explicit in Go, and `Lit` puts a value on the left of an operator when the query reads better that way (adapted, M1)
+- [x] `lt` `gt` `le` `ge` `ne` `eq` -> `Lt` `Gt` `Le` `Ge` `Ne` `Eq`, and `LtExpr` and friends against another column (M1). A timestamp column spells them `Before`, `AtOrBefore`, `After` and `AtOrAfter`, since that is how people say it about time.
 - [ ] `dot` -> `Dot` (M7)
 - [ ] `combine` -> `Combine` (M7)
 - [ ] `combine_first` -> `CombineFirst` (M7)
@@ -228,7 +228,7 @@ a.Add(b)                       // still positional, never aligned behind your ba
 
 ### Combining and comparing
 
-- [ ] `assign` -> `With` (M3)
+- [x] `assign` -> `WithExpr` for a column worked out from an expression and `WithColumn` for one you already have (M1, earlier than planned since the expression engine landed with the filter)
 - [ ] `compare` -> `Compare` (M7)
 - [ ] `join` -> `Join` on an explicit index (M7)
 - [ ] `update` -> `Update` (M7)

@@ -278,14 +278,46 @@ func (f *Frame[S]) Take(idx []int) *Frame[S] {
 	return f.rebuild(cols, len(idx))
 }
 
-// Filter returns the rows that mask selects, in the order they were in.
+// Filter returns the rows a condition holds for, in the order they were in.
 //
-// A null in the mask selects nothing. A row that nobody can say belongs in the
-// result does not go in the result, which is the same rule a null gets
-// everywhere else here.
+//	high, err := f.Filter(t.Price.Gt(100).And(t.Side.Eq("BUY")))
+//
+// The condition is written against the frame's own schema, so a predicate meant
+// for a table of orders cannot be used on a table of trades and the compiler is
+// the one that says so. [Dyn] is the way to write one against a column that
+// only has a name at runtime.
+//
+// A row the condition is missing an answer for is not in the result. A row
+// nobody can say belongs there does not go there, which is the same rule a null
+// gets everywhere else here, and it is why filtering on a condition and then on
+// its negation does not always give back every row.
+//
+// It reports an error if a column named in the condition is not in the frame,
+// or if the condition cannot be worked out over the types it found there.
+// [Frame.FilterMask] is the same thing given the answers rather than the
+// question.
+func (f *Frame[S]) Filter(cond BoolValue[S]) (*Frame[S], error) {
+	data, err := eval(cond.expr(), f.lookup("Filter"), nil)
+	if err != nil {
+		return nil, err
+	}
+	if data.Len() != f.rows {
+		return nil, fmt.Errorf("kuma: %s gives %d answers for a frame of %d rows, "+
+			"a condition has to read at least one column: %w",
+			cond.expr(), data.Len(), f.rows, ErrLength)
+	}
+	return f.Take(kernel.Indices(data)), nil
+}
+
+// FilterMask returns the rows that mask selects, in the order they were in.
+//
+// It is [Frame.Filter] for a mask that is already worked out, which is what a
+// caller who built one by hand, or got one back from somewhere else, has.
+//
+// A null in the mask selects nothing, for the reason Filter gives.
 //
 // It reports an error if the mask is not as long as the frame.
-func (f *Frame[S]) Filter(mask Series[bool]) (*Frame[S], error) {
+func (f *Frame[S]) FilterMask(mask Series[bool]) (*Frame[S], error) {
 	if mask.Len() != f.rows {
 		return nil, fmt.Errorf("kuma: a mask of %d values for a frame of %d rows: %w",
 			mask.Len(), f.rows, ErrLength)

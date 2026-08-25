@@ -250,19 +250,45 @@ func ExampleFrame_Filter() {
 		panic(err)
 	}
 
-	prices, err := f.Series[float64]("price")
+	// The handles would normally be a package level variable written once, or
+	// generated from the struct the rows are read into.
+	symbol, price := kuma.Str("symbol"), kuma.F64("price")
+
+	dear, err := f.Filter(price.Gt(150).And(symbol.Ne("MSFT")))
 	if err != nil {
 		panic(err)
 	}
 
-	// A mask is an ordinary boolean column, so building one by hand is what
-	// there is until the expression API arrives.
+	symbols, err := symbol.Series(dear)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(symbols.Values())
+	// Output:
+	// [AAPL]
+}
+
+func ExampleFrame_FilterMask() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT", "NVDA").Column(),
+		kuma.NewSeries("price", 189.5, 411.2, 121.0).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	// A mask is an ordinary boolean column, which is what a caller who worked
+	// out the rows some other way already has.
+	prices, err := f.Series[float64]("price")
+	if err != nil {
+		panic(err)
+	}
 	keep := make([]bool, prices.Len())
 	for i, p := range prices.Values() {
 		keep[i] = p > 150
 	}
 
-	dear, err := f.Filter(kuma.NewSeries("keep", keep...))
+	dear, err := f.FilterMask(kuma.NewSeries("keep", keep...))
 	if err != nil {
 		panic(err)
 	}
@@ -950,7 +976,7 @@ func ExampleSeries_ValidMask() {
 
 	// The mask goes straight back into Filter, which is the whole point of it
 	// being a series rather than a slice of bool.
-	got, err := f.Filter(fees.ValidMask())
+	got, err := f.FilterMask(fees.ValidMask())
 	if err != nil {
 		panic(err)
 	}

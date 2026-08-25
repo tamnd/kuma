@@ -100,7 +100,9 @@ type StrExpr[S any]  struct{ n *node }
 type BoolExpr[S any] struct{ n *node }
 ```
 
-`t.Price.Gt(100)` is a `BoolExpr[Trade]`. `t.Price.Mul(t.Qty)` is a `F64Expr[Trade]`. Combining expressions from two different schemas is a compile error, which is what stops the classic mistake of filtering the trades frame with a predicate you wrote against the orders frame.
+`t.Price.Gt(100)` is a `BoolExpr[Trade]`. `t.Price.Mul(2)` is a `F64Expr[Trade]`, and the same operation against another column is `t.Price.MulExpr(t.Qty.AsF64())`. The two spellings exist because a value written in the query and a second column are different arguments, and one method taking both would have to take `any` and give the type checking away. A handle and an expression of the same type share a method set through a small interface, `F64Value[S]` and its four siblings, so anything that takes one takes the other.
+
+Combining expressions from two different schemas is a compile error, which is what stops the classic mistake of filtering the trades frame with a predicate you wrote against the orders frame.
 
 **Frames** carry their schema as a type parameter.
 

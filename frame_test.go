@@ -444,11 +444,11 @@ func TestFrameTakeNothing(t *testing.T) {
 	}
 }
 
-func TestFrameFilter(t *testing.T) {
+func TestFrameFilterMask(t *testing.T) {
 	f := trades(t)
 	mask := kuma.NewSeries("keep", false, true, false, true)
 
-	got, err := f.Filter(mask)
+	got, err := f.FilterMask(mask)
 	if err != nil {
 		t.Fatalf("Filter: %v", err)
 	}
@@ -459,7 +459,7 @@ func TestFrameFilter(t *testing.T) {
 		t.Errorf("the symbols are %v, want %v", got.ColumnAt(0).MustAs[string]().Values(), want)
 	}
 
-	if _, err := f.Filter(kuma.NewSeries("keep", true, false)); !errors.Is(err, kuma.ErrLength) {
+	if _, err := f.FilterMask(kuma.NewSeries("keep", true, false)); !errors.Is(err, kuma.ErrLength) {
 		t.Errorf("a short mask gave %v, want an ErrLength", err)
 	}
 }
