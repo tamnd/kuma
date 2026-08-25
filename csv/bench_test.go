@@ -282,9 +282,24 @@ func fieldText(c *array.Chunked, i int) string {
 // BenchmarkReadWide is a hundred columns rather than four, where the work per
 // row that is not the values themselves shows up.
 func BenchmarkReadWide(b *testing.B) {
+	benchRead(b, benchFile(wideFile()...), nil)
+}
+
+// BenchmarkReadWideColumns is the same file with four of its hundred columns
+// asked for, which is the shape of nearly every query anyone runs over a file
+// this wide. What is left is the cost of finding the fields, which is the part
+// no reader can skip.
+func BenchmarkReadWideColumns(b *testing.B) {
+	benchRead(b, benchFile(wideFile()...), &csv.Options{
+		Columns: []string{"int0", "int1", "int2", "int3"},
+	})
+}
+
+// wideFile is the column list the two benchmarks above share.
+func wideFile() []string {
 	kinds := make([]string, 100)
 	for i := range kinds {
 		kinds[i] = "int"
 	}
-	benchRead(b, benchFile(kinds...), nil)
+	return kinds
 }

@@ -70,7 +70,14 @@ type reader struct {
 	src  *stdcsv.Reader
 	opts Options
 
+	// all is every name in the file, in the order the file has them. names is
+	// the columns being read, in the order they come out, and at says where in
+	// a record each of those columns is. With no Options.Columns the two lists
+	// are the same and at is 0, 1, 2 and so on.
+	all   []string
 	names []string
+	at    []int
+
 	types []dtype.DataType
 	add   []appender
 
@@ -131,12 +138,49 @@ func (r *reader) header() ([]string, error) {
 		rec = nil
 	}
 
-	names, err := r.columnNames(rec, len(first)+len(rec))
+	all, err := r.columnNames(rec, len(first)+len(rec))
 	if err != nil {
 		return nil, err
 	}
-	r.names = names
+	r.all = all
+	if err := r.selection(); err != nil {
+		return nil, err
+	}
 	return first, nil
+}
+
+// selection works out which columns are being read and where each one sits in
+// a record, from Options.Columns and the names the file turned out to have.
+func (r *reader) selection() error {
+	if len(r.opts.Columns) == 0 {
+		r.names = r.all
+		r.at = make([]int, len(r.all))
+		for i := range r.at {
+			r.at[i] = i
+		}
+		return nil
+	}
+
+	where := make(map[string]int, len(r.all))
+	for i, name := range r.all {
+		where[name] = i
+	}
+
+	r.names = make([]string, len(r.opts.Columns))
+	r.at = make([]int, len(r.opts.Columns))
+	seen := make(map[string]bool, len(r.opts.Columns))
+	for i, name := range r.opts.Columns {
+		at, ok := where[name]
+		if !ok {
+			return fmt.Errorf("csv: no column named %q in the file: %w", name, ErrNoColumn)
+		}
+		if seen[name] {
+			return fmt.Errorf("csv: column %q asked for twice: %w", name, ErrNames)
+		}
+		seen[name] = true
+		r.names[i], r.at[i] = name, at
+	}
+	return nil
 }
 
 // columnNames returns the names of the columns, from the header record when
@@ -221,13 +265,17 @@ func (r *reader) typesKnown() bool {
 // plan settles the type of every column and builds what it takes to read one:
 // a builder to put the values in and the parse that turns text into one.
 func (r *reader) plan(sample [][]string) error {
+	// The check is against every name in the file rather than against the ones
+	// being read, since a type for a column that Options.Columns leaves out is
+	// a caller reading part of a file with the options they use for all of it,
+	// which is not a mistake.
 	for name := range r.opts.Types {
-		if !slices.Contains(r.names, name) {
+		if !slices.Contains(r.all, name) {
 			return fmt.Errorf("csv: no column named %q in the file: %w", name, ErrNoColumn)
 		}
 	}
 
-	guess := infer(sample, len(r.names), &r.opts)
+	guess := infer(sample, r.at, &r.opts)
 	r.types = make([]dtype.DataType, len(r.names))
 	r.add = make([]appender, len(r.names))
 	r.build = make([]*array.Builder, len(r.names))
@@ -295,9 +343,16 @@ func (r *reader) rest() error {
 // row puts one record into the columns.
 //
 // A field that is one of the null values is missing and is never parsed, which
-// is what makes an empty field cost nothing in a column of numbers.
+// is what makes an empty field cost nothing in a column of numbers. A field no
+// column is being read from is passed over here and costs nothing at all.
+//
+// The walk is over the columns rather than over the record, so a record is
+// indexed by a number the selection worked out. Every record has as many fields
+// as the header did, since the reader underneath is told to insist on it, so
+// each of those numbers is in range.
 func (r *reader) row(rec []string, line int) error {
-	for i, s := range rec {
+	for i, at := range r.at {
+		s := rec[at]
 		b := r.build[i]
 		if r.opts.isNull(s) {
 			b.AppendNull()

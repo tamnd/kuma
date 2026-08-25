@@ -35,6 +35,13 @@
 // so a file that writes NA can say so, and a file that really does mean the
 // empty string can pass a list that does not contain it.
 //
+// # Reading part of a file
+//
+// [Options.Columns] names the columns to read and drops the rest. A column that
+// is not named is not inferred, not parsed and not held, which on a wide file
+// is most of the work, and the columns come out in the order they were asked
+// for rather than in the order the file has them.
+//
 // # Writing
 //
 // [Write] takes a table back out to a file. Values go out as they are stored,
@@ -107,6 +114,19 @@ type Options struct {
 	// valid identifiers can be renamed on the way in. It must have one name
 	// for every field.
 	Names []string
+
+	// Columns, if given, is the columns to read, named as they are after Names
+	// has been applied. A name that is not a column in the file is an error, and
+	// so is the same name twice.
+	//
+	// A column that is not named has no type inferred, no value parsed and no
+	// memory held. Its fields are still pulled out of each line, because a
+	// delimited file cannot be read past a field without reading it, but that is
+	// the cheap half of the work.
+	//
+	// The columns come out in the order they are named here, which need not be
+	// the order the file has them.
+	Columns []string
 
 	// Types names the type of a column instead of inferring it. A column that
 	// is not in here is inferred as usual. A name that is not a column in the

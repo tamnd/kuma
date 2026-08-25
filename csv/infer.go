@@ -102,14 +102,18 @@ func isBoolWord(s string) bool {
 	return false
 }
 
-// infer works out the type of each of cols columns from the sample rows.
-func infer(sample [][]string, cols int, opts *Options) []inferred {
-	out := make([]inferred, cols)
+// infer works out the type of the columns being read from the sample rows.
+//
+// The at argument is where in a row each of those columns is, so a file read in
+// part costs the columns asked for rather than the columns it has.
+func infer(sample [][]string, at []int, opts *Options) []inferred {
+	out := make([]inferred, len(at))
 	for _, row := range sample {
-		for i, s := range row {
-			if i >= cols {
-				break
+		for i, j := range at {
+			if j >= len(row) {
+				continue
 			}
+			s := row[j]
 			if out[i] == inferString {
 				// Already at the bottom of the lattice, so there is nothing
 				// left for this column to learn.

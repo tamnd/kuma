@@ -62,6 +62,29 @@ func ExampleRead_types() {
 	// 02134 90210
 }
 
+func ExampleRead_columns() {
+	// A file of trades with a lot in it, where the question being asked is
+	// about two of the columns. The rest are never parsed and never stored.
+	in := `ts,sym,qty,px,venue,broker,note
+2026-01-02T09:30:00Z,AAPL,100,182.5,XNAS,GS,opening
+2026-01-02T09:30:01Z,MSFT,200,411.2,XNAS,MS,
+`
+
+	t, err := csv.Read(strings.NewReader(in), &csv.Options{
+		Columns: []string{"sym", "qty"},
+	})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println(t.Schema)
+	fmt.Println(t.NumCols(), "columns of", 7)
+	// Output:
+	// schema<sym: string not null, qty: int64 not null>
+	// 2 columns of 7
+}
+
 func ExampleRead_noHeader() {
 	in := "AAPL,100\nMSFT,200\n"
 

@@ -75,7 +75,7 @@ func TestInferIgnoresShortRows(t *testing.T) {
 	// reader insists every record is the same length, but inference should not
 	// be the thing that falls over if that ever changes.
 	opts := (&Options{}).withDefaults()
-	got := infer([][]string{{"1", "2", "3"}, {"4"}}, 2, &opts)
+	got := infer([][]string{{"1", "2", "3"}, {"4"}}, []int{0, 1}, &opts)
 
 	if len(got) != 2 || got[0] != inferInt || got[1] != inferInt {
 		t.Errorf("got %v, want two integer columns", got)
