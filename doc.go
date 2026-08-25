@@ -208,6 +208,14 @@
 // way indexing a slice does, because that is a bug in the program rather than
 // something the data did.
 //
+// # Testing
+//
+// A test that compares two frames should print what differs rather than both
+// frames, and that is what kuma/kumatest is for. It reports the cells that are
+// not the same, in the same text a printed frame would show them in, with an
+// allowance for floating point values that were computed rather than typed. It
+// also builds a frame of random values for a benchmark or a property test.
+//
 // Stability: tier 1, stable. After 1.0 this package follows the Go 1
 // compatibility promise. Before 1.0 it will break whenever breaking it is the
 // right call, and that is what the leading zero in the version is for.
