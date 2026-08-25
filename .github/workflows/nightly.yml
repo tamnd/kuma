@@ -12,17 +12,48 @@ env:
   GOTOOLCHAIN: local
 
 jobs:
+  # The list of fuzz targets was written out by hand here and went stale the
+  # first time a package grew one, so it is asked for instead. A target that
+  # exists gets its twenty minutes without anybody remembering to add it.
+  targets:
+    name: list fuzz targets
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: List them
+        id: list
+        run: |
+          out=""
+          for pkg in $(go list ./...); do
+            for target in $(go test -list='Fuzz.*' "$pkg" 2>/dev/null | grep '^Fuzz' || true); do
+              dir=".${pkg#github.com/tamnd/kuma}"
+              # Two packages have a FuzzSlice and three have a FuzzBuilder, and
+              # an artifact name has to be unique across the run, so the slug
+              # carries the package as well.
+              slug="${pkg##*/}-$target"
+              out="$out{\"pkg\":\"$dir\",\"name\":\"$target\",\"slug\":\"$slug\"},"
+            done
+          done
+          echo "list=[${out%,}]" >> "$GITHUB_OUTPUT"
+
   # The long fuzz run. Anything it finds gets committed to the corpus so that
   # the 30 second run on every pull request catches it from then on.
   fuzz:
     name: fuzz (${{ matrix.target.pkg }} ${{ matrix.target.name }})
+    needs: targets
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - { pkg: ./bitmap, name: FuzzBitmap }
-          - { pkg: ./bitmap, name: FuzzAppend }
+        target: ${{ fromJSON(needs.targets.outputs.list) }}
     steps:
       - uses: actions/checkout@v7
 
@@ -38,8 +69,8 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: fuzz-corpus-${{ matrix.target.name }}
-          path: testdata/fuzz/
+          name: fuzz-corpus-${{ matrix.target.slug }}
+          path: ${{ matrix.target.pkg }}/testdata/fuzz/
 
   benchmarks:
     name: microbenchmarks
