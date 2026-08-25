@@ -383,3 +383,86 @@ func ExampleFrame_Cast() {
 	// symbol string
 	// qty float64
 }
+
+func ExampleFrame_SortBy() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "NVDA", "AAPL", "MSFT").Column(),
+		kuma.NewSeries("qty", int64(400), 100, 50).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	got, err := f.SortBy("symbol")
+	if err != nil {
+		panic(err)
+	}
+
+	symbols, err := got.Series[string]("symbol")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(symbols.Values())
+	// Output:
+	// [AAPL MSFT NVDA]
+}
+
+// The first key decides and the later ones break its ties, and each key runs
+// the way it says. This is the trades of each symbol, biggest first.
+func ExampleFrame_Sort() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "b", "a", "b", "a").Column(),
+		kuma.NewSeries("qty", int64(2), 9, 7, 1).Column(),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	got, err := f.Sort(kuma.Asc("symbol"), kuma.Desc("qty"))
+	if err != nil {
+		panic(err)
+	}
+
+	symbols, err := got.Series[string]("symbol")
+	if err != nil {
+		panic(err)
+	}
+	qty, err := got.Series[int64]("qty")
+	if err != nil {
+		panic(err)
+	}
+	for i := range got.NumRows() {
+		fmt.Println(symbols.Value(i), qty.Value(i))
+	}
+	// Output:
+	// a 9
+	// a 1
+	// b 7
+	// b 2
+}
+
+func ExampleSeries_Sort() {
+	s := kuma.NewSeries("qty", int64(400), 100, 50)
+
+	got, err := s.Sort(kuma.Order{Descending: true})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(got.Values())
+	// Output:
+	// [400 100 50]
+}
+
+// SortIndex works out the order without moving anything, which is what to reach
+// for when the order is what you are after.
+func ExampleSeries_SortIndex() {
+	s := kuma.NewSeries("qty", int64(400), 100, 50)
+
+	idx, err := s.SortIndex(kuma.Order{})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(idx)
+	// Output:
+	// [2 1 0]
+}

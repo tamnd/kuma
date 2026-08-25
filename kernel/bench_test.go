@@ -17,6 +17,8 @@ var chunkedSink *array.Chunked
 
 var indicesSink []int
 
+var indexSink []int
+
 // benchInts returns a column of benchLen int64 values in the given number of
 // chunks, with no nulls.
 func benchInts(b *testing.B, chunks int) *array.Chunked {
@@ -221,4 +223,149 @@ func mustCast(b *testing.B, c *array.Chunked, to dtype.DataType) *array.Chunked 
 		b.Fatalf("Cast to %s: %v", to, err)
 	}
 	return out
+}
+
+// benchShuffled returns the benchmark column with its values in no particular
+// order, which is what a sort is normally handed.
+func benchShuffled(b *testing.B) *array.Chunked {
+	b.Helper()
+
+	bd, err := array.NewBuilder(dtype.Int64)
+	if err != nil {
+		b.Fatalf("NewBuilder: %v", err)
+	}
+
+	// A fixed seed, so that every run of the benchmark sorts the same values in
+	// the same order and a number from one run means something next to a number
+	// from another.
+	r := rand.New(rand.NewPCG(1, 2))
+	for range benchLen {
+		bd.Append(r.Int64())
+	}
+
+	out, err := array.NewChunked(dtype.Int64, bd.Finish())
+	if err != nil {
+		b.Fatalf("NewChunked: %v", err)
+	}
+	return out
+}
+
+// benchLowCardinality returns a column of eight distinct values, which is what
+// a first sort key usually is: a symbol, a day, a customer.
+func benchLowCardinality(b *testing.B) *array.Chunked {
+	b.Helper()
+
+	bd, err := array.NewBuilder(dtype.Int64)
+	if err != nil {
+		b.Fatalf("NewBuilder: %v", err)
+	}
+	for i := range benchLen {
+		bd.Append(int64(i % 8))
+	}
+
+	out, err := array.NewChunked(dtype.Int64, bd.Finish())
+	if err != nil {
+		b.Fatalf("NewChunked: %v", err)
+	}
+	return out
+}
+
+// BenchmarkSortInts is the sort everything else is measured against: one
+// numeric key, no nulls, values in no particular order.
+func BenchmarkSortInts(b *testing.B) {
+	c := benchShuffled(b)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		idx, err := kernel.SortIndex(kernel.Order{Column: c})
+		if err != nil {
+			b.Fatalf("SortIndex: %v", err)
+		}
+		indexSink = idx
+	}
+}
+
+// BenchmarkSortSorted is the same column already in order, which is the case a
+// pattern defeating sort is supposed to notice.
+func BenchmarkSortSorted(b *testing.B) {
+	c := benchInts(b, 1)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		idx, err := kernel.SortIndex(kernel.Order{Column: c})
+		if err != nil {
+			b.Fatalf("SortIndex: %v", err)
+		}
+		indexSink = idx
+	}
+}
+
+// BenchmarkSortChunked is the column BenchmarkSortSorted uses, cut into sixteen
+// chunks. The gap between the two is what the binary search per comparison
+// costs, since the values and the order they are in are the same.
+func BenchmarkSortChunked(b *testing.B) {
+	c := benchInts(b, 16)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		idx, err := kernel.SortIndex(kernel.Order{Column: c})
+		if err != nil {
+			b.Fatalf("SortIndex: %v", err)
+		}
+		indexSink = idx
+	}
+}
+
+// BenchmarkSortStrings is a sort whose comparison reads two values out of the
+// string data rather than out of a slice of numbers.
+func BenchmarkSortStrings(b *testing.B) {
+	c := benchStrings(b)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		idx, err := kernel.SortIndex(kernel.Order{Column: c})
+		if err != nil {
+			b.Fatalf("SortIndex: %v", err)
+		}
+		indexSink = idx
+	}
+}
+
+// BenchmarkSortTwoKeys is what the second key costs, on a first key of a
+// handful of distinct values so that the second one is doing real work.
+func BenchmarkSortTwoKeys(b *testing.B) {
+	first := benchLowCardinality(b)
+	second := benchShuffled(b)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		idx, err := kernel.SortIndex(
+			kernel.Order{Column: first},
+			kernel.Order{Column: second, Descending: true},
+		)
+		if err != nil {
+			b.Fatalf("SortIndex: %v", err)
+		}
+		indexSink = idx
+	}
+}
+
+// BenchmarkSortLowCardinality is a key of eight distinct values, which is what
+// a group by sorts on and where a sort spends most of its time comparing values
+// that are equal.
+func BenchmarkSortLowCardinality(b *testing.B) {
+	c := benchLowCardinality(b)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		idx, err := kernel.SortIndex(kernel.Order{Column: c})
+		if err != nil {
+			b.Fatalf("SortIndex: %v", err)
+		}
+		indexSink = idx
+	}
 }

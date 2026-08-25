@@ -104,3 +104,45 @@ func ExampleTryCast() {
 	// Output:
 	// 3 values, 1 of them missing
 }
+
+// SortIndex works out the order and Take applies it, which is how a sort of a
+// table is one order applied to every column.
+func ExampleSortIndex() {
+	symbol, _ := array.NewChunked(dtype.String, array.OfStrings("NVDA", "AAPL", "MSFT"))
+
+	idx, err := kernel.SortIndex(kernel.Order{Column: symbol})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(idx)
+
+	sorted := kernel.Take(symbol, idx)
+	for i := range sorted.Len() {
+		fmt.Println(string(sorted.Bytes(i)))
+	}
+	// Output:
+	// [1 2 0]
+	// AAPL
+	// MSFT
+	// NVDA
+}
+
+// The first key decides and the later ones break its ties, and each key has its
+// own direction.
+func ExampleSortIndex_severalKeys() {
+	symbol, _ := array.NewChunked(dtype.String, array.OfStrings("b", "a", "b", "a"))
+	qty, _ := array.NewChunked(dtype.Int64, array.Of[int64](2, 9, 7, 1))
+
+	idx, err := kernel.SortIndex(
+		kernel.Order{Column: symbol},
+		kernel.Order{Column: qty, Descending: true},
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(idx)
+	// Output:
+	// [1 3 2 0]
+}

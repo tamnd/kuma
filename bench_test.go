@@ -27,6 +27,7 @@ var (
 	stringsSink []string
 
 	floatSeriesSink kuma.Series[float64]
+	indexSink       []int
 )
 
 // benchInts returns a column of benchLen int64 values in the given number of
@@ -329,5 +330,51 @@ func BenchmarkFrameCast(b *testing.B) {
 			b.Fatalf("Cast: %v", err)
 		}
 		frameSink = got
+	}
+}
+
+// BenchmarkFrameSortBy is a sort of a table, which is the order worked out over
+// one column and then applied to sixteen.
+func BenchmarkFrameSortBy(b *testing.B) {
+	f := benchFrame(b)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		got, err := f.SortBy("c00")
+		if err != nil {
+			b.Fatalf("SortBy: %v", err)
+		}
+		frameSink = got
+	}
+}
+
+// BenchmarkFrameSortIndex is the same sort without moving anything, so the gap
+// between this and the one above is what the gather costs.
+func BenchmarkFrameSortIndex(b *testing.B) {
+	f := benchFrame(b)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		idx, err := f.SortIndex(kuma.Asc("c00"))
+		if err != nil {
+			b.Fatalf("SortIndex: %v", err)
+		}
+		indexSink = idx
+	}
+}
+
+// BenchmarkSeriesSort is one column, which is the kernel with a series wrapped
+// around it.
+func BenchmarkSeriesSort(b *testing.B) {
+	s := benchInts(b, 1)
+
+	b.SetBytes(benchLen * 8)
+	b.ReportAllocs()
+	for b.Loop() {
+		got, err := s.Sort(kuma.Order{})
+		if err != nil {
+			b.Fatalf("Sort: %v", err)
+		}
+		seriesSink = got
 	}
 }
