@@ -33,7 +33,7 @@ var (
 	benchChildren = []dtype.Field{{Name: "item", Type: dtype.Int64, Nullable: true}}
 
 	benchMeta = dtype.Metadata{
-		{Key: "unit", Value: "metres"},
+		{Key: "unit", Value: "meters"},
 		{Key: "source", Value: "the shipping system"},
 	}
 )

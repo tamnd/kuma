@@ -16,9 +16,9 @@ func TestMetadataRoundTrip(t *testing.T) {
 	}{
 		{"nil", nil},
 		{"empty", dtype.Metadata{}},
-		{"one pair", dtype.Metadata{{Key: "unit", Value: "metres"}}},
+		{"one pair", dtype.Metadata{{Key: "unit", Value: "meters"}}},
 		{"several", dtype.Metadata{
-			{Key: "unit", Value: "metres"},
+			{Key: "unit", Value: "meters"},
 			{Key: "source", Value: "the shipping system"},
 		}},
 
@@ -94,7 +94,7 @@ func TestMetadataLayout(t *testing.T) {
 // metadata value that shares it would read as something else, or as nothing,
 // once the release callback has run.
 func TestDecodeMetadataCopies(t *testing.T) {
-	b, err := ipc.EncodeMetadata(dtype.Metadata{{Key: "unit", Value: "metres"}})
+	b, err := ipc.EncodeMetadata(dtype.Metadata{{Key: "unit", Value: "meters"}})
 	if err != nil {
 		t.Fatalf("EncodeMetadata = %v", err)
 	}
@@ -106,14 +106,14 @@ func TestDecodeMetadataCopies(t *testing.T) {
 		b[i] = 0
 	}
 
-	want := dtype.Metadata{{Key: "unit", Value: "metres"}}
+	want := dtype.Metadata{{Key: "unit", Value: "meters"}}
 	if !got.Equal(want) {
 		t.Errorf("after overwriting the blob = %v, want %v", got, want)
 	}
 }
 
 func TestDecodeMetadataErrors(t *testing.T) {
-	full, err := ipc.EncodeMetadata(dtype.Metadata{{Key: "unit", Value: "metres"}})
+	full, err := ipc.EncodeMetadata(dtype.Metadata{{Key: "unit", Value: "meters"}})
 	if err != nil {
 		t.Fatalf("EncodeMetadata = %v", err)
 	}

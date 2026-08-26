@@ -69,7 +69,7 @@ func FuzzType(f *testing.F) {
 func FuzzMetadata(f *testing.F) {
 	seeds := []dtype.Metadata{
 		nil,
-		{{Key: "unit", Value: "metres"}},
+		{{Key: "unit", Value: "meters"}},
 		{{Key: "", Value: ""}},
 		{{Key: "a", Value: "1"}, {Key: "a", Value: "2"}},
 	}
