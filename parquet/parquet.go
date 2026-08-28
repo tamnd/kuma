@@ -30,7 +30,9 @@
 // packed runs parquet uses now and the plain packing it used before that.
 // PlainDecoder reads the values themselves, written as they are, which is what
 // every other encoding in the format is a way of not doing and what every one
-// of them ends up at.
+// of them ends up at. DeltaDecoder reads the one that a column of integers is
+// written in when a dictionary is not worth keeping, which is the differences
+// between the values rather than the values.
 //
 // ColumnReader is where the two halves meet. A page keeps its levels and its
 // values apart and only the rows that have a value are written down, so putting
@@ -39,9 +41,9 @@
 // back an array. A chunk that was written as indices into a dictionary, which is
 // most of a real file, comes back dictionary encoded rather than expanded, since
 // that is the shape it was written in and the shape the kernels would rather
-// have it in. What it reads so far is a flat column of plain or dictionary
-// encoded pages in a chunk that was not compressed, and anything else is refused
-// by name rather than guessed at.
+// have it in. What it reads so far is a flat column of plain, dictionary or
+// delta encoded pages in a chunk that was not compressed, and anything else is
+// refused by name rather than guessed at.
 package parquet
 
 import "errors"

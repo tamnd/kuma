@@ -665,7 +665,7 @@ func TestColumnReaderRefusedPages(t *testing.T) {
 			name: "values in an encoding that is not read yet",
 			page: parquet.Page{
 				PageHeader: parquet.PageHeader{
-					Kind: parquet.DataPage, Encoding: parquet.DeltaBinaryPacked,
+					Kind: parquet.DataPage, Encoding: parquet.ByteStreamSplit,
 					DefinitionEncoding: parquet.RLE, NumValues: 1,
 				},
 				Data: []byte{0x04, 0x01},

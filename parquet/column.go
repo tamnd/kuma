@@ -41,9 +41,9 @@ import (
 // it.
 //
 // The reader is for one column, decided when it is made. What it can read is
-// what the page decoders can read: a flat column, written plainly or as indices
-// into a dictionary, in a chunk that is not compressed. Anything else is refused
-// rather than guessed at.
+// what the page decoders can read: a flat column, written plainly, as indices
+// into a dictionary or as differences, in a chunk that is not compressed.
+// Anything else is refused rather than guessed at.
 type ColumnReader struct {
 	column  Column
 	builder *array.Builder
@@ -77,6 +77,7 @@ type ColumnReader struct {
 	rle    RLEDecoder
 	packed BitPackedDecoder
 	plain  PlainDecoder
+	deltas DeltaDecoder
 }
 
 // columnValues is how the values of one column are read and appended.
@@ -89,6 +90,12 @@ type ColumnReader struct {
 type columnValues struct {
 	// decode reads n values out of d into the buffer.
 	decode func(d *PlainDecoder, n int) error
+
+	// delta reads n values out of a delta encoded page into the same buffer
+	// decode fills. It is nil for a column the encoding is not written for,
+	// which is everything but the integers, and a page that says otherwise is a
+	// page that disagrees with the schema in front of it.
+	delta func(d *DeltaDecoder, n int) error
 
 	// run appends count values from the buffer, starting at from. They are all
 	// present, since the nulls are put in by the caller.
@@ -234,18 +241,49 @@ func (r *ColumnReader) Page(p Page) error {
 		}
 	}
 
-	if r.dict != nil {
-		if err := r.decodeIndices(body, present); err != nil {
-			return err
+	if err := r.decodeValues(p, body, present); err != nil {
+		return err
+	}
+	r.assemble(count, present)
+	return nil
+}
+
+// decodeValues reads the values of a data page into the buffer the assembly
+// takes them from.
+//
+// Which of the three it is has already been settled by encoding, so this is a
+// switch over what that let through rather than a second look at the page: a
+// chunk with a dictionary in front of it is indices whatever else the page
+// says, and everything that is not a difference is a value written as it is.
+func (r *ColumnReader) decodeValues(p Page, body []byte, present int) error {
+	switch {
+	case r.dict != nil:
+		return r.decodeIndices(body, present)
+
+	case p.Encoding == DeltaBinaryPacked:
+		if len(body) == 0 && present == 0 {
+			// A page in which every row is missing. The encoding writes a
+			// header even when there are no values under it, and a writer that
+			// leaves it out has said the same thing in the levels.
+			return nil
 		}
-	} else {
+
+		err := r.deltas.Reset(body)
+		if err == nil {
+			err = r.values.delta(&r.deltas, present)
+		}
+		if err != nil {
+			return fmt.Errorf("parquet: %s: %w", r.column.Name(), err)
+		}
+		return nil
+
+	default:
 		r.plain.Reset(body)
 		if err := r.values.decode(&r.plain, present); err != nil {
 			return fmt.Errorf("parquet: %s: %w", r.column.Name(), err)
 		}
+		return nil
 	}
-	r.assemble(count, present)
-	return nil
 }
 
 // definitions decodes the definition levels of a page into r.levels and returns
@@ -441,9 +479,9 @@ func valuesFor(c Column, b *array.Builder) (*columnValues, error) {
 		return narrowed[int64, uint64](b, (*PlainDecoder).Int64), nil
 
 	case dtype.Int32Kind, dtype.Date32Kind, dtype.Time32Kind:
-		return numbers(b, (*PlainDecoder).Int32), nil
+		return integers(b, (*PlainDecoder).Int32), nil
 	case dtype.Int64Kind, dtype.Date64Kind, dtype.Time64Kind, dtype.DurationKind:
-		return numbers(b, (*PlainDecoder).Int64), nil
+		return integers(b, (*PlainDecoder).Int64), nil
 	case dtype.Float32Kind:
 		return numbers(b, (*PlainDecoder).Float), nil
 	case dtype.Float64Kind:
@@ -456,7 +494,7 @@ func valuesFor(c Column, b *array.Builder) (*columnValues, error) {
 		if c.Element.Type == Int96 {
 			return numbers(b, (*PlainDecoder).Int96), nil
 		}
-		return numbers(b, (*PlainDecoder).Int64), nil
+		return integers(b, (*PlainDecoder).Int64), nil
 
 	case dtype.StringKind, dtype.BinaryKind:
 		return blobs(b, func(d *PlainDecoder, dst [][]byte) (int, error) { return d.ByteArray(dst) }), nil
@@ -489,6 +527,28 @@ func numbers[T array.Numeric](b *array.Builder, read func(*PlainDecoder, []T) (i
 	}
 }
 
+// integers is numbers for a column that can also arrive as differences, which
+// is every column parquet writes as an int32 or an int64 and no other. The two
+// are apart rather than one function with a flag because a delta encoded page
+// of doubles is a file to refuse rather than a page to read badly, and the
+// cheapest way to say so is to have nothing to read it with.
+func integers[T deltaValue](b *array.Builder, read func(*PlainDecoder, []T) (int, error)) *columnValues {
+	var buf []T
+	return &columnValues{
+		decode: func(d *PlainDecoder, n int) error {
+			buf = grow(buf, n)
+			got, err := read(d, buf)
+			return exactly(got, n, err)
+		},
+		delta: func(d *DeltaDecoder, n int) error {
+			buf = grow(buf, n)
+			got, err := d.Read(buf)
+			return exactly(got, n, err)
+		},
+		run: func(from, count int) { b.AppendValues(buf[from : from+count]) },
+	}
+}
+
 // narrowed reads a column that parquet wrote wider than kuma stores it, which
 // is every integer of fewer than thirty two bits and the two unsigned types
 // that share a width with a signed one.
@@ -497,21 +557,29 @@ func numbers[T array.Numeric](b *array.Builder, read func(*PlainDecoder, []T) (i
 // the values in it are int8 values written in four bytes, so a value that does
 // not fit is a file that contradicts its own schema, and the value would have
 // been wrong however it was read.
-func narrowed[W, T array.Numeric](b *array.Builder, read func(*PlainDecoder, []W) (int, error)) *columnValues {
+func narrowed[W deltaValue, T array.Numeric](b *array.Builder, read func(*PlainDecoder, []W) (int, error)) *columnValues {
 	var wide []W
 	var buf []T
+	narrow := func(got, n int, readErr error) error {
+		if err := exactly(got, n, readErr); err != nil {
+			return err
+		}
+		buf = grow(buf, n)
+		for i, v := range wide {
+			buf[i] = T(v)
+		}
+		return nil
+	}
 	return &columnValues{
 		decode: func(d *PlainDecoder, n int) error {
 			wide = grow(wide, n)
-			got, readErr := read(d, wide)
-			if err := exactly(got, n, readErr); err != nil {
-				return err
-			}
-			buf = grow(buf, n)
-			for i, v := range wide {
-				buf[i] = T(v)
-			}
-			return nil
+			got, err := read(d, wide)
+			return narrow(got, n, err)
+		},
+		delta: func(d *DeltaDecoder, n int) error {
+			wide = grow(wide, n)
+			got, err := d.Read(wide)
+			return narrow(got, n, err)
 		},
 		run: func(from, count int) { b.AppendValues(buf[from : from+count]) },
 	}

@@ -365,3 +365,59 @@ func FuzzPlain(f *testing.F) {
 		}
 	})
 }
+
+// FuzzDelta reads arbitrary bytes as a page of differences.
+//
+// Nearly everything about how the bytes are cut up comes out of the bytes
+// themselves: how big a block is, how many miniblocks are in one, how wide the
+// differences of each miniblock are and how many values there are altogether. A
+// width and a count together say where in the page a value is, so this is the
+// decoder here with the most ways to be talked into reading somewhere it should
+// not, and what is asked for is that it never does.
+//
+// The two widths are read side by side because they are one decoder read twice.
+// A page of int32 is the same bytes as a page of int64 with the values cut
+// short, so the two disagreeing anywhere is arithmetic that went a different way
+// at a different width.
+func FuzzDelta(f *testing.F) {
+	f.Add(deltaOf(128, 4, 0, 1, 2, 3))
+	f.Add(deltaOf(128, 4, 1000, -3, 7, -9000))
+	f.Add(deltaOf(256, 8, counting(0, 1, 300)...))
+	f.Add([]byte(nil))
+	f.Add([]byte{0x80, 0x01, 0x04, 0x00, 0x00})
+	f.Add(bytes.Repeat([]byte{0xff}, 32))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		wide, err := parquet.NewDeltaDecoder(data)
+		if err != nil {
+			return
+		}
+		narrow, err := parquet.NewDeltaDecoder(data)
+		if err != nil {
+			t.Fatalf("the same page read twice: %v", err)
+		}
+
+		// A page says how many values it holds and a few bytes can honestly say
+		// there are two billion of them, so this reads a bounded number: the
+		// fuzzer is looking for a decoder that reads the wrong bytes rather
+		// than one that reads a lot of them.
+		values := make([]int64, 97)
+		short := make([]int32, len(values))
+		for read := 0; read < 1<<14; {
+			n, wideErr := wide.Read(values)
+			m, narrowErr := narrow.Read(short)
+			if n != m {
+				t.Fatalf("%d values as int64 and %d as int32", n, m)
+			}
+			for i, v := range values[:n] {
+				if short[i] != int32(v) {
+					t.Fatalf("value %d is %d as an int64 and %d as an int32", i, v, short[i])
+				}
+			}
+			read += n
+			if wideErr != nil || narrowErr != nil {
+				break
+			}
+		}
+	})
+}
