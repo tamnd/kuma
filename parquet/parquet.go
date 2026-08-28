@@ -84,6 +84,16 @@
 // something to skip on and never to answer on. ReadBloomFilter is one chunk's
 // and FileReader.BloomFilter is it applied to a row group.
 //
+// Predicate is what turns all of that into an answer. It is one column compared
+// against one value, which is what most of a filter on a scan is made of, and
+// FileReader.RowGroups takes a list of them and gives back the row groups that
+// may hold a matching row. Every group it leaves out is one whose statistics say
+// it holds none, worked out from the footer and, where the writer wrote one,
+// from a bloom filter. A group it returns may hold a matching row rather than
+// does, so a caller still filters the rows it reads, and a file whose writer
+// wrote no statistics reads the way it did before. Nothing there can change an
+// answer, only how much of the file it took.
+//
 // Decompressor is what undoes the compression of a page on the way through.
 // Nearly every parquet file in the world is compressed and the codec is a
 // property of a column chunk rather than of the file, so one file may hold a
