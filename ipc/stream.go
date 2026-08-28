@@ -220,46 +220,62 @@ func (r *Reader) All() iter.Seq[Batch] {
 // does not it gets an unexpected end of file after however much was really
 // there.
 func readMessage(r io.Reader) ([]byte, uint8, error) {
+	meta, err := readPrefix(r)
+	if err != nil || meta == 0 {
+		return nil, fbHeaderNone, err
+	}
+	return readRest(r, meta)
+}
+
+// readPrefix reads the length in front of a message, in whichever of the two
+// framings it arrives in. A length of zero and the end of the file where a
+// prefix would start are both the end of the stream, and both come back as zero
+// and no error.
+func readPrefix(r io.Reader) (int32, error) {
 	var prefix [fbPrefix]byte
 	n, err := io.ReadFull(r, prefix[:4])
 	if n == 0 && (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
-		return nil, fbHeaderNone, nil
+		return 0, nil
 	}
 	if err != nil {
-		return nil, fbHeaderNone, fmt.Errorf("ipc: %w: reading a message prefix: %w", ErrMessage, unexpected(err))
+		return 0, fmt.Errorf("ipc: %w: reading a message prefix: %w", ErrMessage, unexpected(err))
 	}
 
 	// The old format with no continuation is still readable, so the first four
 	// bytes are either the marker or the length itself.
 	size := prefix[:4]
-	if binary.LittleEndian.Uint32(prefix[:4]) == fbContinuation {
-		if _, err = io.ReadFull(r, prefix[4:]); err != nil {
-			return nil, fbHeaderNone, fmt.Errorf("ipc: %w: reading a message length: %w", ErrMessage, unexpected(err))
+	if binary.LittleEndian.Uint32(size) == fbContinuation {
+		if _, err := io.ReadFull(r, prefix[4:]); err != nil {
+			return 0, fmt.Errorf("ipc: %w: reading a message length: %w", ErrMessage, unexpected(err))
 		}
 		size = prefix[4:]
 	}
 
 	meta := int32(binary.LittleEndian.Uint32(size))
 	if meta < 0 {
-		return nil, fbHeaderNone, fmt.Errorf("ipc: %w: a message of %d bytes", ErrMessage, meta)
+		return 0, fmt.Errorf("ipc: %w: a message of %d bytes", ErrMessage, meta)
 	}
-	if meta == 0 {
-		return nil, fbHeaderNone, nil
-	}
+	return meta, nil
+}
 
-	// The message is rebuilt with the marker in front of it whichever way it
-	// arrived, so that everything downstream sees one framing.
-	//
-	// The room is taken in front only up to a point. A length is four bytes of
-	// somebody else's file and can say two gigabytes, and a reader that made
-	// room for that before reading a byte would be one message away from being
-	// out of memory. Past the cap the buffer grows as the bytes turn up, which
-	// is what it would do anyway.
+// readRest reads the metadata of a message and the body after it, and writes the
+// framing back in front of the pair so that everything downstream sees one
+// framing whichever one arrived.
+//
+// The room is taken in front only up to a point. A length is four bytes of
+// somebody else's file and can say two gigabytes, and a reader that made room
+// for that before reading a byte would be one message away from being out of
+// memory. Past the cap the buffer grows as the bytes turn up, which is what it
+// would do anyway.
+func readRest(r io.Reader, meta int32) ([]byte, uint8, error) {
+	var size [4]byte
+	binary.LittleEndian.PutUint32(size[:], uint32(meta))
+
 	var out bytes.Buffer
 	out.Grow(fbPrefix + min(int(meta), maxHint))
 	out.Write(streamEnd[:4])
-	out.Write(size)
-	if err = copyN(&out, r, int64(meta), "the metadata of a message"); err != nil {
+	out.Write(size[:])
+	if err := copyN(&out, r, int64(meta), "the metadata of a message"); err != nil {
 		return nil, fbHeaderNone, err
 	}
 
@@ -267,7 +283,7 @@ func readMessage(r io.Reader) ([]byte, uint8, error) {
 	if err != nil {
 		return nil, fbHeaderNone, err
 	}
-	if err = copyN(&out, r, body, "the body of a message"); err != nil {
+	if err := copyN(&out, r, body, "the body of a message"); err != nil {
 		return nil, fbHeaderNone, err
 	}
 	return out.Bytes(), kind, nil

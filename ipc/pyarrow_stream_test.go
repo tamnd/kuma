@@ -23,8 +23,8 @@ import (
 // file nobody else can open, so the only useful check is somebody else's reader.
 //
 // Each side writes whole streams and says what is in them, and each side reads
-// the other's. pyarrow also writes kuma's streams back out with its own writer,
-// so what comes back has been through both.
+// the other's. What kuma writes is then written back out by pyarrow's own
+// writer, so the batches that come back have been through both.
 //
 // It skips when there is no python3 with pyarrow in it, since that is a large
 // dependency to ask of somebody running the tests. CI installs it, so the check
