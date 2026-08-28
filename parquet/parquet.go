@@ -13,12 +13,16 @@
 // length in it is a claim rather than a promise, and a reader for this job
 // needs to bounds check every read and refuse the claims it cannot satisfy.
 //
-// Nothing here decodes a page yet. Metadata is enough to say what a file holds,
-// how many rows it has, where each column chunk lives and what the writer said
-// about its values, which is what a scan needs before it reads anything.
-// Metadata.Schema turns the file's own schema into kuma types, and
-// Metadata.Columns is the leaves of it with the levels a page decoder will need
-// to put nulls and list boundaries back.
+// Metadata is enough to say what a file holds, how many rows it has, where
+// each column chunk lives and what the writer said about its values, which is
+// what a scan needs before it reads anything. Metadata.Schema turns the file's
+// own schema into kuma types, and Metadata.Columns is the leaves of it with the
+// levels a page decoder will need to put nulls and list boundaries back.
+//
+// ReadPages goes one level down, walking the pages of a column chunk and
+// handing back each header with the bytes behind it. The bytes are the ones in
+// the file, compressed and encoded as the writer left them, so nothing here
+// turns a page into values yet.
 package parquet
 
 import "errors"

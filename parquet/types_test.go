@@ -34,6 +34,7 @@ func TestNames(t *testing.T) {
 		{"optional", Optional.String(), "optional"},
 		{"repeated", Repeated.String(), "repeated"},
 
+		{"the absent encoding", NoEncoding.String(), "none"},
 		{"plain", Plain.String(), "plain"},
 		{"the old dictionary encoding", PlainDictionary.String(), "plain_dictionary"},
 		{"run length", RLE.String(), "rle"},
@@ -43,6 +44,11 @@ func TestNames(t *testing.T) {
 		{"delta byte array", DeltaByteArray.String(), "delta_byte_array"},
 		{"the dictionary encoding", RLEDictionary.String(), "rle_dictionary"},
 		{"byte stream split", ByteStreamSplit.String(), "byte_stream_split"},
+
+		{"a data page", DataPage.String(), "data_page"},
+		{"an index page", IndexPage.String(), "index_page"},
+		{"a dictionary page", DictionaryPage.String(), "dictionary_page"},
+		{"a second version data page", DataPageV2.String(), "data_page_v2"},
 
 		{"no compression", Uncompressed.String(), "uncompressed"},
 		{"snappy", Snappy.String(), "snappy"},
@@ -96,9 +102,11 @@ func TestUnknownNames(t *testing.T) {
 		{Type(99).String(), "type 99"},
 		{Repetition(-2).String(), "repetition -2"},
 		{Repetition(99).String(), "repetition 99"},
-		{Encoding(-1).String(), "encoding -1"},
+		{Encoding(-2).String(), "encoding -2"},
 		{Encoding(1).String(), "encoding 1"},
 		{Encoding(99).String(), "encoding 99"},
+		{PageKind(-1).String(), "page type -1"},
+		{PageKind(99).String(), "page type 99"},
 		{Codec(-1).String(), "codec -1"},
 		{Codec(99).String(), "codec 99"},
 		{ConvertedType(-2).String(), "converted type -2"},
@@ -137,6 +145,7 @@ func TestNamesAreNames(t *testing.T) {
 	}{
 		{"type", typeNames[:], int(Boolean)},
 		{"repetition", repetitionNames[:], int(Required)},
+		{"page type", pageNames[:], int(DataPage)},
 		{"codec", codecNames[:], int(Uncompressed)},
 		{"converted type", convertedNames[:], int(ConvertedUTF8)},
 		{"logical type", logicalNames[:], int(NoLogical)},

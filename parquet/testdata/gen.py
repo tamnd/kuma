@@ -10,8 +10,8 @@ Run it from this directory with pyarrow installed:
 
     python3 gen.py
 
-Keep the files small. They are read for their footers and nobody is measuring
-anything with them.
+Keep the files small. They are read for what they say about themselves rather
+than for the data in them, and nobody is measuring anything with them.
 """
 
 import datetime
@@ -137,6 +137,42 @@ def nested():
     )
 
 
+def pages():
+    """Several pages per column, written the second way, with checksums.
+
+    The other files here are one page per column written the first way, which is
+    what pyarrow does unless it is told otherwise, so this is the other half of
+    what a page walker has to read. The batch size is small so that a column
+    ends up with more than one page in it without the file getting big, and the
+    string column is dictionary encoded so that there is a dictionary page in
+    front of its data pages.
+
+    The nullable column is here for the null count, which the second version of
+    the data page writes down and the first one does not.
+    """
+    rows = 500
+    words = ["alpha", "beta", "gamma", "delta"]
+    table = pa.table(
+        {
+            "n": pa.array(range(rows), pa.int32()),
+            "word": pa.array([words[i % len(words)] for i in range(rows)], pa.string()),
+            "maybe": pa.array([None if i % 3 == 0 else i for i in range(rows)], pa.int32()),
+        }
+    )
+    pq.write_table(
+        table,
+        "pages.parquet",
+        compression="none",
+        version="2.6",
+        data_page_version="2.0",
+        data_page_size=1024,
+        write_batch_size=100,
+        write_page_checksum=True,
+        use_dictionary=["word"],
+        store_schema=False,
+    )
+
+
 def empty():
     """A file with a schema and no rows, which still has a footer."""
     schema = pa.schema([pa.field("id", pa.int64()), pa.field("label", pa.string())])
@@ -147,5 +183,6 @@ if __name__ == "__main__":
     alltypes()
     chunks()
     nested()
+    pages()
     empty()
-    print("wrote alltypes.parquet, chunks.parquet, nested.parquet and empty.parquet")
+    print("wrote alltypes.parquet, chunks.parquet, nested.parquet, pages.parquet and empty.parquet")

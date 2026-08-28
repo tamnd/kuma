@@ -103,7 +103,12 @@ type Encoding int32
 // The encodings. Two of them are numbered out of order because the format
 // replaced them: PlainDictionary became RLEDictionary and BitPacked became RLE,
 // and files written before the change still say the old thing.
+//
+// NoEncoding is a page that did not say how it was encoded. The format calls
+// that field required, so it is a file to refuse rather than a page to guess
+// at, and it needs a value of its own because zero is a real encoding.
 const (
+	NoEncoding           Encoding = -1
 	Plain                Encoding = 0
 	PlainDictionary      Encoding = 2
 	RLE                  Encoding = 3
@@ -129,10 +134,42 @@ var encodingNames = [...]string{
 
 // String returns the name the format gives the encoding, lowercased.
 func (e Encoding) String() string {
+	if e == NoEncoding {
+		return noName
+	}
 	if e < 0 || int(e) >= len(encodingNames) || encodingNames[e] == "" {
 		return fmt.Sprintf("encoding %d", int32(e))
 	}
 	return encodingNames[e]
+}
+
+// PageKind is what a page holds. A column chunk is a run of pages, at most one
+// of them a dictionary and the rest of them data.
+type PageKind int32
+
+// The page types. The two data pages are two versions of the same thing: the
+// second one moved the levels out of the compressed part of the page so that a
+// reader can work out how many rows a page holds without decompressing it.
+const (
+	DataPage PageKind = iota
+	IndexPage
+	DictionaryPage
+	DataPageV2
+)
+
+var pageNames = [...]string{
+	DataPage:       "data_page",
+	IndexPage:      "index_page",
+	DictionaryPage: "dictionary_page",
+	DataPageV2:     "data_page_v2",
+}
+
+// String returns the name the format gives the page type, lowercased.
+func (k PageKind) String() string {
+	if k < 0 || int(k) >= len(pageNames) {
+		return fmt.Sprintf("page type %d", int32(k))
+	}
+	return pageNames[k]
 }
 
 // Codec is how the pages of a column chunk are compressed. It is per chunk
