@@ -23,6 +23,12 @@
 // handing back each header with the bytes behind it. The bytes are the ones in
 // the file, compressed and encoded as the writer left them, so nothing here
 // turns a page into values yet.
+//
+// RLEDecoder and BitPackedDecoder are the first part of that. Nulls, list
+// boundaries and dictionary indices are all written as runs of small integers
+// packed into as few bits as they need, and these two are the two ways parquet
+// has written them: the hybrid of repeated and packed runs that it uses now,
+// and the plain packing it used before that and that old files still have.
 package parquet
 
 import "errors"
