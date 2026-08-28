@@ -383,7 +383,7 @@ func TestReadColumnRefused(t *testing.T) {
 		file   string
 		column string
 	}{
-		{name: "a compressed chunk", file: "chunks.parquet", column: "code"},
+		{name: "a chunk compressed with brotli", file: "codecs.parquet", column: "br"},
 		{name: "a repeated column", file: "nested.parquet", column: "tags.list.element"},
 		{name: "a decimal", file: "plain.parquet", column: "price"},
 	}
