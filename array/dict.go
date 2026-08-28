@@ -83,11 +83,16 @@ func (a *Array) Dictionary() *Array { return a.dict }
 // then the ordinary Values and Value, since what comes back is an integer
 // column like any other.
 func (a *Array) Indices() *Array {
-	if a.dict == nil {
+	// The two conditions are the same condition. Only NewDictionary sets either
+	// of them and it sets both, so asking twice costs a comparison and saves a
+	// panic in the case that cannot happen.
+	d, ok := a.dt.(dtype.Dictionary)
+	if !ok || a.dict == nil {
 		return nil
 	}
+
 	out := *a
-	out.dt = a.dt.(dtype.Dictionary).Index
+	out.dt = d.Index
 	out.dict = nil
 	return &out
 }
