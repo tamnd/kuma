@@ -104,10 +104,7 @@ func ExportField(f dtype.Field, out *CSchema) error {
 	if err != nil {
 		return err
 	}
-	children, err := childFields(f.Type)
-	if err != nil {
-		return err
-	}
+	children := childFields(f.Type)
 	metadata, err := EncodeMetadata(f.Metadata)
 	if err != nil {
 		return err
@@ -631,39 +628,6 @@ func exportSizes(state *exportedArray, blocks [][]byte) unsafe.Pointer {
 		slots[i] = C.int64_t(len(b))
 	}
 	return sizes
-}
-
-// childFields is the children a nested type exports, with the names Arrow uses
-// for the ones that have no name of their own.
-func childFields(t dtype.DataType) ([]dtype.Field, error) {
-	switch x := t.(type) {
-	case dtype.List:
-		return itemField(x.Elem), nil
-	case dtype.LargeList:
-		return itemField(x.Elem), nil
-	case dtype.FixedSizeList:
-		return itemField(x.Elem), nil
-	case dtype.Struct:
-		return x.Fields, nil
-	case dtype.Map:
-		// A map is a list of entries and an entry is a struct of two, so the
-		// key and the value are a level further down than they look. Keys are
-		// not nullable, which the interface states rather than implies.
-		entries := dtype.Struct{Fields: []dtype.Field{
-			{Name: "key", Type: x.Key},
-			{Name: "value", Type: x.Value, Nullable: true},
-		}}
-		return []dtype.Field{{Name: "entries", Type: entries}}, nil
-	default:
-		return nil, nil
-	}
-}
-
-// itemField is the single child of a list, under the name Arrow gives it. The
-// values of a list are nullable whatever the list itself is, since a list of
-// two that holds one value has to say which one is missing.
-func itemField(t dtype.DataType) []dtype.Field {
-	return []dtype.Field{{Name: "item", Type: t, Nullable: true}}
 }
 
 // callocPointers allocates a zeroed array of n pointers.

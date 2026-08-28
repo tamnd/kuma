@@ -41,22 +41,6 @@ func TestPyarrow(t *testing.T) {
 	t.Log(strings.TrimSpace(string(out)))
 }
 
-// findPython returns an interpreter that can import pyarrow, or skips.
-func findPython(t *testing.T) string {
-	t.Helper()
-	for _, name := range []string{"python3", "python"} {
-		path, err := exec.LookPath(name)
-		if err != nil {
-			continue
-		}
-		if err := exec.Command(path, "-c", "import pyarrow").Run(); err == nil {
-			return path
-		}
-	}
-	t.Skip("no python3 with pyarrow, which this needs to have somebody to disagree with")
-	return ""
-}
-
 func libraryExt() string {
 	switch runtime.GOOS {
 	case "windows":

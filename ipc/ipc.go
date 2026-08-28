@@ -22,11 +22,19 @@
 // here is pure Go and works on any platform, including the ones with no C
 // toolchain at all.
 //
-// The whole interface is checked against pyarrow in one process, in both
-// directions, by the test in testdata/pyarrow.
+// EncodeSchema and DecodeSchema are the other way two libraries hand each other
+// a table, which is to write it down. A schema on the wire is an Arrow IPC
+// message, meaning FlatBuffers, and this package reads and writes that itself
+// rather than pulling in a generated reader, because a message off a socket is
+// somebody else's bytes and the generated readers for this format are not
+// bounds checked.
 //
-// What is not here yet: arrays of the nested types, the Arrow IPC file and
-// stream formats, and the arrow-go bridge.
+// Both interfaces are checked against pyarrow, in both directions, by the tests
+// in testdata/pyarrow. The C one runs two libraries in one process and compares
+// buffer addresses, and the message one passes files.
+//
+// What is not here yet: arrays of the nested types, record batches and the
+// Arrow IPC file and stream formats, and the arrow-go bridge.
 //
 // Stability: tier 1, stable.
 package ipc
@@ -61,6 +69,13 @@ var (
 	// type needs: the wrong number of them, one too short for the values it has
 	// to hold, or offsets that point outside the data.
 	ErrBuffers = errors.New("bad buffers")
+
+	// ErrMessage is returned when a piece of Arrow IPC metadata is malformed:
+	// an offset that points outside the message it lives in, a length that runs
+	// past the end, a vtable that is not there. The metadata is FlatBuffers, and
+	// a FlatBuffer arriving over a socket is somebody else's bytes, so every
+	// number in it is checked before it is used.
+	ErrMessage = errors.New("bad message")
 
 	// ErrUnsupported is returned for the shapes this package understands and
 	// cannot build yet, which is the nested types, since the array package has

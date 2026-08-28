@@ -252,6 +252,43 @@ func parseInt32(format, s string) (int32, error) {
 	return int32(n), nil
 }
 
+// childFields is the children a nested type is written with, under the names
+// Arrow uses for the ones that have no name of their own.
+//
+// Both halves of this package need it. The C data interface hangs the children
+// off the schema struct and the IPC metadata hangs them off the Field table,
+// and what the children are is the same question in both.
+func childFields(t dtype.DataType) []dtype.Field {
+	switch x := t.(type) {
+	case dtype.List:
+		return itemField(x.Elem)
+	case dtype.LargeList:
+		return itemField(x.Elem)
+	case dtype.FixedSizeList:
+		return itemField(x.Elem)
+	case dtype.Struct:
+		return x.Fields
+	case dtype.Map:
+		// A map is a list of entries and an entry is a struct of two, so the
+		// key and the value are a level further down than they look. Keys are
+		// not nullable, which the interface states rather than implies.
+		entries := dtype.Struct{Fields: []dtype.Field{
+			{Name: "key", Type: x.Key},
+			{Name: "value", Type: x.Value, Nullable: true},
+		}}
+		return []dtype.Field{{Name: "entries", Type: entries}}
+	default:
+		return nil
+	}
+}
+
+// itemField is the single child of a list, under the name Arrow gives it. The
+// values of a list are nullable whatever the list itself is, since a list of
+// two that holds one value has to say which one is missing.
+func itemField(t dtype.DataType) []dtype.Field {
+	return []dtype.Field{{Name: "item", Type: t, Nullable: true}}
+}
+
 // letterUnit is the inverse of unitLetter.
 func letterUnit(s string) (dtype.TimeUnit, bool) {
 	switch s {
