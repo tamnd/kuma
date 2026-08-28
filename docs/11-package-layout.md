@@ -73,6 +73,9 @@ github.com/tamnd/kuma
 
   exec/                         physical operators, morsel scheduler                T2
 
+  compress/                     the codecs the file formats need and Go has not     T2
+    snappy/                     the snappy block format
+
   csv/                          reader and writer, schema inference                 T1
   parquet/                      reader with pushdown, writer with statistics        T1
   ipc/                          Arrow IPC, C Data Interface, arrow-go bridge        T1
