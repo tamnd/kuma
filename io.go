@@ -65,18 +65,18 @@ func (f *Frame[S]) WriteCSVFile(path string, opts *csv.WriteOptions) error {
 	return csv.WriteFile(path, f.table(), opts)
 }
 
-// table returns the frame as the schema and columns the csv package writes.
+// table returns the frame as the schema and columns a file writer takes.
 // Nothing is copied: a table is a view of the same columns.
-func (f *Frame[S]) table() *csv.Table {
+func (f *Frame[S]) table() *array.Table {
 	cols := make([]*array.Chunked, len(f.cols))
 	for i, c := range f.cols {
 		cols[i] = c.Data()
 	}
-	return &csv.Table{Schema: f.schema, Columns: cols}
+	return &array.Table{Schema: f.schema, Columns: cols}
 }
 
 // frameOf turns the columns a reader produced into a frame.
-func frameOf(t *csv.Table) (*Frame[Dynamic], error) {
+func frameOf(t *array.Table) (*Frame[Dynamic], error) {
 	cols := make([]Column, len(t.Columns))
 	for i, data := range t.Columns {
 		c, err := NewColumn(t.Schema.Fields[i].Name, data)
