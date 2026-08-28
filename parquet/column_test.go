@@ -47,14 +47,7 @@ func chunkOf(t *testing.T, name, column string) ([]byte, *parquet.ColumnChunk, p
 
 // columnName is what a chunk calls the column it holds.
 func columnName(c *parquet.ColumnChunk) string {
-	var out string
-	for i, part := range c.Meta.Path {
-		if i > 0 {
-			out += "."
-		}
-		out += part
-	}
-	return out
+	return strings.Join(c.Meta.Path, ".")
 }
 
 // readColumn reads one column of a file into an array.

@@ -444,8 +444,8 @@ func narrowed[W, T array.Numeric](b *array.Builder, read func(*PlainDecoder, []W
 	return &columnValues{
 		decode: func(d *PlainDecoder, n int) error {
 			wide = grow(wide, n)
-			got, err := read(d, wide)
-			if err = exactly(got, n, err); err != nil {
+			got, readErr := read(d, wide)
+			if err := exactly(got, n, readErr); err != nil {
 				return err
 			}
 			buf = grow(buf, n)
