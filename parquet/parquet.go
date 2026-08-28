@@ -36,9 +36,12 @@
 // values apart and only the rows that have a value are written down, so putting
 // a column back together means walking the two together and dropping the values
 // in around the nulls. ReadColumn does that for a whole column chunk and hands
-// back an array. What it reads so far is a flat column of plain pages in a chunk
-// that was not compressed, and anything else is refused by name rather than
-// guessed at.
+// back an array. A chunk that was written as indices into a dictionary, which is
+// most of a real file, comes back dictionary encoded rather than expanded, since
+// that is the shape it was written in and the shape the kernels would rather
+// have it in. What it reads so far is a flat column of plain or dictionary
+// encoded pages in a chunk that was not compressed, and anything else is refused
+// by name rather than guessed at.
 package parquet
 
 import "errors"

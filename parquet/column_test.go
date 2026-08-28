@@ -62,6 +62,28 @@ func readColumn(t *testing.T, name, column string) *array.Array {
 	return a
 }
 
+// readerOf makes a reader for a column and fails the test if it cannot.
+func readerOf(t *testing.T, c parquet.Column) *parquet.ColumnReader {
+	t.Helper()
+
+	r, err := parquet.NewColumnReader(c)
+	if err != nil {
+		t.Fatalf("NewColumnReader: %v", err)
+	}
+	return r
+}
+
+// finish takes the array off a reader and fails the test if it cannot.
+func finish(t *testing.T, r *parquet.ColumnReader) *array.Array {
+	t.Helper()
+
+	a, err := r.Finish()
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	return a
+}
+
 // numbersOf checks a column of fixed width values against what the script that
 // wrote the file put in it. The third row of plain.parquet is missing in every
 // column, which is what makes it worth reading with the levels.
@@ -353,7 +375,7 @@ func TestReadColumnEmptyChunk(t *testing.T) {
 // cannot read yet.
 //
 // Each of them is a piece that is still to come rather than a file that is
-// wrong, so all four say so with the same error and none of them is read half
+// wrong, so all three say so with the same error and none of them is read half
 // way and handed back.
 func TestReadColumnRefused(t *testing.T) {
 	cases := []struct {
@@ -362,7 +384,6 @@ func TestReadColumnRefused(t *testing.T) {
 		column string
 	}{
 		{name: "a compressed chunk", file: "chunks.parquet", column: "code"},
-		{name: "a dictionary", file: "pages.parquet", column: "word"},
 		{name: "a repeated column", file: "nested.parquet", column: "tags.list.element"},
 		{name: "a decimal", file: "plain.parquet", column: "price"},
 	}
@@ -483,17 +504,14 @@ func missing() parquet.Column {
 // levels come out as a null: one says the row is missing and the other says
 // there is a value of a type that has none.
 func TestColumnReaderMissing(t *testing.T) {
-	r, err := parquet.NewColumnReader(missing())
-	if err != nil {
-		t.Fatalf("NewColumnReader: %v", err)
-	}
+	r := readerOf(t, missing())
 
 	// Two levels of one and then two of nought.
 	if err := r.Page(withValues(pageV1([]byte{0x04, 0x01, 0x04, 0x00}), 4)); err != nil {
 		t.Fatalf("Page: %v", err)
 	}
 
-	a := r.Finish()
+	a := finish(t, r)
 	if a.Len() != 4 || a.NullCount() != 4 {
 		t.Fatalf("%d values, %d null", a.Len(), a.NullCount())
 	}
@@ -517,10 +535,7 @@ func withValues(p parquet.Page, n int32) parquet.Page {
 // in front of them: how many bytes they take follows from how many values the
 // page holds, so a reader that guessed would take the first value as a level.
 func TestColumnReaderPackedLevels(t *testing.T) {
-	r, err := parquet.NewColumnReader(optional())
-	if err != nil {
-		t.Fatalf("NewColumnReader: %v", err)
-	}
+	r := readerOf(t, optional())
 
 	// Five values, the middle one missing, at one bit each packed from the top
 	// of the byte down. That is one byte with three bits of padding.
@@ -542,7 +557,7 @@ func TestColumnReaderPackedLevels(t *testing.T) {
 		t.Fatalf("Page: %v", err)
 	}
 
-	a := r.Finish()
+	a := finish(t, r)
 	if a.Len() != 5 || a.NullCount() != 1 || !a.IsNull(2) {
 		t.Fatalf("%d values, %d null", a.Len(), a.NullCount())
 	}
@@ -555,10 +570,7 @@ func TestColumnReaderPackedLevels(t *testing.T) {
 // TestColumnReaderReuse reads two chunks of the same column with one reader,
 // which is what a scan over a file of many row groups does.
 func TestColumnReaderReuse(t *testing.T) {
-	r, err := parquet.NewColumnReader(optional())
-	if err != nil {
-		t.Fatalf("NewColumnReader: %v", err)
-	}
+	r := readerOf(t, optional())
 
 	// A repeat of two ones, so both values are present.
 	for _, want := range [][]int32{{1, 2}, {3, 4}} {
@@ -569,7 +581,7 @@ func TestColumnReaderReuse(t *testing.T) {
 			t.Fatalf("got %d values, want 2", r.Len())
 		}
 
-		a := r.Finish()
+		a := finish(t, r)
 		if got := a.Values[int32](); !slices.Equal(got, want) {
 			t.Errorf("got %v, want %v", got, want)
 		}
@@ -701,10 +713,7 @@ func TestColumnReaderRefusedPages(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r, err := parquet.NewColumnReader(optional())
-			if err != nil {
-				t.Fatalf("NewColumnReader: %v", err)
-			}
+			r := readerOf(t, optional())
 			if err := r.Page(c.page); !errors.Is(err, c.want) {
 				t.Errorf("got %v, want %v", err, c.want)
 			}
@@ -744,10 +753,7 @@ func TestColumnReaderShortValues(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r, err := parquet.NewColumnReader(c.column)
-			if err != nil {
-				t.Fatalf("NewColumnReader: %v", err)
-			}
+			r := readerOf(t, c.column)
 
 			page := parquet.Page{
 				PageHeader: parquet.PageHeader{
@@ -777,10 +783,7 @@ func TestColumnReaderDeepLevel(t *testing.T) {
 	deep := optional()
 	deep.MaxDefinition = 2
 
-	r, err := parquet.NewColumnReader(deep)
-	if err != nil {
-		t.Fatalf("NewColumnReader: %v", err)
-	}
+	r := readerOf(t, deep)
 	if err := r.Page(pageV1([]byte{0x04, 0x03}, 1, 2)); !errors.Is(err, parquet.ErrFormat) {
 		t.Errorf("got %v, want %v", err, parquet.ErrFormat)
 	}
@@ -793,10 +796,7 @@ func TestColumnReaderDeepLevel(t *testing.T) {
 // to, so a page that disagrees with itself is a page that was read wrong, and
 // there is nothing else in the format that would catch it.
 func TestColumnReaderNullCount(t *testing.T) {
-	r, err := parquet.NewColumnReader(optional())
-	if err != nil {
-		t.Fatalf("NewColumnReader: %v", err)
-	}
+	r := readerOf(t, optional())
 
 	levels := []byte{0x04, 0x01}
 	body := append(slices.Clone(levels), 1, 0, 0, 0, 2, 0, 0, 0)
@@ -821,10 +821,7 @@ func TestColumnReaderNullCount(t *testing.T) {
 // to take from it, and refusing a chunk for holding one would refuse a file
 // that is not wrong.
 func TestColumnReaderIndexPage(t *testing.T) {
-	r, err := parquet.NewColumnReader(optional())
-	if err != nil {
-		t.Fatalf("NewColumnReader: %v", err)
-	}
+	r := readerOf(t, optional())
 
 	page := parquet.Page{PageHeader: parquet.PageHeader{Kind: parquet.IndexPage}}
 	if err := r.Page(page); err != nil {

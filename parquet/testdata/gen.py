@@ -262,6 +262,61 @@ def pages():
     )
 
 
+def dictionary():
+    """A column of more distinct values than a few bits of index can hold.
+
+    pages.parquet already has a dictionary in front of a column of four words,
+    which is two bit indices, and alltypes has columns of one distinct value,
+    which is nought bit indices and no bytes at all. This is the other end.
+    Three hundred distinct values needs nine bits, so the indices are packed
+    across byte boundaries and a value is read out of two of them, and there
+    are enough rows for several pages of them.
+
+    The nullable column is the two halves together, since the indices are only
+    written for the rows that have a value and the levels are the only thing
+    that says which those are.
+    """
+    rows = 1000
+    table = pa.table(
+        {
+            "code": pa.array(["c%03d" % (i % 300) for i in range(rows)], pa.string()),
+            "size": pa.array([None if i % 7 == 0 else i % 300 for i in range(rows)], pa.int64()),
+        }
+    )
+    pq.write_table(
+        table,
+        "dictionary.parquet",
+        compression="none",
+        version="2.6",
+        data_page_size=1024,
+        write_batch_size=100,
+        write_statistics=False,
+        store_schema=False,
+    )
+
+
+def fallback():
+    """A chunk that starts as indices into a dictionary and gives up half way.
+
+    A writer keeps a dictionary while the distinct values fit in one page of
+    them and writes plain pages for the rest of the chunk once they do not, so
+    the chunk is indices at the front and values at the back. Every value here
+    is distinct and the limit is small, so the writer runs out early.
+    """
+    rows = 2000
+    table = pa.table({"code": pa.array(["value-%06d" % i for i in range(rows)], pa.string())})
+    pq.write_table(
+        table,
+        "fallback.parquet",
+        compression="none",
+        version="2.6",
+        dictionary_pagesize_limit=1024,
+        data_page_size=1024,
+        write_statistics=False,
+        store_schema=False,
+    )
+
+
 def legacy():
     """Timestamps as int96, which is how parquet wrote them before it had a type.
 
@@ -309,9 +364,12 @@ if __name__ == "__main__":
     chunks()
     nested()
     pages()
+    dictionary()
+    fallback()
     legacy()
     empty()
     print(
         "wrote alltypes.parquet, plain.parquet, chunks.parquet, nested.parquet, "
-        "pages.parquet, legacy.parquet and empty.parquet"
+        "pages.parquet, dictionary.parquet, fallback.parquet, legacy.parquet and "
+        "empty.parquet"
     )
