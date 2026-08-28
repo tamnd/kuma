@@ -30,3 +30,6 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Python leaves these behind next to the cross check scripts.
+__pycache__/

@@ -26,7 +26,7 @@ import (
 //
 // Every message here is one batch on its own, which is what pyarrow's serialize
 // and read_record_batch pass around. The stream that puts a schema in front of
-// several of them is the next thing to write.
+// several of them is checked next door.
 //
 // It skips when there is no python3 with pyarrow in it, since that is a large
 // dependency to ask of somebody running the tests. CI installs it, so the check
