@@ -324,7 +324,7 @@ func TestDecompressorRefused(t *testing.T) {
 	short := []byte("a body worth compressing, compressing, compressing")
 	block := snappied(short[:30])
 
-	levelled := func(rep, def, size int32) parquet.Page {
+	withLevels := func(rep, def, size int32) parquet.Page {
 		p := compressedPage(block, len(block))
 		p.Kind = parquet.DataPageV2
 		p.RepetitionLength, p.DefinitionLength = rep, def
@@ -371,15 +371,15 @@ func TestDecompressorRefused(t *testing.T) {
 	}, {
 		name:  "a page whose levels take a negative number of bytes",
 		codec: parquet.Snappy,
-		page:  levelled(-4, 0, 30),
+		page:  withLevels(-4, 0, 30),
 	}, {
 		name:  "a page whose levels take more bytes than it has",
 		codec: parquet.Snappy,
-		page:  levelled(0, int32(len(block)+1), 30),
+		page:  withLevels(0, int32(len(block)+1), 30),
 	}, {
 		name:  "a page that comes to fewer bytes than its levels take",
 		codec: parquet.Snappy,
-		page:  levelled(0, 8, 4),
+		page:  withLevels(0, 8, 4),
 	}, {
 		// The two of these are the size being refused before a buffer is made
 		// for it rather than after. A page of thirty bytes saying it comes to a
