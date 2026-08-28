@@ -66,6 +66,14 @@
 // on most types. ReadBounds is that rule, and FileReader.Bounds is it applied to
 // a row group.
 //
+// The page index is the same idea one level down. A writer that was asked for
+// one writes the bounds of every page and the whereabouts of every page into two
+// structures at the end of the file, so a scan that cannot skip a row group can
+// still tell which of its pages a filter would keep. They are read a column at a
+// time, because they are not in the footer and a scan filtering on one column of
+// two hundred has no reason to read the index of the rest. ReadPageBounds is the
+// two of them together and FileReader.PageBounds is it applied to a row group.
+//
 // Decompressor is what undoes the compression of a page on the way through.
 // Nearly every parquet file in the world is compressed and the codec is a
 // property of a column chunk rather than of the file, so one file may hold a

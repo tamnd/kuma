@@ -470,3 +470,77 @@ func enums[T ~int32](r *reader, t thriftType) ([]T, error) {
 	}
 	return out, nil
 }
+
+// binaries reads a list of binary values, each of which points into the buffer
+// the way a single one does.
+func binaries(r *reader, t thriftType) ([][]byte, error) {
+	n, elem, err := r.listHeader(t)
+	if err != nil {
+		return nil, err
+	}
+	if n > 0 && elem != thriftBinary {
+		return nil, fmt.Errorf("parquet: %w: a list of %s where a list of values was written",
+			ErrFormat, elem)
+	}
+
+	out := make([][]byte, 0, min(n, 64))
+	for range n {
+		v, err := r.bytes(thriftBinary)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// flags reads a list of bools.
+//
+// A bool inside a list is a byte of its own rather than something the field
+// header carried, since a list has one header for all of its elements. The two
+// bytes it may be are the two types a bool is written as when it is a field,
+// which is the one oddity of the protocol showing through twice.
+func flags(r *reader, t thriftType) ([]bool, error) {
+	n, elem, err := r.listHeader(t)
+	if err != nil {
+		return nil, err
+	}
+	if n > 0 && elem != thriftTrue && elem != thriftFalse {
+		return nil, fmt.Errorf("parquet: %w: a list of %s where a list of bools was written",
+			ErrFormat, elem)
+	}
+
+	out := make([]bool, 0, min(n, 64))
+	for range n {
+		b, err := r.next()
+		if err != nil {
+			return nil, err
+		}
+		v, err := r.boolean(thriftType(b))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// longs reads a list of integers of any width, the same way a single one is
+// read: the width is what the writer called it rather than something a reader
+// has to agree with.
+func longs(r *reader, t thriftType) ([]int64, error) {
+	n, elem, err := r.listHeader(t)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]int64, 0, min(n, 64))
+	for range n {
+		v, err := r.integer(elem)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}

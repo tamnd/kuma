@@ -81,6 +81,10 @@ func TestNames(t *testing.T) {
 		{"the absent column order", UndefinedOrder.String(), "none"},
 		{"the order the format defines", TypeDefinedOrder.String(), "type_defined_order"},
 
+		{"pages in no order", Unordered.String(), "unordered"},
+		{"pages running up", Ascending.String(), "ascending"},
+		{"pages running down", Descending.String(), "descending"},
+
 		{"the stop type", thriftStop.String(), "stop"},
 		{"a thrift struct", thriftStruct.String(), "struct"},
 		{"a thrift map", thriftMap.String(), "map"},
@@ -120,6 +124,8 @@ func TestUnknownNames(t *testing.T) {
 		{TimeUnit(99).String(), "unit 99"},
 		{ColumnOrder(-1).String(), "column order -1"},
 		{ColumnOrder(99).String(), "column order 99"},
+		{BoundaryOrder(-1).String(), "boundary order -1"},
+		{BoundaryOrder(99).String(), "boundary order 99"},
 		{thriftType(99).String(), "type 99"},
 	}
 
@@ -156,6 +162,7 @@ func TestNamesAreNames(t *testing.T) {
 		{"logical type", logicalNames[:], int(NoLogical)},
 		{"unit", unitNames[:], int(NoUnit)},
 		{"column order", orderNames[:], int(UndefinedOrder)},
+		{"boundary order", boundaryNames[:], int(Unordered)},
 		{"thrift type", thriftNames[:], int(thriftStop)},
 	}
 

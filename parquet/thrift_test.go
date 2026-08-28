@@ -765,6 +765,112 @@ func TestEnums(t *testing.T) {
 	}
 }
 
+func TestBinaries(t *testing.T) {
+	w := (&builder{}).list(3, thriftBinary).binary("one").binary("").binary("three")
+	got, err := binaries(w.reader(), thriftList)
+	if err != nil {
+		t.Fatalf("binaries: %v", err)
+	}
+	want := []string{"one", "", "three"}
+	if len(got) != len(want) {
+		t.Fatalf("binaries read %d values, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if string(got[i]) != want[i] {
+			t.Errorf("value %d is %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	w = (&builder{}).list(2, thriftInt32).varint(1).varint(2)
+	if _, err := binaries(w.reader(), thriftList); !errors.Is(err, ErrFormat) {
+		t.Errorf("a list of ints read as values = %v, want a format error", err)
+	}
+	w = (&builder{}).list(3, thriftBinary).binary("one")
+	if _, err := binaries(w.reader(), thriftList); !errors.Is(err, ErrFormat) {
+		t.Errorf("a list that stops partway = %v, want a format error", err)
+	}
+	if _, err := binaries((&builder{}).reader(), thriftBinary); !errors.Is(err, ErrFormat) {
+		t.Errorf("a value read as a list of them = %v, want a format error", err)
+	}
+}
+
+func TestFlags(t *testing.T) {
+	w := (&builder{}).list(3, thriftTrue).raw(byte(thriftTrue), byte(thriftFalse), byte(thriftTrue))
+	got, err := flags(w.reader(), thriftList)
+	if err != nil {
+		t.Fatalf("flags: %v", err)
+	}
+	want := []bool{true, false, true}
+	if len(got) != len(want) {
+		t.Fatalf("flags read %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("flag %d is %v, want %v", i, got[i], want[i])
+		}
+	}
+
+	// A writer that called the elements false and wrote true ones is writing
+	// what the reader reads: the type in the list header says a bool is coming
+	// and the byte itself says which one.
+	w = (&builder{}).list(1, thriftFalse).raw(byte(thriftTrue))
+	if got, err := flags(w.reader(), thriftList); err != nil || len(got) != 1 || !got[0] {
+		t.Errorf("a list of bools headed false read as %v, %v, want one true", got, err)
+	}
+
+	w = (&builder{}).list(2, thriftBinary).binary("a").binary("b")
+	if _, err := flags(w.reader(), thriftList); !errors.Is(err, ErrFormat) {
+		t.Errorf("a list of strings read as bools = %v, want a format error", err)
+	}
+	w = (&builder{}).list(3, thriftTrue).raw(byte(thriftTrue))
+	if _, err := flags(w.reader(), thriftList); !errors.Is(err, ErrFormat) {
+		t.Errorf("a list that stops partway = %v, want a format error", err)
+	}
+	w = (&builder{}).list(1, thriftTrue).raw(byte(thriftDouble))
+	if _, err := flags(w.reader(), thriftList); !errors.Is(err, ErrFormat) {
+		t.Errorf("a byte that is not a bool = %v, want a format error", err)
+	}
+	if _, err := flags((&builder{}).reader(), thriftTrue); !errors.Is(err, ErrFormat) {
+		t.Errorf("a bool read as a list of them = %v, want a format error", err)
+	}
+}
+
+func TestLongs(t *testing.T) {
+	w := (&builder{}).list(3, thriftInt64).varint(0).varint(-1).varint(1 << 40)
+	got, err := longs(w.reader(), thriftList)
+	if err != nil {
+		t.Fatalf("longs: %v", err)
+	}
+	want := []int64{0, -1, 1 << 40}
+	if len(got) != len(want) {
+		t.Fatalf("longs read %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("integer %d is %d, want %d", i, got[i], want[i])
+		}
+	}
+
+	// The width is what the writer called it. A count that fits in a byte is
+	// written in one by a writer that bothers, and read as the same number.
+	w = (&builder{}).list(2, thriftInt8).raw(7, 0xff)
+	if got, err := longs(w.reader(), thriftList); err != nil || len(got) != 2 || got[0] != 7 || got[1] != -1 {
+		t.Errorf("a list of bytes read as %v, %v, want 7 and -1", got, err)
+	}
+
+	w = (&builder{}).list(1, thriftBinary).binary("one")
+	if _, err := longs(w.reader(), thriftList); !errors.Is(err, ErrFormat) {
+		t.Errorf("a list of strings read as integers = %v, want a format error", err)
+	}
+	w = (&builder{}).list(3, thriftInt64).varint(1)
+	if _, err := longs(w.reader(), thriftList); !errors.Is(err, ErrFormat) {
+		t.Errorf("a list that stops partway = %v, want a format error", err)
+	}
+	if _, err := longs((&builder{}).reader(), thriftInt64); !errors.Is(err, ErrFormat) {
+		t.Errorf("an integer read as a list of them = %v, want a format error", err)
+	}
+}
+
 // TestMetadataPrefixes reads every prefix of a real footer.
 //
 // A footer arrives as somebody else's bytes and half of one is the shape they

@@ -563,6 +563,58 @@ def stats():
     )
 
 
+def index():
+    """Pages a scan can tell apart without reading them.
+
+    Two row groups of two hundred rows and a batch size that puts a hundred rows
+    in every page, so each group holds two pages of each column and the page
+    boundaries are where they can be checked against. The columns are written to
+    give the boundary order all three of its values: one runs up, one runs down,
+    and one holds a page whose values are on both sides of the page before it,
+    which is neither. The nullable one is missing for the whole of the second
+    page of each group, which is how a page the index calls null gets written at
+    all, and it is the reason the null counts are there.
+
+    Written with the page index on, which pyarrow does not do unless it is
+    asked, and with the second version of the data page so that the null counts
+    in the index can be checked against the ones in the page headers.
+    """
+    rows = 400
+    schema = pa.schema(
+        [
+            pa.field("n", pa.int32(), nullable=False),
+            pa.field("down", pa.int32(), nullable=False),
+            pa.field("wave", pa.int32(), nullable=False),
+            pa.field("word", pa.string(), nullable=False),
+            pa.field("gap", pa.int64()),
+        ]
+    )
+    table = pa.table(
+        {
+            "n": list(range(rows)),
+            "down": list(range(rows - 1, -1, -1)),
+            "wave": [10 + i % 11 if i // 100 % 2 == 0 else i % 31 for i in range(rows)],
+            "word": ["w%04d" % i for i in range(rows)],
+            "gap": [None if i % 200 >= 100 else i for i in range(rows)],
+        },
+        schema=schema,
+    )
+    pq.write_table(
+        table,
+        "index.parquet",
+        compression="none",
+        row_group_size=200,
+        version="2.6",
+        data_page_version="2.0",
+        data_page_size=64,
+        write_batch_size=100,
+        use_dictionary=False,
+        write_statistics=True,
+        write_page_index=True,
+        store_schema=False,
+    )
+
+
 def empty():
     """A file with a schema and no rows, which still has a footer."""
     schema = pa.schema([pa.field("id", pa.int64()), pa.field("label", pa.string())])
@@ -582,10 +634,11 @@ if __name__ == "__main__":
     codecs()
     legacy()
     stats()
+    index()
     empty()
     print(
         "wrote alltypes.parquet, plain.parquet, chunks.parquet, nested.parquet, "
         "pages.parquet, dictionary.parquet, fallback.parquet, delta.parquet, "
         "strings.parquet, codecs.parquet, codecs2.parquet, legacy.parquet, "
-        "stats.parquet and empty.parquet"
+        "stats.parquet, index.parquet and empty.parquet"
     )
