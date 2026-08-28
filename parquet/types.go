@@ -388,3 +388,33 @@ func (o ColumnOrder) String() string {
 	}
 	return orderNames[o]
 }
+
+// BoundaryOrder is whether the pages of a column chunk are in order, which is
+// what lets a scan stop looking rather than look at every page.
+//
+// A writer that wrote its rows sorted says so here, and a reader looking for one
+// value in an ascending column can find the page it would be in by halving
+// rather than by walking. A writer that did not sort says unordered, which is
+// the zero value and what nearly every file holds.
+type BoundaryOrder int32
+
+// The boundary orders.
+const (
+	Unordered BoundaryOrder = iota
+	Ascending
+	Descending
+)
+
+var boundaryNames = [...]string{
+	Unordered:  "unordered",
+	Ascending:  "ascending",
+	Descending: "descending",
+}
+
+// String returns the name the format gives the order, lowercased.
+func (o BoundaryOrder) String() string {
+	if o < 0 || int(o) >= len(boundaryNames) {
+		return fmt.Sprintf("boundary order %d", int32(o))
+	}
+	return boundaryNames[o]
+}
