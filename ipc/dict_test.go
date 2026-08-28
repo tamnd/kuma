@@ -157,7 +157,7 @@ func TestStreamDictionaryReplaced(t *testing.T) {
 // one on either side of it. The columns of a batch are written in order and the
 // dictionaries are written in front of the batch, so a writer that matched the
 // two up by counting would put the values of the middle column under the
-// identifier of one of its neighbours.
+// identifier of one of its neighbors.
 func TestStreamDictionaryMixed(t *testing.T) {
 	values := array.OfStrings("GB", "JP", "US")
 	s := mixedSchema()

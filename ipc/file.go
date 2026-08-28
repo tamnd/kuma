@@ -176,26 +176,14 @@ func (w *FileWriter) Write(b Batch) error {
 		return err
 	}
 
-	if err = w.writeValues(values); err != nil {
-		return err
-	}
-
-	at, err := blockOf(w.at, msg)
-	if err != nil {
-		return err
-	}
-	if err := w.write(msg); err != nil {
-		return err
-	}
-	w.batches = append(w.batches, at)
-	return nil
+	return w.writeBatch(values, msg)
 }
 
-// writeValues writes the dictionary messages that go in front of a batch and
-// remembers where each of them went. They are blocks in the footer of their own
-// rather than batches, since a reader needs all of them before it reads
-// anything and none of them are rows.
-func (w *FileWriter) writeValues(values []dictMessage) error {
+// writeBatch writes the dictionary messages that go in front of a batch, then
+// the batch itself, and remembers where each of them went. The dictionaries are
+// blocks in the footer of their own rather than batches, since a reader needs
+// all of them before it reads anything and none of them are rows.
+func (w *FileWriter) writeBatch(values []dictMessage, msg []byte) error {
 	for _, d := range values {
 		at, err := blockOf(w.at, d.msg)
 		if err != nil {
@@ -207,6 +195,15 @@ func (w *FileWriter) writeValues(values []dictMessage) error {
 		w.values = append(w.values, at)
 		w.dicts.done(d)
 	}
+
+	at, err := blockOf(w.at, msg)
+	if err != nil {
+		return err
+	}
+	if err := w.write(msg); err != nil {
+		return err
+	}
+	w.batches = append(w.batches, at)
 	return nil
 }
 

@@ -82,8 +82,8 @@ func encodeDictionaryBatch(id int64, values *array.Array) ([]byte, error) {
 // batch table a record batch message would hold with the identifier wrapped
 // around it.
 //
-// isDelta is left at false, since these are the values of the dictionary rather
-// than values to add to it.
+// The delta flag is left at false, since these are the values of the dictionary
+// rather than values to add to it.
 func encodeDictionaryMessage(id int64, length int, nodes, buffers []span, variadic []int64, bodyLength int) []byte {
 	var w fbBuilder
 	data := recordBatch(&w, length, nodes, buffers, variadic)
