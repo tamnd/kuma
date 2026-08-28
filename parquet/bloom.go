@@ -32,23 +32,20 @@ import (
 // configurable, and a file that says it used something else is refused rather
 // than read the only way this reader knows.
 
-// The shape of a split block bloom filter, which is what the format calls the
-// one algorithm it defines.
-const (
-	// bloomBlock is the bytes in a block, which is eight words of four. A value
-	// touches one block and no other, which is what makes a lookup one cache
-	// line rather than eight scattered bits.
-	bloomBlock = 32
+// bloomBlock is the bytes in a block of a split block bloom filter, which is
+// what the format calls the one algorithm it defines. A block is eight words of
+// four bytes, and a value touches one block and no other, which is what makes a
+// lookup one cache line rather than eight scattered bits.
+const bloomBlock = 32
 
-	// bloomWords is the words in a block, and so the bits a value sets.
-	bloomWords = 8
+// bloomWords is the words in a block, and so the bits a value sets.
+const bloomWords = 8
 
-	// bloomHeaderMax is how much of the file is read to find a header that has
-	// no length in front of it. The header is fifteen bytes in every file
-	// anybody has written, being a number and three empty structures, so this
-	// is room for a writer that adds to it.
-	bloomHeaderMax = 128
-)
+// bloomHeaderMax is how much of the file is read to find a header that has no
+// length in front of it. The header is fifteen bytes in every file anybody has
+// written, being a number and three empty structures, so this is room for a
+// writer that adds to it.
+const bloomHeaderMax = 128
 
 // The eight odd constants the format multiplies a hash by, one per word of a
 // block. They are what turns one hash into eight bits that are not the same bit
@@ -162,16 +159,12 @@ func ReadBloomFilter(r io.ReaderAt, size int64, c *ColumnChunk) (*BloomFilter, e
 		return nil, err
 	}
 
-	var h bloomHeader
-	head := &reader{buf: buf}
-	if err = h.read(head); err != nil {
-		return nil, fmt.Errorf("parquet: the bloom filter of %s: %w", name, err)
-	}
-	if err = h.usable(name); err != nil {
+	h, read, err := readBloomHeader(buf, name)
+	if err != nil {
 		return nil, err
 	}
 
-	n, used := int64(h.numBytes), int64(head.pos)
+	n, used := int64(h.numBytes), int64(read)
 	if n <= 0 || n%bloomBlock != 0 {
 		return nil, fmt.Errorf("parquet: %w: the bloom filter of %s is %d bytes, which is not whole blocks of %d",
 			ErrFormat, name, n, bloomBlock)
@@ -229,6 +222,25 @@ type bloomHeader struct {
 	uncompressed bool
 }
 
+// readBloomHeader reads the header out of the front of what was read, and says
+// how many bytes of it the header took, the bitset starting where it stopped.
+//
+// A header naming something this package cannot look a value up in is refused
+// here rather than by the caller, since a filter that cannot be used is not a
+// filter to carry around and fall over later.
+func readBloomHeader(buf []byte, name string) (bloomHeader, int, error) {
+	var h bloomHeader
+	r := &reader{buf: buf}
+
+	if err := h.read(r); err != nil {
+		return h, 0, fmt.Errorf("parquet: the bloom filter of %s: %w", name, err)
+	}
+	if err := h.usable(name); err != nil {
+		return h, 0, err
+	}
+	return h, r.pos, nil
+}
+
 // read fills in the header from the file.
 func (h *bloomHeader) read(r *reader) error {
 	return r.fields(func(id int16, t thriftType) error {
@@ -270,10 +282,10 @@ func (h *bloomHeader) usable(name string) error {
 // member reads a thrift union and says whether the member written is the one
 // wanted.
 //
-// A union is a struct with one field set, and which field it is is the whole of
-// what it says. Reading past a member this package does not know is what lets
-// the header be read at all, since refusing is the caller's to do once it knows
-// which of the three it was.
+// A union is a struct with one field set, and the whole of what it says is
+// which field that is. Reading past a member this package does not know is what
+// lets the header be read at all, since refusing is the caller's to do once it
+// knows which of the three it was.
 func member(r *reader, t thriftType, want int16) (bool, error) {
 	if t != thriftStruct {
 		return false, fmt.Errorf("parquet: %w: a union written as a %s", ErrFormat, t)
