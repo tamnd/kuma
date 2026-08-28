@@ -1359,18 +1359,355 @@ func TestCastDictionaryNotYet(t *testing.T) {
 }
 
 // TestCastToDictionary is encoding a plain column, which is the other half of
-// this and is not written yet. It is worth a test because the error has to say
-// so rather than the cast quietly producing something else.
+// this. The distinct values become the dictionary in the order they were met
+// and every row becomes an index into it.
 func TestCastToDictionary(t *testing.T) {
-	c := col(t, dtype.String, []any{"de", "fr", "de"})
+	c := col(t, dtype.String, []any{"de", "fr", "de", nil, "it", "fr"})
 
-	to := dtype.Dictionary{Index: dtype.Int32, Value: dtype.String}
+	got, err := kernel.Cast(c, codeType)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if !dtype.Equal(got.DType(), codeType) {
+		t.Fatalf("the result is a %s column, want %s", got.DType(), codeType)
+	}
+	wantCodes(t, got, "de", "fr", "de", "", "it", "fr")
+
+	d := got.Chunk(0).Dictionary()
+	if d.Len() != 3 {
+		t.Fatalf("the dictionary holds %d values, want 3", d.Len())
+	}
+	for i, w := range []string{"de", "fr", "it"} {
+		if have := string(d.Bytes(i)); have != w {
+			t.Errorf("dictionary value %d is %q, want %q", i, have, w)
+		}
+	}
+}
+
+// TestCastToDictionaryNulls is the decision about where a missing row goes. It
+// gets no index rather than an index pointing at a missing value, so the
+// dictionary holds no nulls and the fast paths that want it to hold none apply.
+func TestCastToDictionaryNulls(t *testing.T) {
+	c := col(t, dtype.String, []any{nil, "de", nil, "de"})
+
+	got, err := kernel.Cast(c, codeType)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	wantCodes(t, got, "", "de", "", "de")
+
+	if d := got.Chunk(0).Dictionary(); d.NullCount() != 0 || d.Len() != 1 {
+		t.Errorf("the dictionary holds %d values and %d nulls, want 1 and 0", d.Len(), d.NullCount())
+	}
+	if got.NullCount() != 2 {
+		t.Errorf("the column counts %d nulls, want 2", got.NullCount())
+	}
+}
+
+// TestCastToDictionaryAllNull is a column with nothing in it but missing rows,
+// which has no value to put in the dictionary and still has rows.
+func TestCastToDictionaryAllNull(t *testing.T) {
+	c := col(t, dtype.String, []any{nil, nil, nil})
+
+	got, err := kernel.Cast(c, codeType)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if got.Len() != 3 || got.NullCount() != 3 {
+		t.Errorf("the result has %d values and %d nulls, want 3 and 3", got.Len(), got.NullCount())
+	}
+	if d := got.Chunk(0).Dictionary(); d.Len() != 0 {
+		t.Errorf("the dictionary holds %d values, want none", d.Len())
+	}
+}
+
+// TestCastToDictionaryChunks keeps the chunking it was given, and the chunks
+// read from the one dictionary, which is what makes a group by over the result
+// key its rows by their indices alone.
+func TestCastToDictionaryChunks(t *testing.T) {
+	c := col(t, dtype.String,
+		[]any{"de", "fr"},
+		[]any{"fr", nil, "it"})
+
+	got, err := kernel.Cast(c, codeType)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if got.NumChunks() != 2 {
+		t.Fatalf("the result has %d chunks, want 2", got.NumChunks())
+	}
+	if a, b := got.Chunk(0).Dictionary(), got.Chunk(1).Dictionary(); a != b {
+		t.Error("the chunks read from two dictionaries, want the one")
+	}
+	wantCodes(t, got, "de", "fr", "fr", "", "it")
+}
+
+// TestCastToDictionaryIndexTypes encodes once per index type, since writing the
+// indices is a case per width and a missing one would be found by whoever asked
+// for the narrow index a small column deserves.
+func TestCastToDictionaryIndexTypes(t *testing.T) {
+	for _, index := range []dtype.DataType{
+		dtype.Int8, dtype.Int16, dtype.Int32, dtype.Int64,
+		dtype.Uint8, dtype.Uint16, dtype.Uint32, dtype.Uint64,
+	} {
+		t.Run(index.String(), func(t *testing.T) {
+			c := col(t, dtype.String, []any{"de", "fr", nil, "de"})
+
+			to := dtype.Dictionary{Index: index, Value: dtype.String}
+			got, err := kernel.Cast(c, to)
+			if err != nil {
+				t.Fatalf("Cast: %v", err)
+			}
+			if k := got.Chunk(0).Indices().DType(); !dtype.Equal(k, index) {
+				t.Errorf("the result is indexed by %s, want %s", k, index)
+			}
+			wantCodes(t, got, "de", "fr", "", "de")
+		})
+	}
+}
+
+// TestCastToDictionaryTooMany is a column holding more distinct values than the
+// index type can name. It is an error rather than a wrap, and it is found while
+// the values are being counted rather than after they are all copied.
+func TestCastToDictionaryTooMany(t *testing.T) {
+	values := make([]any, 200)
+	for i := range values {
+		values[i] = strings.Repeat("a", i+1)
+	}
+	c := col(t, dtype.String, values)
+
+	to := dtype.Dictionary{Index: dtype.Int8, Value: dtype.String}
 	_, err := kernel.Cast(c, to)
 	if err == nil {
-		t.Fatal("the cast encoded a plain column")
+		t.Fatal("the cast numbered two hundred values in an int8")
 	}
-	if !strings.Contains(err.Error(), "not implemented yet") {
-		t.Errorf("Cast said %q, want it to say the cast is not written yet", err)
+	if !strings.Contains(err.Error(), "can name") {
+		t.Errorf("Cast said %q, want it to say what an int8 can name", err)
+	}
+}
+
+// TestCastToDictionaryIndexNotInteger is a destination whose index cannot be a
+// position, which is a mistake in the type rather than in the data.
+func TestCastToDictionaryIndexNotInteger(t *testing.T) {
+	c := col(t, dtype.String, []any{"de"})
+
+	to := dtype.Dictionary{Index: dtype.String, Value: dtype.String}
+	_, err := kernel.Cast(c, to)
+	if err == nil {
+		t.Fatal("the cast indexed a dictionary by a string")
+	}
+	if !strings.Contains(err.Error(), "indexed by an integer") {
+		t.Errorf("Cast said %q, want it to say an index is an integer", err)
+	}
+}
+
+// TestCastToDictionaryValues encodes and casts at once, which is the shape a
+// Parquet reader asks for when the file says text and the schema says number.
+// The parsing happens after the encoding, so it is the distinct values that are
+// parsed and not the rows.
+func TestCastToDictionaryValues(t *testing.T) {
+	c := col(t, dtype.String, []any{"10", "20", "10", nil, "20"})
+
+	to := dtype.Dictionary{Index: dtype.Int16, Value: dtype.Int64}
+	got, err := kernel.Cast(c, to)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if !dtype.Equal(got.DType(), to) {
+		t.Fatalf("the result is a %s column, want %s", got.DType(), to)
+	}
+	if d := got.Chunk(0).Dictionary(); d.Len() != 2 {
+		t.Errorf("the dictionary holds %d values, want 2", d.Len())
+	}
+
+	want := []any{int64(10), int64(20), int64(10), nil, int64(20)}
+	for i, w := range want {
+		if have := valueAt(t, got, i); have != w {
+			t.Errorf("value %d is %v, want %v", i, have, w)
+		}
+	}
+}
+
+// TestCastToDictionaryBadValue is a value that will not cast, with the error
+// blaming the row that holds it rather than the position it was given in the
+// dictionary. Every value in a dictionary built here was put there by a row, so
+// the rule that lets an unused bad value pass does not come up.
+func TestCastToDictionaryBadValue(t *testing.T) {
+	c := col(t, dtype.String, []any{"1", "2", "n/a", "1"})
+
+	to := dtype.Dictionary{Index: dtype.Int32, Value: dtype.Int64}
+	_, err := kernel.Cast(c, to)
+	if err == nil {
+		t.Fatal("the cast took a value that is not a number")
+	}
+
+	var ce *kernel.CastError
+	if !errors.As(err, &ce) {
+		t.Fatalf("Cast returned %v, want a *CastError", err)
+	}
+	if ce.Row != 2 {
+		t.Errorf("the error blames row %d, want 2", ce.Row)
+	}
+	if !dtype.Equal(ce.From, dtype.String) {
+		t.Errorf("the error says the column is a %s, want string", ce.From)
+	}
+	if !dtype.Equal(ce.To, to) {
+		t.Errorf("the error says the cast was to %s, want %s", ce.To, to)
+	}
+}
+
+// TestTryCastToDictionary is the same bad value with the strictness turned off,
+// where it is encoded, fails to cast, and the row holding it comes out missing.
+func TestTryCastToDictionary(t *testing.T) {
+	c := col(t, dtype.String, []any{"1", "n/a", "2", "n/a"})
+
+	to := dtype.Dictionary{Index: dtype.Int32, Value: dtype.Int64}
+	got, err := kernel.TryCast(c, to)
+	if err != nil {
+		t.Fatalf("TryCast: %v", err)
+	}
+
+	want := []any{int64(1), nil, int64(2), nil}
+	for i, w := range want {
+		if have := valueAt(t, got, i); have != w {
+			t.Errorf("value %d is %v, want %v", i, have, w)
+		}
+	}
+}
+
+// TestCastToDictionaryFloats is the one place where encoding and grouping want
+// different answers. A group by folds negative zero into zero and every NaN
+// into one group, which is right for counting rows and wrong for storage, so
+// the encoding tells them apart bit for bit and gives them an entry each.
+func TestCastToDictionaryFloats(t *testing.T) {
+	neg := math.Copysign(0, -1)
+	c := col(t, dtype.Float64, []any{0.0, neg, 1.5, 0.0, neg})
+
+	got, err := kernel.Cast(c, dtype.Dictionary{Index: dtype.Int32, Value: dtype.Float64})
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if d := got.Chunk(0).Dictionary(); d.Len() != 3 {
+		t.Fatalf("the dictionary holds %d values, want 3", d.Len())
+	}
+
+	back, err := kernel.Cast(got, dtype.Float64)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	want := []float64{0, neg, 1.5, 0, neg}
+	for i, w := range want {
+		have := back.Value[float64](i)
+		if math.Signbit(have) != math.Signbit(w) || have != w {
+			t.Errorf("value %d is %v, want %v", i, have, w)
+		}
+	}
+}
+
+// TestCastToDictionaryNaN is the same question about NaN. Two rows holding the
+// same bits are one value and a row holding different ones is another, which is
+// what a round trip through the encoding has to give back.
+func TestCastToDictionaryNaN(t *testing.T) {
+	other := math.Float64frombits(math.Float64bits(math.NaN()) | 7)
+	c := col(t, dtype.Float64, []any{math.NaN(), other, math.NaN()})
+
+	got, err := kernel.Cast(c, dtype.Dictionary{Index: dtype.Int32, Value: dtype.Float64})
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if d := got.Chunk(0).Dictionary(); d.Len() != 2 {
+		t.Errorf("the dictionary holds %d values, want 2", d.Len())
+	}
+
+	back, err := kernel.Cast(got, dtype.Float64)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	for i, w := range []float64{math.NaN(), other, math.NaN()} {
+		if have := back.Value[float64](i); math.Float64bits(have) != math.Float64bits(w) {
+			t.Errorf("value %d is %x, want %x", i, math.Float64bits(have), math.Float64bits(w))
+		}
+	}
+}
+
+// TestCastToDictionaryFloat32 is the float32 half of the same thing, since the
+// four bytes of a float32 are written rather than the eight of the float64 it
+// would widen to.
+func TestCastToDictionaryFloat32(t *testing.T) {
+	neg := float32(math.Copysign(0, -1))
+	c := col(t, dtype.Float32, []any{float32(0), neg, float32(2.5), neg})
+
+	got, err := kernel.Cast(c, dtype.Dictionary{Index: dtype.Int32, Value: dtype.Float32})
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if d := got.Chunk(0).Dictionary(); d.Len() != 3 {
+		t.Errorf("the dictionary holds %d values, want 3", d.Len())
+	}
+}
+
+// TestCastToDictionaryNumbers encodes something that is not text, since nothing
+// in the encoding knows what a value is and this is the test that says so.
+func TestCastToDictionaryNumbers(t *testing.T) {
+	c := col(t, dtype.Int64, []any{int64(7), int64(7), int64(9)})
+
+	got, err := kernel.Cast(c, dtype.Dictionary{Index: dtype.Uint8, Value: dtype.Int64})
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if d := got.Chunk(0).Dictionary(); d.Len() != 2 {
+		t.Errorf("the dictionary holds %d values, want 2", d.Len())
+	}
+	for i, w := range []any{int64(7), int64(7), int64(9)} {
+		if have := valueAt(t, got, i); have != w {
+			t.Errorf("value %d is %v, want %v", i, have, w)
+		}
+	}
+}
+
+// TestCastToDictionaryEmpty is a column with no chunks in it, which has nothing
+// to encode and still has to come back as the type that was asked for.
+func TestCastToDictionaryEmpty(t *testing.T) {
+	c, err := array.NewChunked(dtype.String)
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+
+	got, err := kernel.Cast(c, codeType)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if got.Len() != 0 {
+		t.Errorf("the result has %d values, want none", got.Len())
+	}
+	if !dtype.Equal(got.DType(), codeType) {
+		t.Errorf("the result is a %s column, want %s", got.DType(), codeType)
+	}
+}
+
+// TestCastToDictionaryGroups is what the encoding is for as far as the rest of
+// this package is concerned. The dictionary holds no nulls and no duplicates,
+// which is the condition that lets a group by key the rows by their indices, so
+// grouping the encoded column has to give the same answer as grouping the
+// plain one.
+func TestCastToDictionaryGroups(t *testing.T) {
+	c := col(t, dtype.String, []any{"de", "fr", nil, "de", "it", nil})
+
+	got, err := kernel.Cast(c, codeType)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+
+	plain, err := kernel.GroupBy(c)
+	if err != nil {
+		t.Fatalf("GroupBy: %v", err)
+	}
+	encoded, err := kernel.GroupBy(got)
+	if err != nil {
+		t.Fatalf("GroupBy: %v", err)
+	}
+	if !slices.Equal(plain.IDs(), encoded.IDs()) {
+		t.Errorf("the encoded column groups as %v, want %v", encoded.IDs(), plain.IDs())
 	}
 }
 
@@ -1543,4 +1880,37 @@ func TestCastDictionarySliced(t *testing.T) {
 			t.Errorf("value %d of the encoded result is %v, want %v", i, have, w)
 		}
 	}
+}
+
+// BenchmarkCastToDictionary encodes a hundred thousand rows over two hundred
+// and fifty distinct values. The encode is a hash and a compare per row, which
+// is what finding the distinct values costs and is the price of the encoding.
+// The number case is the same encode and then a parse of the two hundred and
+// fifty, next to the parse of a hundred thousand the plain column pays.
+func BenchmarkCastToDictionary(b *testing.B) {
+	_, plain := benchDictParse(b)
+	text := dtype.Dictionary{Index: dtype.Int32, Value: dtype.String}
+	numbers := dtype.Dictionary{Index: dtype.Int32, Value: dtype.Int64}
+
+	b.Run("encode", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := kernel.Cast(plain, text); err != nil {
+				b.Fatalf("Cast: %v", err)
+			}
+		}
+	})
+	b.Run("number", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := kernel.Cast(plain, numbers); err != nil {
+				b.Fatalf("Cast: %v", err)
+			}
+		}
+	})
+	b.Run("parse", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := kernel.Cast(plain, dtype.Int64); err != nil {
+				b.Fatalf("Cast: %v", err)
+			}
+		}
+	})
 }

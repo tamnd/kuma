@@ -51,11 +51,16 @@ import (
 // carried a value over from another row group has not put anything wrong in the
 // rows.
 //
+// A cast to a dictionary type from a plain one encodes the column. The distinct
+// values become the dictionary in the order they were met and every row becomes
+// an index, a missing row gets no index rather than one pointing at a missing
+// value, and a column holding more values than the index type can name is an
+// error rather than a silent wrap. The values are cast after they are encoded,
+// so it is again the distinct ones that are converted and not the rows.
+//
 // Not yet: the calendar side of the temporal types, meaning a change of unit, a
 // formatted date and a parsed one. The decimals and the intervals are not here
-// either. Encoding a plain column as a dictionary is not here either, since
-// finding the distinct values is the grouping machinery rather than a value at a
-// time. Each of those is an error saying as much rather than a wrong answer.
+// either. Each of those is an error saying as much rather than a wrong answer.
 func Cast(c *array.Chunked, to dtype.DataType) (*array.Chunked, error) {
 	return cast(c, to, false)
 }
@@ -122,6 +127,12 @@ func cast(c *array.Chunked, to dtype.DataType, loose bool) (*array.Chunked, erro
 	// value means.
 	if d, ok := from.(dtype.Dictionary); ok {
 		return castDictionary(c, d, to, loose)
+	}
+
+	// Encoding a plain column is the other direction. The distinct values
+	// become the dictionary and every row becomes an index into it.
+	if d, ok := to.(dtype.Dictionary); ok {
+		return encodeColumn(c, d, loose)
 	}
 	conv, err := converter(from, to)
 	if err != nil {

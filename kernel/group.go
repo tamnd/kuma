@@ -207,8 +207,15 @@ func (k *key) appendRow(dst []byte, i int) []byte {
 
 // newKey returns the key over c, or an error if its values cannot be compared
 // for equality.
-func newKey(c *array.Chunked) (*key, error) {
-	bind, err := binderFor(c.DType())
+func newKey(c *array.Chunked) (*key, error) { return buildKey(c, binderFor) }
+
+// buildKey is newKey with a say in how a value is written.
+//
+// Encoding a column as a dictionary walks the rows the way a group by does and
+// wants a stronger question asked of each one, so it passes its own binder in
+// rather than growing a second copy of this.
+func buildKey(c *array.Chunked, binder func(dtype.DataType) (func(*array.Array) writer, error)) (*key, error) {
+	bind, err := binder(c.DType())
 	if err != nil {
 		return nil, err
 	}

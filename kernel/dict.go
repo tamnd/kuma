@@ -1,6 +1,8 @@
 package kernel
 
 import (
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 
@@ -51,6 +53,13 @@ import (
 // looks like is what the caller asked for: a cast to a plain type expands, and
 // a cast to another dictionary type keeps the encoding and casts the indices as
 // well.
+//
+// Building one is the other direction and the last thing in here. The distinct
+// values are found the way a group by finds its groups, since it is the same
+// question asked of the same rows, and what comes out is a dictionary with no
+// nulls and no duplicates in it. That is not an accident of the algorithm, it
+// is the shape the rest of this file has fast paths for and the shape a Parquet
+// writer has to be handed.
 
 // dictIndex returns where in its dictionary each row of a points, or nil when a
 // is not encoded at all. A row with no value gives minus one, whether it holds
@@ -642,4 +651,193 @@ func encodeChunk(a, values *array.Array, from, to dtype.Dictionary) (*array.Arra
 		panic("kernel: " + err.Error())
 	}
 	return out, nil
+}
+
+// encodeColumn encodes a column as a dictionary, which is the cast that turns a
+// column of a million country codes into two hundred and fifty strings and a
+// million indices.
+//
+// The distinct values are found the way a group by finds its groups, since it
+// is the same question asked of the same rows: a row holds a value some earlier
+// row already held, or it holds a new one. What comes out is a dictionary of
+// the values in the order they were met and an index per row saying which.
+//
+// The dictionary holds no nulls and no duplicates. A missing row has no index
+// rather than an index pointing at a missing value, and a value already met
+// gets the number it got the first time. That is the shape the rest of this
+// file has fast paths for, it is what lets a group by key the rows by their
+// indices alone, and it is what a Parquet writer has to be handed anyway.
+//
+// The values are encoded before they are cast, so casting a million rows of
+// text to a dictionary of numbers parses the two hundred and fifty distinct
+// strings once each rather than parsing a million.
+func encodeColumn(c *array.Chunked, to dtype.Dictionary, loose bool) (*array.Chunked, error) {
+	from := c.DType()
+	if !dtype.IsInteger(to.Index) {
+		return nil, fmt.Errorf("kernel: cannot cast %s to %s, a dictionary is indexed by an integer", from, to)
+	}
+
+	ids, first, err := distinctRows(c, dictLimit(to.Index), from, to)
+	if err != nil {
+		return nil, err
+	}
+
+	// A column of nothing but missing values has no value to put in the
+	// dictionary, and the rows still point nowhere the same way.
+	values := emptyOf(from)
+	if len(first) > 0 {
+		values = Take(c, first).Chunk(0)
+	}
+
+	enc := dtype.Dictionary{Index: to.Index, Value: from}
+	chunks := make([]*array.Array, 0, c.NumChunks())
+	row := 0
+	for _, a := range c.Chunks() {
+		chunks = append(chunks, indexChunk(to.Index, ids[row:row+a.Len()], values))
+		row += a.Len()
+	}
+
+	out := chunked(enc, chunks...)
+	if dtype.Equal(from, to.Value) {
+		return out, nil
+	}
+
+	// The values are cast now that there are only the distinct ones left, and
+	// the rows keep the indices they were just given. Every value in here was
+	// put there by a row, so a value that will not cast is one the column
+	// really holds and the rule the other direction makes room for does not
+	// come up.
+	out, err = castDictionary(out, enc, to, loose)
+	var ce *CastError
+	if errors.As(err, &ce) {
+		// The column the caller handed over was the plain one, and saying it
+		// was encoded would be describing a step rather than the cast.
+		ce.From, ce.To = from, to
+	}
+	return out, err
+}
+
+// distinctRows numbers each row of c by the value it holds, in the order the
+// values are met, with minus one for a row that holds none. It also returns the
+// first row each value was met at, which is where the dictionary is gathered
+// from.
+//
+// The map is keyed by the encoded bytes of the value, and looking a byte slice
+// up in a map keyed by strings does not copy it, so a row holding a value that
+// has already been met costs a hash and a compare and nothing else.
+func distinctRows(c *array.Chunked, limit int, from dtype.DataType, to dtype.Dictionary) (ids, first []int, err error) {
+	k, err := buildKey(c, exactBinder)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ids = make([]int, c.Len())
+	seen := make(map[string]int)
+	var scratch []byte
+	row := 0
+	for _, a := range c.Chunks() {
+		for i := range a.Len() {
+			if missing(a, i) {
+				ids[row] = -1
+				row++
+				continue
+			}
+
+			scratch = k.appendRow(scratch[:0], row)
+			id, ok := seen[string(scratch)]
+			if !ok {
+				if len(first) == limit {
+					return nil, nil, fmt.Errorf("kernel: cannot cast %s to %s, the column holds more than the %d values an index of %s can name",
+						from, to, limit, to.Index)
+				}
+				id = len(first)
+				seen[string(scratch)] = id
+				first = append(first, row)
+			}
+			ids[row] = id
+			row++
+		}
+	}
+	return ids, first, nil
+}
+
+// indexChunk builds the indices of one chunk and points them at the values,
+// where minus one is a row that holds no value.
+func indexChunk(index dtype.DataType, ids []int, values *array.Array) *array.Array {
+	b := builder(index)
+	b.Grow(len(ids))
+	switch index.Kind() {
+	case dtype.Int8Kind:
+		appendIndex[int8](b, ids)
+	case dtype.Int16Kind:
+		appendIndex[int16](b, ids)
+	case dtype.Int32Kind:
+		appendIndex[int32](b, ids)
+	case dtype.Int64Kind:
+		appendIndex[int64](b, ids)
+	case dtype.Uint8Kind:
+		appendIndex[uint8](b, ids)
+	case dtype.Uint16Kind:
+		appendIndex[uint16](b, ids)
+	case dtype.Uint32Kind:
+		appendIndex[uint32](b, ids)
+	case dtype.Uint64Kind:
+		appendIndex[uint64](b, ids)
+	default:
+		panic(fmt.Sprintf("kernel: a dictionary indexed by %s", index))
+	}
+
+	a, err := array.NewDictionary(b.Finish(), values)
+	if err != nil {
+		// Every index is the position of a value that was taken out of this
+		// column and put in the dictionary, and there are few enough of those
+		// for the index type to name.
+		panic("kernel: " + err.Error())
+	}
+	return a
+}
+
+// appendIndex writes the indices as T.
+func appendIndex[T array.Numeric](b *array.Builder, ids []int) {
+	for _, id := range ids {
+		if id < 0 {
+			b.AppendNull()
+			continue
+		}
+		b.Append(T(id))
+	}
+}
+
+// exactBinder is binderFor with the floats told apart bit for bit.
+//
+// A group by folds every NaN into one group and negative zero into zero,
+// because those are the answers somebody counting rows wants. Encoding is
+// storage and has to give back what it was given, so a column holding a
+// negative zero still holds one afterwards and the two get an entry each. Every
+// other type writes its value already.
+func exactBinder(dt dtype.DataType) (func(*array.Array) writer, error) {
+	switch dt.Kind() {
+	case dtype.Float32Kind:
+		return bindFloat32Bits, nil
+	case dtype.Float64Kind:
+		return bindFloat64Bits, nil
+	default:
+		return binderFor(dt)
+	}
+}
+
+// bindFloat32Bits writes the four bytes a float32 is made of.
+func bindFloat32Bits(a *array.Array) writer {
+	vs := a.Values[float32]()
+	return func(dst []byte, i int) []byte {
+		return binary.LittleEndian.AppendUint32(dst, math.Float32bits(vs[i]))
+	}
+}
+
+// bindFloat64Bits writes the eight bytes a float64 is made of.
+func bindFloat64Bits(a *array.Array) writer {
+	vs := a.Values[float64]()
+	return func(dst []byte, i int) []byte {
+		return binary.LittleEndian.AppendUint64(dst, math.Float64bits(vs[i]))
+	}
 }
