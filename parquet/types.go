@@ -15,6 +15,16 @@ import "fmt"
 // different from being a boolean or being required, so the zero value of each
 // of these is the one the format never uses.
 
+// The names that more than one of these tables uses. A logical type and the
+// converted type it replaced call the same thing the same thing, Thrift calls
+// two of them the same thing again, and every enumeration here has a value that
+// is not one and that prints the same way.
+const (
+	noName   = "none"
+	mapName  = "map"
+	listName = "list"
+)
+
 // Type is the physical type of a column, which is how the values are written
 // down rather than what they mean. A date and a signed integer are both Int32
 // and it takes the logical type to tell them apart.
@@ -47,7 +57,7 @@ var typeNames = [...]string{
 // String returns the name the format gives the type, lowercased.
 func (t Type) String() string {
 	if t == NoType {
-		return "none"
+		return noName
 	}
 	if t < 0 || int(t) >= len(typeNames) {
 		return fmt.Sprintf("type %d", int32(t))
@@ -77,7 +87,7 @@ var repetitionNames = [...]string{
 // String returns the name the format gives the repetition, lowercased.
 func (r Repetition) String() string {
 	if r == NoRepetition {
-		return "none"
+		return noName
 	}
 	if r < 0 || int(r) >= len(repetitionNames) {
 		return fmt.Sprintf("repetition %d", int32(r))
@@ -195,9 +205,9 @@ const (
 
 var convertedNames = [...]string{
 	ConvertedUTF8:            "utf8",
-	ConvertedMap:             "map",
+	ConvertedMap:             mapName,
 	ConvertedMapKeyValue:     "map_key_value",
-	ConvertedList:            "list",
+	ConvertedList:            listName,
 	ConvertedEnum:            "enum",
 	ConvertedDecimal:         "decimal",
 	ConvertedDate:            "date",
@@ -221,7 +231,7 @@ var convertedNames = [...]string{
 // String returns the name the format gives the converted type, lowercased.
 func (c ConvertedType) String() string {
 	if c == NoConverted {
-		return "none"
+		return noName
 	}
 	if c < 0 || int(c) >= len(convertedNames) {
 		return fmt.Sprintf("converted type %d", int32(c))
@@ -258,10 +268,10 @@ const (
 )
 
 var logicalNames = [...]string{
-	NoLogical:        "none",
+	NoLogical:        noName,
 	StringLogical:    "string",
-	MapLogical:       "map",
-	ListLogical:      "list",
+	MapLogical:       mapName,
+	ListLogical:      listName,
 	EnumLogical:      "enum",
 	DecimalLogical:   "decimal",
 	DateLogical:      "date",
@@ -296,7 +306,7 @@ const (
 )
 
 var unitNames = [...]string{
-	NoUnit: "none",
+	NoUnit: noName,
 	Millis: "millis",
 	Micros: "micros",
 	Nanos:  "nanos",

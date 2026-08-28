@@ -56,9 +56,9 @@ var thriftNames = [...]string{
 	thriftInt64:  "int64",
 	thriftDouble: "double",
 	thriftBinary: "binary",
-	thriftList:   "list",
+	thriftList:   listName,
 	thriftSet:    "set",
-	thriftMap:    "map",
+	thriftMap:    mapName,
 	thriftStruct: "struct",
 }
 
@@ -168,11 +168,12 @@ func (r *reader) header() (int16, thriftType, error) {
 
 // fields reads a struct, calling f with the id and type of every field in it.
 //
-// f has to consume the value of every field it is given, which for a field it
-// does not know about means calling skip. That is what lets a file written by a
+// Every field f is given has to be consumed by it, which for a field it does
+// not know about means calling skip. That is what lets a file written by a
 // newer parquet than this one be read at all.
 func (r *reader) fields(f func(id int16, t thriftType) error) error {
-	if r.depth++; r.depth > maxDepth {
+	r.depth++
+	if r.depth > maxDepth {
 		return fmt.Errorf("parquet: %w: the metadata nests more than %d deep", ErrFormat, maxDepth)
 	}
 	last := r.last
@@ -321,7 +322,8 @@ func (r *reader) text(t thriftType) (string, error) {
 
 // skip reads past a value of any type without looking at it.
 func (r *reader) skip(t thriftType) error {
-	if r.depth++; r.depth > maxDepth {
+	r.depth++
+	if r.depth > maxDepth {
 		return fmt.Errorf("parquet: %w: the metadata nests more than %d deep", ErrFormat, maxDepth)
 	}
 	defer func() { r.depth-- }()
