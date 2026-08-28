@@ -130,7 +130,8 @@ func (c Column) String() string { return c.Render(nil) }
 // type in the library reads.
 func (c Column) Text(i int, o *PrintOptions) string {
 	opts := o.withDefaults()
-	return shorten(cellText(c.data, i, &opts), opts.MaxWidth)
+	a, k := c.data.At(i)
+	return shorten(cellText(a, k, &opts), opts.MaxWidth)
 }
 
 // render draws the table under a line that says what it is.
@@ -170,7 +171,8 @@ func render(title string, cols []Column, rows int, o *PrintOptions) string {
 					cells[j+2] = gapText
 					continue
 				}
-				cells[j+2] = cellText(col.data, r, &opts)
+				a, k := col.data.At(r)
+				cells[j+2] = cellText(a, k, &opts)
 			}
 		}
 		for j, s := range cells {
@@ -310,9 +312,17 @@ func rightAligned(k dtype.Kind) bool {
 // to hold, so a timestamp is the integer it is stored as until the calendar
 // casts land, and a byte is whatever byte it is. This one writes what a person
 // wants to read, so a timestamp is a date and a run of bytes is hex.
-func cellText(data *array.Chunked, i int, o *PrintOptions) string {
+func cellText(data *array.Array, i int, o *PrintOptions) string {
 	if data.IsNull(i) {
 		return o.Null
+	}
+
+	// A dictionary encoded column is rendered as the value it points at, since
+	// the index is how the column is stored and nobody reading a table wants to
+	// see it. This recurses once and no further, because a dictionary of a
+	// dictionary is a type the dtype package refuses to build.
+	if d := data.Dictionary(); d != nil {
+		return cellText(d, data.Index(i), o)
 	}
 
 	// The types that carry a parameter are picked out by their Go type, since
