@@ -12,7 +12,7 @@ import (
 
 // The Arrow IPC record batch message.
 //
-// A record batch is the values of a schema that travelled earlier. The message
+// A record batch is the values of a schema that went past earlier. The message
 // itself holds no types and no names, only a row count, one node per column
 // saying how many values it has and how many of them are missing, and one
 // description per buffer saying where in the body it starts and how long it is.
