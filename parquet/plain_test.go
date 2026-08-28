@@ -707,15 +707,20 @@ func TestPlainNoCopy(t *testing.T) {
 func BenchmarkPlain(b *testing.B) {
 	const values = 100000
 
-	var numbers []byte
+	// A page of each shape, every one of them holding the same number of values
+	// and no more, so that the rate is the rate of a page that is all read and
+	// the times are the same number of values decoded seven ways.
+	var words, numbers, timestamps, arrays []byte
 	for i := range values {
+		words = binary.LittleEndian.AppendUint32(words, uint32(i))
 		numbers = binary.LittleEndian.AppendUint64(numbers, uint64(i))
-	}
-
-	var arrays []byte
-	for i := range values {
+		timestamps = append(timestamps, int96(int64(i), 2440588)...)
 		arrays = binary.LittleEndian.AppendUint32(arrays, 8)
 		arrays = binary.LittleEndian.AppendUint64(arrays, uint64(i))
+	}
+	flags := make([]byte, values/8)
+	for i := range flags {
+		flags[i] = 0b10110100
 	}
 
 	int32s := make([]int32, values)
@@ -726,36 +731,42 @@ func BenchmarkPlain(b *testing.B) {
 
 	cases := []struct {
 		name string
+		data []byte
 		read func(d *parquet.PlainDecoder) (int, error)
 	}{
-		{name: "int32", read: func(d *parquet.PlainDecoder) (int, error) { return d.Int32(int32s) }},
-		{name: "int64", read: func(d *parquet.PlainDecoder) (int, error) { return d.Int64(int64s) }},
-		{name: "double", read: func(d *parquet.PlainDecoder) (int, error) { return d.Double(doubles) }},
-		{name: "int96", read: func(d *parquet.PlainDecoder) (int, error) { return d.Int96(int64s) }},
-		{name: "boolean", read: func(d *parquet.PlainDecoder) (int, error) { return d.Boolean(booleans) }},
-		{name: "fixed", read: func(d *parquet.PlainDecoder) (int, error) { return d.Fixed(blobs, 8) }},
+		{name: "int32", data: words, read: func(d *parquet.PlainDecoder) (int, error) {
+			return d.Int32(int32s)
+		}},
+		{name: "int64", data: numbers, read: func(d *parquet.PlainDecoder) (int, error) {
+			return d.Int64(int64s)
+		}},
+		{name: "double", data: numbers, read: func(d *parquet.PlainDecoder) (int, error) {
+			return d.Double(doubles)
+		}},
+		{name: "int96", data: timestamps, read: func(d *parquet.PlainDecoder) (int, error) {
+			return d.Int96(int64s)
+		}},
+		{name: "boolean", data: flags, read: func(d *parquet.PlainDecoder) (int, error) {
+			return d.Boolean(booleans)
+		}},
+		{name: "fixed", data: numbers, read: func(d *parquet.PlainDecoder) (int, error) {
+			return d.Fixed(blobs, 8)
+		}},
+		{name: "byte array", data: arrays, read: func(d *parquet.PlainDecoder) (int, error) {
+			return d.ByteArray(blobs)
+		}},
 	}
 
 	var d parquet.PlainDecoder
 	for _, c := range cases {
 		b.Run(c.name, func(b *testing.B) {
-			b.SetBytes(int64(len(numbers)))
+			b.SetBytes(int64(len(c.data)))
 			for b.Loop() {
-				d.Reset(numbers)
+				d.Reset(c.data)
 				if _, err := c.read(&d); err != nil {
 					b.Fatalf("read: %v", err)
 				}
 			}
 		})
 	}
-
-	b.Run("byte array", func(b *testing.B) {
-		b.SetBytes(int64(len(arrays)))
-		for b.Loop() {
-			d.Reset(arrays)
-			if _, err := d.ByteArray(blobs); err != nil {
-				b.Fatalf("ByteArray: %v", err)
-			}
-		}
-	})
 }
