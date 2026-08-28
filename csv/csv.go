@@ -229,27 +229,11 @@ func (o *Options) isNull(s string) bool {
 	return false
 }
 
-// Table is a schema and the columns that go with it, which is a frame with the
-// frame taken off.
+// Table is what the reader returns and what the writer takes, which is a schema
+// and the columns that go with it.
 //
-// It is what the reader returns and what the writer takes. A caller who wants
-// rows and names and a query engine wants kuma.ReadCSV, which turns one of
-// these into a frame; a caller who wants the columns wants this.
-type Table struct {
-	// Schema is the name, type and nullability of each column, in order.
-	Schema dtype.Schema
-
-	// Columns holds one column per field of the schema, in the same order.
-	Columns []*array.Chunked
-}
-
-// NumRows returns how many rows the table has.
-func (t *Table) NumRows() int {
-	if len(t.Columns) == 0 {
-		return 0
-	}
-	return t.Columns[0].Len()
-}
-
-// NumCols returns how many columns the table has.
-func (t *Table) NumCols() int { return len(t.Columns) }
+// It is [array.Table] because a table out of a CSV file and a table out of a
+// parquet file are the same thing, and a caller holding one should not have to
+// convert it to hand it to the other. A caller who wants rows and names and a
+// query engine wants kuma.ReadCSV, which turns one of these into a frame.
+type Table = array.Table
