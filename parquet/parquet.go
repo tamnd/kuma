@@ -32,7 +32,11 @@
 // every other encoding in the format is a way of not doing and what every one
 // of them ends up at. DeltaDecoder reads the one that a column of integers is
 // written in when a dictionary is not worth keeping, which is the differences
-// between the values rather than the values.
+// between the values rather than the values. DeltaLengthDecoder and
+// DeltaByteArrayDecoder are the same idea for a column of byte arrays: the
+// first writes their lengths as differences and puts all the bytes behind them,
+// and the second writes how much of each value the one in front of it already
+// said, which is what turns a sorted column of keys into a few bytes a row.
 //
 // ColumnReader is where the two halves meet. A page keeps its levels and its
 // values apart and only the rows that have a value are written down, so putting

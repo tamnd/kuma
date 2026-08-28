@@ -184,6 +184,19 @@ func (d *DeltaDecoder) Read[T deltaValue](dst []T) (int, error) {
 	return n, nil
 }
 
+// Len returns how many values the decoder has not handed back yet, which after
+// Reset is how many the page said it holds.
+func (d *DeltaDecoder) Len() int { return d.left }
+
+// Offset returns how many bytes of the page the decoder has read.
+//
+// It is what the two byte array encodings need. Both of them put a block of
+// this encoding in front of the bytes it describes, and nothing says where the
+// block ends but reading it, since how many bytes it takes follows from the
+// widths inside it. So this means what it says once Len has come down to
+// nought and rather less before then.
+func (d *DeltaDecoder) Offset() int { return d.pos }
+
 // miniblock gets the next miniblock ready to be unpacked, reading the header of
 // the next block first when the one being read has no miniblocks left.
 func (d *DeltaDecoder) miniblock() error {

@@ -77,15 +77,18 @@ func (r *ColumnReader) dictionary(p Page) error {
 // for, so it is refused by name rather than done quietly.
 func (r *ColumnReader) encoding(p Page) error {
 	switch p.Encoding {
-	case Plain, DeltaBinaryPacked:
+	case Plain, DeltaBinaryPacked, DeltaLengthByteArray, DeltaByteArray:
 		if r.dict != nil {
 			return fmt.Errorf("parquet: %w: %s falls back from its dictionary to %s pages",
 				ErrUnsupported, r.column.Name(), p.Encoding)
 		}
-		if p.Encoding == DeltaBinaryPacked && r.values.delta == nil {
-			// The encoding is written for the two integer widths and nothing
-			// else, so this is a page that contradicts the schema in front of
-			// it rather than one this package has not got round to.
+		if !r.values.reads(p.Encoding) {
+			// Each of the delta encodings goes with some of the physical types
+			// and no others: differences with the integers, lengths with the
+			// byte arrays that have their own, shared prefixes with those and
+			// the fixed width ones. A page that says otherwise contradicts the
+			// schema in front of it rather than being one this package has not
+			// got round to.
 			return fmt.Errorf("parquet: %w: a %s page of %s, which is a %s",
 				ErrFormat, p.Encoding, r.column.Name(), r.column.Type)
 		}
