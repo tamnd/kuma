@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -80,7 +81,7 @@ func TestDeltaLengthDecoder(t *testing.T) {
 		{"holes in a run", []string{"one", "", "three", "", ""}},
 		{"one value", []string{"only"}},
 		{"no values at all", nil},
-		{"more than a block", counted(300)},
+		{"more than a block", counted()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var d parquet.DeltaLengthDecoder
@@ -109,7 +110,7 @@ func TestDeltaByteArrayDecoder(t *testing.T) {
 		{"values of nothing", []string{"", "", ""}},
 		{"one value", []string{"only"}},
 		{"no values at all", nil},
-		{"more than a block", counted(300)},
+		{"more than a block", counted()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var d parquet.DeltaByteArrayDecoder
@@ -126,10 +127,11 @@ func TestDeltaByteArrayDecoder(t *testing.T) {
 	}
 }
 
-// counted is a run of values sharing a prefix that grows and shrinks, which is
-// enough of them to need several blocks of differences.
-func counted(n int) []string {
-	values := make([]string, n)
+// counted is a run of values sharing a prefix that grows and shrinks. There are
+// enough of them to need several blocks of differences, which is what a page of
+// one block would never say anything about.
+func counted() []string {
+	values := make([]string, 300)
 	for i := range values {
 		values[i] = fmt.Sprintf("prefix/%d/%s", i%7, strings.Repeat("x", i%23))
 	}
@@ -139,7 +141,7 @@ func counted(n int) []string {
 // TestDeltaBytesRead reads several values at a time rather than one, and then
 // reads a second page through the same decoder.
 func TestDeltaBytesRead(t *testing.T) {
-	want := counted(300)
+	want := counted()
 
 	var lengths parquet.DeltaLengthDecoder
 	var prefixed parquet.DeltaByteArrayDecoder
@@ -285,7 +287,7 @@ func TestReadColumnStrings(t *testing.T) {
 
 	t.Run("lengths of their own", func(t *testing.T) {
 		stringColumn(t, "word", func(i int) string {
-			return strings.Repeat("a", i%17) + fmt.Sprint(i%97)
+			return strings.Repeat("a", i%17) + strconv.Itoa(i%97)
 		})
 	})
 

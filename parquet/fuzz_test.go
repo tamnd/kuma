@@ -434,7 +434,7 @@ func FuzzDelta(f *testing.F) {
 func FuzzDeltaBytes(f *testing.F) {
 	f.Add(lengthsOf("one", "two", "three"))
 	f.Add(prefixedOf("a/b/one", "a/b/two"))
-	f.Add(prefixedOf(counted(300)...))
+	f.Add(prefixedOf(counted()...))
 	f.Add([]byte(nil))
 	f.Add([]byte{0x80, 0x01, 0x04, 0x02, 0x00})
 	f.Add(bytes.Repeat([]byte{0xff}, 32))
@@ -464,7 +464,7 @@ func FuzzDeltaBytes(f *testing.F) {
 		}
 
 		// The same values again with a block of noughts in front, which is what
-		// a writer that shares nothing between neighbours produces.
+		// a writer that shares nothing between neighbors produces.
 		if err := prefixed.Reset(append(deltaOf(128, 4, make([]int64, read)...), data...)); err != nil {
 			t.Fatalf("a page of %d values that shares nothing: %v", read, err)
 		}

@@ -84,8 +84,8 @@ type ColumnReader struct {
 
 // columnValues is how the values of one column are read and appended.
 //
-// The two functions are built once for the column, in valuesFor, and close over
-// the buffer the values are decoded into. That is what keeps the type of a
+// The functions are built once for the column, in valuesFor, and close over the
+// buffer the values are decoded into. That is what keeps the type of a
 // column out of the loop over its pages: deciding that an int8 column is read
 // as int32 and narrowed is a question about the schema, and asking it once per
 // value would cost more than the narrowing.
@@ -645,7 +645,7 @@ func fixedBlobs(b *array.Builder, width int) *columnValues {
 	// A column whose values are all the same width has no lengths worth
 	// writing, so the encoding that takes the lengths out and writes them as
 	// differences is not defined for it. The one that shares a prefix between
-	// neighbours is, since a fixed width column is as likely to be sorted keys
+	// neighbors is, since a fixed width column is as likely to be sorted keys
 	// as any other.
 	v.deltaLength = nil
 	return v
