@@ -43,9 +43,19 @@ import (
 // A null in becomes a null out. A cast to the null type throws every value away,
 // which is allowed because it takes saying so.
 //
+// A dictionary encoded column casts its dictionary and not its rows, so a
+// million rows over two hundred and fifty country codes parse two hundred and
+// fifty numbers. A cast to a plain type expands the result and a cast to another
+// dictionary type keeps the encoding. A value in the dictionary that will not
+// cast fails the column only when a row points at it, since a writer that
+// carried a value over from another row group has not put anything wrong in the
+// rows.
+//
 // Not yet: the calendar side of the temporal types, meaning a change of unit, a
 // formatted date and a parsed one. The decimals and the intervals are not here
-// either. Each of those is an error saying as much rather than a wrong answer.
+// either. Encoding a plain column as a dictionary is not here either, since
+// finding the distinct values is the grouping machinery rather than a value at a
+// time. Each of those is an error saying as much rather than a wrong answer.
 func Cast(c *array.Chunked, to dtype.DataType) (*array.Chunked, error) {
 	return cast(c, to, false)
 }
@@ -106,6 +116,13 @@ func cast(c *array.Chunked, to dtype.DataType, loose bool) (*array.Chunked, erro
 	if !dtype.CanCast(from, to) {
 		return nil, fmt.Errorf("kernel: cannot cast %s to %s, the two have nothing to say to each other", from, to)
 	}
+
+	// A dictionary encoded column casts its values rather than its rows, which
+	// is a different loop and a different set of decisions about what a bad
+	// value means.
+	if d, ok := from.(dtype.Dictionary); ok {
+		return castDictionary(c, d, to, loose)
+	}
 	conv, err := converter(from, to)
 	if err != nil {
 		return nil, err
@@ -142,13 +159,8 @@ func cast(c *array.Chunked, to dtype.DataType, loose bool) (*array.Chunked, erro
 		chunks = append(chunks, b.Finish())
 	}
 
-	out, err := array.NewChunked(to, chunks...)
-	if err != nil {
-		// The builder was made for this dtype, so what it built is of this
-		// dtype.
-		panic("kernel: " + err.Error())
-	}
-	return out, nil
+	// The builder was made for this dtype, so what it built is of this dtype.
+	return chunked(to, chunks...), nil
 }
 
 // converse is one value of a cast. It reads value i of a, which is known to be
