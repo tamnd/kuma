@@ -107,6 +107,47 @@ func FuzzMetadata(f *testing.F) {
 	})
 }
 
+// FuzzSchema checks that no arrangement of bytes gets a schema past the reader
+// that the writer would then refuse.
+//
+// A schema message is FlatBuffers, which is offsets all the way down, so a
+// single byte changed anywhere in one is an offset pointing at something else.
+// The reader is written by hand precisely so that every one of those is bounds
+// checked, and this is what says so. The property on the way out matters as
+// much: a message that reads as a schema has to be a schema this package would
+// write, since anything else is a shape that got past the door and will be
+// handed to a builder.
+func FuzzSchema(f *testing.F) {
+	for _, c := range schemaCases {
+		b, err := ipc.EncodeSchema(c.schema)
+		if err != nil {
+			f.Fatalf("EncodeSchema: %v", err)
+		}
+		f.Add(b)
+	}
+	f.Add([]byte(nil))
+	f.Add([]byte{0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0})
+
+	f.Fuzz(func(t *testing.T, msg []byte) {
+		s, err := ipc.DecodeSchema(msg)
+		if err != nil {
+			return
+		}
+
+		written, err := ipc.EncodeSchema(s)
+		if err != nil {
+			t.Fatalf("DecodeSchema(% x) = %v, which EncodeSchema refuses: %v", msg, s, err)
+		}
+		again, err := ipc.DecodeSchema(written)
+		if err != nil {
+			t.Fatalf("EncodeSchema(%v) = % x, which DecodeSchema refuses: %v", s, written, err)
+		}
+		if !again.Equal(s) {
+			t.Fatalf("round trip of %v gave %v", s, again)
+		}
+	})
+}
+
 // FuzzImport checks that no arrangement of buffers makes an import read past
 // the end of one.
 //
