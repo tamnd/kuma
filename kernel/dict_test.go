@@ -785,6 +785,42 @@ func TestCompareDictionaryNumbers(t *testing.T) {
 	}
 }
 
+// TestCompareDictionaryIndexTypes compares and orders a column once per index
+// type. The indices of a chunk are read as the type they were written as, that
+// type is looked at once per chunk rather than once per row, and a case missing
+// from that would be found by whoever read a file that used it.
+func TestCompareDictionaryIndexTypes(t *testing.T) {
+	values := array.OfStrings("GB", "JP", "US")
+	one := col(t, dtype.String, []any{"JP"})
+	indexes := []dtype.DataType{
+		dtype.Int8, dtype.Int16, dtype.Int32, dtype.Int64,
+		dtype.Uint8, dtype.Uint16, dtype.Uint32, dtype.Uint64,
+	}
+
+	for _, index := range indexes {
+		t.Run(index.String(), func(t *testing.T) {
+			src := indexed(t, index, values, 2, 0, 1, -1)
+
+			got, err := kernel.Compare(src, one, kernel.OpEq)
+			if err != nil {
+				t.Fatalf("Compare: %v", err)
+			}
+			want := []any{false, false, true, nil}
+			if have := answers(t, got); !same(have, want) {
+				t.Errorf("the answers are %v, want %v", have, want)
+			}
+
+			order, err := kernel.SortIndex(kernel.Order{Column: src})
+			if err != nil {
+				t.Fatalf("SortIndex: %v", err)
+			}
+			if wantOrder := []int{1, 2, 0, 3}; !slices.Equal(order, wantOrder) {
+				t.Errorf("the order is %v, want %v", order, wantOrder)
+			}
+		})
+	}
+}
+
 // TestCompareDictionaryFilter is the whole of what this is for: a predicate on
 // an encoded column keeps the rows it names and the column that comes out is
 // still encoded and still points at the values that went in.

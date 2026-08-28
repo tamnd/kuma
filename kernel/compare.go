@@ -102,10 +102,10 @@ func Compare(a, b *array.Chunked, op CompareOp) (*array.Chunked, error) {
 	out := builder(dtype.Bool)
 	out.Grow(n)
 
-	ca, cb := newCursor(a, fixedA), newCursor(b, fixedB)
+	ca, cb := newDictCursor(a, fixedA), newDictCursor(b, fixedB)
 	for range n {
-		x, i, okx := dictValue(ca.next())
-		y, j, oky := dictValue(cb.next())
+		x, i, okx := ca.next()
+		y, j, oky := cb.next()
 		if !okx || !oky {
 			out.AppendNull()
 			continue

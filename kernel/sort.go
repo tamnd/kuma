@@ -307,9 +307,12 @@ type rows struct {
 
 	// values[c] is where the values of chunk c are, which is the chunk itself
 	// unless it is dictionary encoded, in which case it is the dictionary it
-	// reads from. A comparison reads values out of these and nulls out of the
-	// chunks, since which rows are missing is the chunk's to say.
+	// reads from.
 	values []*array.Array
+
+	// index[c] is where in values[c] a row of chunk c points, and is nil when
+	// the chunk is not encoded and a row is already a position in its values.
+	index []func(int) int
 
 	// starts[c] is the position in the column that chunk c begins at.
 	starts []int
@@ -325,6 +328,7 @@ func newRows(c *array.Chunked) rows {
 	r := rows{
 		chunks: chunks,
 		values: make([]*array.Array, len(chunks)),
+		index:  make([]func(int) int, len(chunks)),
 		starts: make([]int, len(chunks)),
 		one:    len(chunks) == 1,
 	}
@@ -333,7 +337,7 @@ func newRows(c *array.Chunked) rows {
 	for k, a := range chunks {
 		r.values[k] = a
 		if d := a.Dictionary(); d != nil {
-			r.values[k] = d
+			r.values[k], r.index[k] = d, dictIndex(a)
 		}
 		r.starts[k] = n
 		n += a.Len()
@@ -350,16 +354,11 @@ func newRows(c *array.Chunked) rows {
 // a row pointing at a dictionary entry that is itself null are both missing.
 func (r *rows) value(i int) (chunk, index int, ok bool) {
 	c, x := r.at(i)
-	a := r.chunks[c]
-	if a.IsNull(x) {
-		return c, x, false
+	if at := r.index[c]; at != nil {
+		x = at(x)
+		return c, x, x >= 0
 	}
-	if a.Dictionary() == nil {
-		return c, x, true
-	}
-
-	x = a.Index(x)
-	return c, x, !r.values[c].IsNull(x)
+	return c, x, !r.chunks[c].IsNull(x)
 }
 
 // at returns the chunk holding position i and the position within it.

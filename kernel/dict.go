@@ -38,34 +38,115 @@ import (
 // hold. Either way the values are read where they are and the column is never
 // decoded into the million strings it stands for.
 //
-// Comparing and ordering one is the third thing in here, and it is the smallest
-// of the three: a comparison of a dictionary encoded column is the comparison
-// of the values behind its indices, which is what dictValue reaches. The
+// Comparing and ordering one is the third thing in here. A comparison of a
+// dictionary encoded column is the comparison of the values behind its indices,
+// so the work is following the index, which is what dictIndex is for. The
 // encoding is storage rather than meaning, so a column of country codes answers
 // the same question the same way whether it was read out of a parquet file that
 // wrote a dictionary or one that did not.
 
-// dictValue follows a dictionary encoded column's index to the value behind it,
-// and says whether there is a value there at all.
+// dictIndex returns where in its dictionary each row of a points, or nil when a
+// is not encoded at all. A row with no value gives minus one, whether it holds
+// no index or points at a dictionary entry that is itself null.
 //
-// A column that is not dictionary encoded is itself and the position asked
-// about, so this is what every comparison in this package reads a value
-// through, whatever it was handed.
-//
-// There are two ways to be missing here and both of them are one answer. The
-// row may hold no index, which is the ordinary null, and the dictionary entry
-// the index names may itself be null, which is a producer writing the missing
-// value down once and pointing at it. Neither has a value to compare.
-func dictValue(a *array.Array, i int) (*array.Array, int, bool) {
-	if a.IsNull(i) {
-		return a, i, false
-	}
+// The index type is looked at once per chunk rather than once per row, which is
+// the whole reason this exists. [array.Array.Index] switches on the type of the
+// indices and rebuilds their slice header every time it is asked, which is
+// nothing next to a lookup and is most of the work in a sort that asks twice per
+// comparison and reads every row log n times.
+func dictIndex(a *array.Array) func(int) int {
 	d := a.Dictionary()
 	if d == nil {
-		return a, i, true
+		return nil
 	}
-	j := a.Index(i)
-	return d, j, !d.IsNull(j)
+
+	idx := a.Indices()
+	switch idx.DType().Kind() {
+	case dtype.Int8Kind:
+		return indexReader[int8](a, d, idx)
+	case dtype.Int16Kind:
+		return indexReader[int16](a, d, idx)
+	case dtype.Int32Kind:
+		return indexReader[int32](a, d, idx)
+	case dtype.Int64Kind:
+		return indexReader[int64](a, d, idx)
+	case dtype.Uint8Kind:
+		return indexReader[uint8](a, d, idx)
+	case dtype.Uint16Kind:
+		return indexReader[uint16](a, d, idx)
+	case dtype.Uint32Kind:
+		return indexReader[uint32](a, d, idx)
+	case dtype.Uint64Kind:
+		return indexReader[uint64](a, d, idx)
+	default:
+		panic(fmt.Sprintf("kernel: a dictionary indexed by %s", idx.DType()))
+	}
+}
+
+// indexReader reads the indices of one chunk as T.
+//
+// A chunk with no missing rows reading from a dictionary with no missing values
+// is the ordinary case and it gets a reader that is a slice index and nothing
+// else. The other one has both questions to ask and asks them in the order that
+// finds the answer soonest.
+func indexReader[T array.Numeric](a, d, idx *array.Array) func(int) int {
+	vs := idx.Values[T]()
+	if a.NullCount() == 0 && d.NullCount() == 0 {
+		return func(i int) int { return int(vs[i]) }
+	}
+
+	holes := d.NullCount() > 0
+	return func(i int) int {
+		if a.IsNull(i) {
+			return -1
+		}
+		j := int(vs[i])
+		if holes && d.IsNull(j) {
+			return -1
+		}
+		return j
+	}
+}
+
+// dictCursor is a cursor that reads through the encoding, so that a kernel over
+// two columns sees values whether or not either side was encoded.
+//
+// The reader is bound when the chunk changes rather than per value, which for a
+// column of one value being compared against every row of another means once.
+type dictCursor struct {
+	cur cursor
+
+	// chunk is the chunk the reader below was bound to, so that a walk that
+	// stays in one chunk binds once and a comparison against a literal binds
+	// once for the whole column.
+	chunk *array.Array
+
+	// values is where the values of that chunk are and at is where in them a row
+	// of it points, which is nil when the chunk is not encoded.
+	values *array.Array
+	at     func(int) int
+}
+
+// newDictCursor returns a cursor over c, which may or may not be encoded.
+func newDictCursor(c *array.Chunked, fixed bool) dictCursor {
+	return dictCursor{cur: newCursor(c, fixed)}
+}
+
+// next returns where the next value is and whether there is one there.
+func (c *dictCursor) next() (*array.Array, int, bool) {
+	a, i := c.cur.next()
+	if a != c.chunk {
+		c.chunk, c.values, c.at = a, a, dictIndex(a)
+		if d := a.Dictionary(); d != nil {
+			c.values = d
+		}
+	}
+	if c.at == nil {
+		return a, i, !a.IsNull(i)
+	}
+
+	i = c.at(i)
+	return c.values, i, i >= 0
 }
 
 // takeDictionary gathers a dictionary encoded column at the positions given.
