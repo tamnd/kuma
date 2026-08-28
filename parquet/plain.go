@@ -193,7 +193,8 @@ func (d *PlainDecoder) Boolean(dst []bool) (int, error) {
 	for n < len(dst) && d.pos < len(d.buf) {
 		dst[n] = d.buf[d.pos]>>d.bit&1 == 1
 		n++
-		if d.bit++; d.bit == 8 {
+		d.bit++
+		if d.bit == 8 {
 			d.bit, d.pos = 0, d.pos+1
 		}
 	}

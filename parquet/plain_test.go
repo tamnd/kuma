@@ -71,12 +71,13 @@ func valuesOf(t *testing.T, p parquet.Page, c parquet.Column) []byte {
 	return b
 }
 
-// dictionaryOf is the values of the dictionary page of a column, which is the
-// one page in the format that is always plain.
-func dictionaryOf(t *testing.T, name, column string) []byte {
+// dictionaryOf is the values of the dictionary page of a column of the file
+// holding a column of every type, which is the one page in the format that is
+// always plain whatever the data pages leaning on it are.
+func dictionaryOf(t *testing.T, column string) []byte {
 	t.Helper()
 
-	pages, c := pagesOf(t, name, column)
+	pages, c := pagesOf(t, "alltypes.parquet", column)
 	if pages[0].Kind != parquet.DictionaryPage {
 		t.Fatalf("the first page of %s is a %s, want a %s", column, pages[0].Kind, parquet.DictionaryPage)
 	}
@@ -471,11 +472,9 @@ func TestPlainAligned(t *testing.T) {
 // pyarrow wrote, and the values are the ones the script next to the file put
 // in.
 func TestPlainRealDictionaries(t *testing.T) {
-	const file = "alltypes.parquet"
-
 	t.Run("small", func(t *testing.T) {
 		got := make([]int32, 2)
-		n, err := parquet.NewPlainDecoder(dictionaryOf(t, file, "small")).Int32(got)
+		n, err := parquet.NewPlainDecoder(dictionaryOf(t, "small")).Int32(got)
 		if err != nil {
 			t.Fatalf("Int32: %v", err)
 		}
@@ -486,7 +485,7 @@ func TestPlainRealDictionaries(t *testing.T) {
 
 	t.Run("total", func(t *testing.T) {
 		got := make([]int64, 3)
-		n, err := parquet.NewPlainDecoder(dictionaryOf(t, file, "total")).Int64(got)
+		n, err := parquet.NewPlainDecoder(dictionaryOf(t, "total")).Int64(got)
 		if err != nil {
 			t.Fatalf("Int64: %v", err)
 		}
@@ -497,7 +496,7 @@ func TestPlainRealDictionaries(t *testing.T) {
 
 	t.Run("ratio", func(t *testing.T) {
 		got := make([]float32, 2)
-		n, err := parquet.NewPlainDecoder(dictionaryOf(t, file, "ratio")).Float(got)
+		n, err := parquet.NewPlainDecoder(dictionaryOf(t, "ratio")).Float(got)
 		if err != nil {
 			t.Fatalf("Float: %v", err)
 		}
@@ -508,7 +507,7 @@ func TestPlainRealDictionaries(t *testing.T) {
 
 	t.Run("weight", func(t *testing.T) {
 		got := make([]float64, 3)
-		n, err := parquet.NewPlainDecoder(dictionaryOf(t, file, "weight")).Double(got)
+		n, err := parquet.NewPlainDecoder(dictionaryOf(t, "weight")).Double(got)
 		if err != nil {
 			t.Fatalf("Double: %v", err)
 		}
@@ -519,7 +518,7 @@ func TestPlainRealDictionaries(t *testing.T) {
 
 	t.Run("blob", func(t *testing.T) {
 		got := make([][]byte, 3)
-		n, err := parquet.NewPlainDecoder(dictionaryOf(t, file, "blob")).ByteArray(got)
+		n, err := parquet.NewPlainDecoder(dictionaryOf(t, "blob")).ByteArray(got)
 		if err != nil {
 			t.Fatalf("ByteArray: %v", err)
 		}
@@ -530,7 +529,7 @@ func TestPlainRealDictionaries(t *testing.T) {
 
 	t.Run("fixed", func(t *testing.T) {
 		got := make([][]byte, 3)
-		n, err := parquet.NewPlainDecoder(dictionaryOf(t, file, "fixed")).Fixed(got, 4)
+		n, err := parquet.NewPlainDecoder(dictionaryOf(t, "fixed")).Fixed(got, 4)
 		if err != nil {
 			t.Fatalf("Fixed: %v", err)
 		}
@@ -545,7 +544,7 @@ func TestPlainRealDictionaries(t *testing.T) {
 	// 1.25 is written as 125.
 	t.Run("price", func(t *testing.T) {
 		got := make([][]byte, 2)
-		n, err := parquet.NewPlainDecoder(dictionaryOf(t, file, "price")).Fixed(got, 4)
+		n, err := parquet.NewPlainDecoder(dictionaryOf(t, "price")).Fixed(got, 4)
 		if err != nil {
 			t.Fatalf("Fixed: %v", err)
 		}
@@ -562,7 +561,7 @@ func TestPlainRealDictionaries(t *testing.T) {
 	// the whole of what makes a date different from a number in this encoding.
 	t.Run("day", func(t *testing.T) {
 		got := make([]int32, 1)
-		if _, err := parquet.NewPlainDecoder(dictionaryOf(t, file, "day")).Int32(got); err != nil {
+		if _, err := parquet.NewPlainDecoder(dictionaryOf(t, "day")).Int32(got); err != nil {
 			t.Fatalf("Int32: %v", err)
 		}
 		if got[0] != 20693 {
@@ -572,7 +571,7 @@ func TestPlainRealDictionaries(t *testing.T) {
 
 	t.Run("clock", func(t *testing.T) {
 		got := make([]int64, 1)
-		if _, err := parquet.NewPlainDecoder(dictionaryOf(t, file, "clock")).Int64(got); err != nil {
+		if _, err := parquet.NewPlainDecoder(dictionaryOf(t, "clock")).Int64(got); err != nil {
 			t.Fatalf("Int64: %v", err)
 		}
 		if got[0] != 45015000000 {
