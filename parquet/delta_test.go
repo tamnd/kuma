@@ -20,10 +20,10 @@ import (
 // its miniblocks, then the differences packed at those widths.
 //
 // The tests need this because no file here can be made to hold the shapes worth
-// reading. pyarrow writes blocks of a hundred and twenty eight values in four
-// miniblocks and nothing else, so a block of another size, a miniblock wider
-// than an int32, or a page of one value are all cases a real file will not
-// produce and a reader still has to read.
+// reading. A file written by pyarrow has blocks of a hundred and twenty eight
+// values in four miniblocks and nothing else, so a block of another size, a
+// miniblock wider than an int32, or a page of one value are all cases a real
+// file will not produce and a reader still has to read.
 func deltaOf(block, minis int, values ...int64) []byte {
 	var first int64
 	if len(values) > 0 {
