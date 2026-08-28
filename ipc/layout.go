@@ -79,16 +79,19 @@ func Export(a *array.Array) (Layout, error) {
 			l.Buffers = append(l.Buffers, b.Bytes())
 		}
 		return l, nil
-	}
 
-	if _, ok := dtype.Bits(t); !ok {
-		return Layout{}, fmt.Errorf("ipc: %w: exporting a %s array", ErrUnsupported, t)
+	default:
+		// Everything else is a validity bitmap and a fixed number of bytes per
+		// value, whatever the type says those bytes mean.
+		if _, ok := dtype.Bits(t); !ok {
+			return Layout{}, fmt.Errorf("ipc: %w: exporting a %s array", ErrUnsupported, t)
+		}
+		if a.Buffer() == nil {
+			return Layout{}, fmt.Errorf("ipc: %w: a %s array with no values", ErrBuffers, t)
+		}
+		l.Buffers = [][]byte{validityBytes(a), a.Buffer().Bytes()}
+		return l, nil
 	}
-	if a.Buffer() == nil {
-		return Layout{}, fmt.Errorf("ipc: %w: a %s array with no values", ErrBuffers, t)
-	}
-	l.Buffers = [][]byte{validityBytes(a), a.Buffer().Bytes()}
-	return l, nil
 }
 
 // Import builds a kuma array out of the buffers of an incoming one.

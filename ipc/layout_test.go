@@ -152,7 +152,7 @@ func TestImportOffsets(t *testing.T) {
 				t.Fatalf("Import = %v", err)
 			}
 
-			want := dtype.DataType(dtype.String)
+			var want dtype.DataType = dtype.String
 			if format == "z" || format == "Z" {
 				want = dtype.Binary
 			}
@@ -524,9 +524,10 @@ func valueAt(a *array.Array, i int) []byte {
 		return []byte{0}
 	case dtype.StringKind, dtype.BinaryKind:
 		return a.Bytes(i)
+	default:
+		bits, _ := dtype.Bits(a.DType())
+		w := bits / 8
+		k := (a.Offset() + i) * w
+		return a.Buffer().Bytes()[k : k+w]
 	}
-	bits, _ := dtype.Bits(a.DType())
-	w := bits / 8
-	k := (a.Offset() + i) * w
-	return a.Buffer().Bytes()[k : k+w]
 }

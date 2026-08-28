@@ -8,6 +8,11 @@ import (
 	"github.com/tamnd/kuma/strview"
 )
 
+// maxBlock is how much of the data buffer one block may cover. It is a
+// variable rather than a constant only so that the tests can lower it and see
+// the split happen without two gigabytes of anything.
+var maxBlock int64 = strview.MaxValue
+
 // viewsFromOffsets turns the offset layout into the view layout without moving
 // any of the values.
 //
@@ -28,11 +33,6 @@ import (
 // as a slice of integers. The offsets are in the byte order of the machine, so
 // reinterpreting them would be correct, but it would also require the buffer to
 // be aligned, and the work here is a pass over the values either way.
-// maxBlock is how much of the data buffer one block may cover. It is a
-// variable rather than a constant only so that the tests can lower it and see
-// the split happen without two gigabytes of anything.
-var maxBlock int64 = strview.MaxValue
-
 func viewsFromOffsets(offsets, data []byte, n, width int) (*strview.Data, error) {
 	if need := (n + 1) * width; len(offsets) < need {
 		return nil, fmt.Errorf("ipc: %w: %d values need %d bytes of offsets, the buffer has %d",
@@ -70,7 +70,6 @@ func viewsFromOffsets(offsets, data []byte, n, width int) (*strview.Data, error)
 			// later.
 			if used {
 				blocks = append(blocks, buffer.Wrap(data[start:lo]))
-				used = false
 			}
 			start = lo
 		}
