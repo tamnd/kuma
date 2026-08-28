@@ -59,6 +59,20 @@ type ColumnReader struct {
 	levels []int32
 	values *columnValues
 
+	// dict is the dictionary of the chunk, read out of the page in front of the
+	// data pages, and indices is where the rows of a dictionary encoded chunk
+	// go. index is the indices of the page being read and is reused like levels.
+	//
+	// dict is nil until a dictionary page turns up and is what says which of the
+	// two shapes a chunk is. out is the builder the rows go into and run appends
+	// a run of the present ones, and the pair of them is the values builder for
+	// a chunk of plain pages and the index builder for a dictionary encoded one.
+	dict    *array.Array
+	indices *array.Builder
+	index   []int32
+	out     *array.Builder
+	run     func(from, count int)
+
 	rle    RLEDecoder
 	packed BitPackedDecoder
 	plain  PlainDecoder
@@ -98,7 +112,15 @@ func NewColumnReader(c Column) (*ColumnReader, error) {
 			ErrFormat, c.Name(), c.MaxDefinition)
 	}
 
+	var indices *array.Builder
 	b, err := array.NewBuilder(c.Type)
+	if err == nil {
+		// Where the rows of a dictionary encoded chunk go. The format has one
+		// index type whatever the values are, so this is made along with the
+		// values rather than when a dictionary page turns up, and the one check
+		// that the column has a type kuma can build covers both.
+		indices, err = array.NewBuilder(dtype.Int32)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("parquet: %s: %w", c.Name(), err)
 	}
@@ -114,18 +136,49 @@ func NewColumnReader(c Column) (*ColumnReader, error) {
 		maxDefinition: int32(c.MaxDefinition),
 		width:         uint(bits.Len(uint(c.MaxDefinition))),
 		values:        values,
+		indices:       indices,
+		out:           b,
+		run:           values.run,
 	}, nil
 }
 
-// DType returns the type of the column being read.
+// DType returns the type of the values of the column being read.
+//
+// A chunk written as indices into a dictionary comes back dictionary encoded,
+// so what Finish hands back for one of those is a dictionary of this type
+// rather than this type. Which of the two a chunk is is not known until its
+// first page has been read.
 func (r *ColumnReader) DType() dtype.DataType { return r.column.Type }
 
 // Len returns how many values have been assembled, nulls included.
-func (r *ColumnReader) Len() int { return r.builder.Len() }
+func (r *ColumnReader) Len() int { return r.out.Len() }
 
 // Finish returns the values assembled so far and leaves the reader ready for
 // another chunk of the same column.
-func (r *ColumnReader) Finish() *array.Array { return r.builder.Finish() }
+//
+// A chunk that was written as indices into a dictionary comes back dictionary
+// encoded rather than expanded, so a column of a million rows holding two
+// hundred distinct strings is a million indices and two hundred strings. That
+// is the shape it was written in and the shape the kernels would rather have
+// it in, and expanding it would be undoing the one thing the encoding is for.
+func (r *ColumnReader) Finish() (*array.Array, error) {
+	if r.dict == nil {
+		return r.builder.Finish(), nil
+	}
+
+	dict := r.dict
+	r.dict, r.out, r.run = nil, r.builder, r.values.run
+
+	// The indices are checked against the dictionary here rather than as they
+	// are decoded, since it is the same walk either way and this is the one
+	// that knows what to say about it. An index that is not in the dictionary
+	// is a read out of range in whatever touches the column next.
+	a, err := array.NewDictionary(r.indices.Finish(), dict)
+	if err != nil {
+		return nil, fmt.Errorf("parquet: %w: %s: %w", ErrFormat, r.column.Name(), err)
+	}
+	return a, nil
+}
 
 // Page assembles one page.
 //
@@ -138,17 +191,15 @@ func (r *ColumnReader) Page(p Page) error {
 	switch p.Kind {
 	case DataPage, DataPageV2:
 	case DictionaryPage:
-		return fmt.Errorf("parquet: %w: %s has a dictionary page and dictionaries are not read yet",
-			ErrUnsupported, r.column.Name())
+		return r.dictionary(p)
 	default:
 		// A page type this package has never heard of. The walk knows to step
 		// over one and there is nothing in it for a column.
 		return nil
 	}
 
-	if p.Encoding != Plain {
-		return fmt.Errorf("parquet: %w: a %s page of %s and only plain pages are read yet",
-			ErrUnsupported, p.Encoding, r.column.Name())
+	if err := r.encoding(p); err != nil {
+		return err
 	}
 	if p.NumValues < 0 {
 		return fmt.Errorf("parquet: %w: a page of %s holding %d values",
@@ -182,9 +233,15 @@ func (r *ColumnReader) Page(p Page) error {
 		}
 	}
 
-	r.plain.Reset(body)
-	if err := r.values.decode(&r.plain, present); err != nil {
-		return fmt.Errorf("parquet: %s: %w", r.column.Name(), err)
+	if r.dict != nil {
+		if err := r.decodeIndices(body, present); err != nil {
+			return err
+		}
+	} else {
+		r.plain.Reset(body)
+		if err := r.values.decode(&r.plain, present); err != nil {
+			return fmt.Errorf("parquet: %s: %w", r.column.Name(), err)
+		}
 	}
 	r.assemble(count, present)
 	return nil
@@ -281,9 +338,9 @@ func (r *ColumnReader) decodeLevels(p Page, data []byte) error {
 // nulls, and a column that alternates is the worst case and is rare enough that
 // the loop is not worth unrolling for it.
 func (r *ColumnReader) assemble(count, present int) {
-	r.builder.Grow(count)
+	r.out.Grow(count)
 	if r.maxDefinition == 0 {
-		r.values.run(0, present)
+		r.run(0, present)
 		return
 	}
 
@@ -294,13 +351,13 @@ func (r *ColumnReader) assemble(count, present int) {
 			for j < len(r.levels) && r.levels[j] == r.maxDefinition {
 				j++
 			}
-			r.values.run(taken, j-i)
+			r.run(taken, j-i)
 			taken += j - i
 		} else {
 			for j < len(r.levels) && r.levels[j] != r.maxDefinition {
 				j++
 			}
-			r.builder.AppendNulls(j - i)
+			r.out.AppendNulls(j - i)
 		}
 		i = j
 	}
@@ -310,7 +367,8 @@ func (r *ColumnReader) assemble(count, present int) {
 //
 // The size is the size of the file, the same one ReadMetadata was given, and c
 // is the column the chunk holds, which is one of the leaves Metadata.Columns
-// returned.
+// returned. A chunk written as indices into a dictionary comes back dictionary
+// encoded, which is what ColumnReader.Finish says more about.
 func ReadColumn(r io.ReaderAt, size int64, chunk *ColumnChunk, c Column) (*array.Array, error) {
 	if chunk.Meta.Codec != Uncompressed {
 		return nil, fmt.Errorf("parquet: %w: %s is %s and nothing is decompressed yet",
@@ -343,7 +401,7 @@ func ReadColumn(r io.ReaderAt, size int64, chunk *ColumnChunk, c Column) (*array
 		return nil, fmt.Errorf("parquet: %w: the chunk for %s says it has %d values and its pages hold %d",
 			ErrFormat, c.Name(), chunk.Meta.NumValues, reader.Len())
 	}
-	return reader.Finish(), nil
+	return reader.Finish()
 }
 
 // valuesFor decides how a column's values are read and appended.
