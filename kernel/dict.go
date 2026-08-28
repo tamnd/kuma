@@ -44,6 +44,13 @@ import (
 // encoding is storage rather than meaning, so a column of country codes answers
 // the same question the same way whether it was read out of a parquet file that
 // wrote a dictionary or one that did not.
+//
+// Casting one is the last thing in here and the one the encoding pays for most.
+// A cast reads every value, so casting the dictionary and leaving the indices
+// alone turns a million conversions into two hundred and fifty. What the result
+// looks like is what the caller asked for: a cast to a plain type expands, and
+// a cast to another dictionary type keeps the encoding and casts the indices as
+// well.
 
 // dictIndex returns where in its dictionary each row of a points, or nil when a
 // is not encoded at all. A row with no value gives minus one, whether it holds
@@ -454,4 +461,180 @@ func anyMissing(a *array.Array) bool {
 	}
 	d := a.Dictionary()
 	return d != nil && d.NullCount() > 0
+}
+
+// castDictionary casts a dictionary encoded column, which is a cast of the
+// values behind the indices with a decode or a re-encoding around it.
+//
+// The values are cast once each rather than once per row, which is the point of
+// doing this here at all: a column of a million rows over two hundred and fifty
+// distinct strings parses two hundred and fifty numbers. Two chunks reading
+// from one dictionary cast it once between them, which is what a column read
+// out of one file looks like.
+//
+// A value the cast cannot take fails the whole cast only when a row points at
+// it. A dictionary is allowed to hold values the column never uses, a writer
+// that carried one over from another row group has not put anything wrong in
+// the column, and a column holding no bad value has nothing wrong with it
+// whatever its dictionary carries.
+func castDictionary(c *array.Chunked, from dtype.Dictionary, to dtype.DataType, loose bool) (*array.Chunked, error) {
+	value := to
+	keep, encoded := to.(dtype.Dictionary)
+	if encoded {
+		value = keep.Value
+		if !dtype.IsInteger(keep.Index) {
+			return nil, fmt.Errorf("kernel: cannot cast %s to %s, a dictionary is indexed by an integer", from, to)
+		}
+	}
+
+	// The values are already what was asked for when only the indices are
+	// changing, which is a cast between two dictionary types over one value
+	// type, and then there is nothing to convert and nothing to fail.
+	var conv converse
+	if !dtype.Equal(from.Value, value) {
+		var err error
+		if conv, err = converter(from.Value, value); err != nil {
+			return nil, err
+		}
+	}
+
+	done := make(map[*array.Array]dictCast, c.NumChunks())
+	chunks := make([]*array.Array, 0, c.NumChunks())
+	row := 0
+	for _, a := range c.Chunks() {
+		d := a.Dictionary()
+		cv, ok := done[d]
+		if !ok {
+			cv = castValues(d, value, conv)
+			done[d] = cv
+		}
+		if !loose && cv.fails != nil {
+			if err := failedRow(a, cv.fails, row, from, to); err != nil {
+				return nil, err
+			}
+		}
+
+		if !encoded {
+			chunks = append(chunks, decodeChunk(a, cv.values, value))
+			row += a.Len()
+			continue
+		}
+
+		out, err := encodeChunk(a, cv.values, from, keep)
+		if err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, out)
+		row += a.Len()
+	}
+
+	// Every chunk was built as the type asked for, either by a builder made for
+	// it or by pointing indices at values of it.
+	return chunked(to, chunks...), nil
+}
+
+// dictCast is a dictionary's values in the type asked for, and what went wrong
+// with the ones that would not go.
+type dictCast struct {
+	values *array.Array
+
+	// fails[j] is why value j would not cast. The slice is nil when the whole
+	// dictionary went, which is the case worth not allocating for and is every
+	// cast that is going to succeed.
+	fails []*CastError
+}
+
+// castValues casts every value of a dictionary, writing down what went wrong
+// rather than stopping, because whether a bad value matters is a question about
+// the rows and not about the dictionary.
+func castValues(d *array.Array, to dtype.DataType, conv converse) dictCast {
+	if conv == nil {
+		return dictCast{values: d}
+	}
+
+	// The type was handed to converter, which reads and writes it.
+	b := builder(to)
+	b.Grow(d.Len())
+
+	var fails []*CastError
+	for i := range d.Len() {
+		if d.IsNull(i) {
+			b.AppendNull()
+			continue
+		}
+		if e := conv(b, d, i); e != nil {
+			if fails == nil {
+				fails = make([]*CastError, d.Len())
+			}
+			fails[i] = e
+			b.AppendNull()
+		}
+	}
+	return dictCast{values: b.Finish(), fails: fails}
+}
+
+// failedRow returns the error for the first row of a chunk that points at a
+// value the cast could not take, or nil when no row points at one. The row is
+// counted from start, which is where this chunk begins in the column.
+func failedRow(a *array.Array, fails []*CastError, start int, from, to dtype.DataType) *CastError {
+	at := dictIndex(a)
+	for i := range a.Len() {
+		j := at(i)
+		if j < 0 || fails[j] == nil {
+			continue
+		}
+
+		e := fails[j]
+		e.Row, e.From, e.To = start+i, from, to
+		return e
+	}
+	return nil
+}
+
+// decodeChunk expands one chunk into the values its indices point at, which is
+// what a cast to a plain type asked for.
+//
+// A row pointing at a value that would not cast is a null here, since a strict
+// cast has already stopped on it and a loose one wanted the null.
+func decodeChunk(a, values *array.Array, to dtype.DataType) *array.Array {
+	b := builder(to)
+	b.Grow(a.Len())
+
+	idx := make([]int, a.Len())
+	at := dictIndex(a)
+	for i := range idx {
+		idx[i] = at(i)
+	}
+	gather(b, one(to, values), idx)
+	return b.Finish()
+}
+
+// encodeChunk keeps the encoding, pointing this chunk's indices at the values
+// that were just cast and numbering them the way the caller asked for.
+func encodeChunk(a, values *array.Array, from, to dtype.Dictionary) (*array.Array, error) {
+	if limit := dictLimit(to.Index); values.Len() > limit {
+		return nil, fmt.Errorf("kernel: cannot cast %s to %s, the dictionary holds %d values and an index of %s can name %d",
+			from, to, values.Len(), to.Index, limit)
+	}
+
+	idx := a.Indices()
+	if !dtype.Equal(from.Index, to.Index) {
+		out, err := cast(one(from.Index, idx), to.Index, false)
+		if err != nil {
+			// Every index is a position in a dictionary short enough to be
+			// numbered by the new type, so there is nothing here that does not
+			// fit in it.
+			panic("kernel: " + err.Error())
+		}
+		idx = out.Chunk(0)
+	}
+
+	out, err := array.NewDictionary(idx, values)
+	if err != nil {
+		// The indices were checked against a dictionary of this length when the
+		// column was built, and casting them changed the type rather than the
+		// values.
+		panic("kernel: " + err.Error())
+	}
+	return out, nil
 }

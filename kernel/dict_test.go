@@ -1,8 +1,10 @@
 package kernel_test
 
 import (
+	"errors"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -1060,4 +1062,485 @@ func BenchmarkSortDictionary(b *testing.B) {
 			}
 		}
 	})
+}
+
+// TestCastDictionary is the ordinary case: a column of numbers written as
+// strings and read out of a file that encoded them becomes a column of numbers.
+// The result is a plain int64 column, since that is what was asked for.
+func TestCastDictionary(t *testing.T) {
+	c := dictColumn(t, arrayOf(t, dtype.String, "10", "20", "30"), 2, 0, 1, -1, 0)
+	got, err := kernel.Cast(c, dtype.Int64)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+
+	if !dtype.Equal(got.DType(), dtype.Int64) {
+		t.Fatalf("the result is a %s column, want int64", got.DType())
+	}
+	want := []any{int64(30), int64(10), int64(20), nil, int64(10)}
+	for i, w := range want {
+		if have := valueAt(t, got, i); have != w {
+			t.Errorf("value %d is %v, want %v", i, have, w)
+		}
+	}
+	if got.NullCount() != 1 {
+		t.Errorf("the result counts %d nulls, want 1", got.NullCount())
+	}
+}
+
+// TestCastDictionaryChunks is a column whose chunks read from the one
+// dictionary, which is what a column read out of one file looks like. The
+// values are cast once between them and the rows of both chunks come out right.
+func TestCastDictionaryChunks(t *testing.T) {
+	values := arrayOf(t, dtype.String, "1", "2", "3")
+	c, err := array.NewChunked(codeType,
+		codes(t, values, 0, 1),
+		codes(t, values, 2, -1, 0))
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+
+	got, err := kernel.Cast(c, dtype.Int32)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if got.NumChunks() != 2 {
+		t.Errorf("the result has %d chunks, want 2", got.NumChunks())
+	}
+	want := []any{int32(1), int32(2), int32(3), nil, int32(1)}
+	for i, w := range want {
+		if have := valueAt(t, got, i); have != w {
+			t.Errorf("value %d is %v, want %v", i, have, w)
+		}
+	}
+}
+
+// TestCastDictionaryDisagree is two chunks holding different dictionaries,
+// which is what putting two files end to end gives. Each is cast on its own and
+// the rows read the values of their own chunk.
+func TestCastDictionaryDisagree(t *testing.T) {
+	c, err := array.NewChunked(codeType,
+		codes(t, arrayOf(t, dtype.String, "1", "2"), 1, 0),
+		codes(t, arrayOf(t, dtype.String, "7", "8"), 0, 1))
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+
+	got, err := kernel.Cast(c, dtype.Int64)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	want := []any{int64(2), int64(1), int64(7), int64(8)}
+	for i, w := range want {
+		if have := valueAt(t, got, i); have != w {
+			t.Errorf("value %d is %v, want %v", i, have, w)
+		}
+	}
+}
+
+// TestCastDictionaryNullValue is a dictionary that holds a null of its own,
+// meaning a value that is missing rather than a row that is. A row pointing at
+// it has no value to cast and comes out missing.
+func TestCastDictionaryNullValue(t *testing.T) {
+	c := dictColumn(t, arrayOf(t, dtype.String, "5", nil, "6"), 0, 1, 2)
+	got, err := kernel.Cast(c, dtype.Int64)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+
+	want := []any{int64(5), nil, int64(6)}
+	for i, w := range want {
+		if have := valueAt(t, got, i); have != w {
+			t.Errorf("value %d is %v, want %v", i, have, w)
+		}
+	}
+}
+
+// TestCastDictionaryIndexTypes casts once per index type, since reaching the
+// rows of a chunk goes through the index and each width is a case of its own.
+func TestCastDictionaryIndexTypes(t *testing.T) {
+	for _, index := range []dtype.DataType{
+		dtype.Int8, dtype.Int16, dtype.Int32, dtype.Int64,
+		dtype.Uint8, dtype.Uint16, dtype.Uint32, dtype.Uint64,
+	} {
+		t.Run(index.String(), func(t *testing.T) {
+			c := indexed(t, index, arrayOf(t, dtype.String, "4", "9"), 1, 0, -1)
+			got, err := kernel.Cast(c, dtype.Int64)
+			if err != nil {
+				t.Fatalf("Cast: %v", err)
+			}
+			want := []any{int64(9), int64(4), nil}
+			for i, w := range want {
+				if have := valueAt(t, got, i); have != w {
+					t.Errorf("value %d is %v, want %v", i, have, w)
+				}
+			}
+		})
+	}
+}
+
+// TestCastDictionaryBadValue is a value no parser will take, with a row
+// pointing at it. The whole cast fails and says which row it was, counted from
+// the start of the column and not from the start of the chunk.
+func TestCastDictionaryBadValue(t *testing.T) {
+	values := arrayOf(t, dtype.String, "1", "n/a")
+	c, err := array.NewChunked(codeType,
+		codes(t, values, 0, 0),
+		codes(t, values, 0, 1, 0))
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+
+	_, err = kernel.Cast(c, dtype.Int64)
+	if err == nil {
+		t.Fatal("the cast took a value that is not a number")
+	}
+
+	var ce *kernel.CastError
+	if !errors.As(err, &ce) {
+		t.Fatalf("Cast returned %v, want a *CastError", err)
+	}
+	if ce.Row != 3 {
+		t.Errorf("the error blames row %d, want 3", ce.Row)
+	}
+	if !dtype.Equal(ce.From, codeType) {
+		t.Errorf("the error says the column is a %s, want %s", ce.From, codeType)
+	}
+	if !dtype.Equal(ce.To, dtype.Int64) {
+		t.Errorf("the error says the cast was to %s, want int64", ce.To)
+	}
+	if !strings.Contains(ce.Value, "n/a") {
+		t.Errorf("the error prints the value as %s, want it to mention n/a", ce.Value)
+	}
+}
+
+// TestCastDictionaryUnusedBadValue is the decision this file makes about a
+// dictionary holding more than the column uses. A writer that carried a value
+// over from another row group has not put anything wrong in the rows, so a
+// value nothing points at does not fail the cast.
+func TestCastDictionaryUnusedBadValue(t *testing.T) {
+	c := dictColumn(t, arrayOf(t, dtype.String, "1", "n/a", "2"), 0, 2, -1, 0)
+	got, err := kernel.Cast(c, dtype.Int64)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+
+	want := []any{int64(1), int64(2), nil, int64(1)}
+	for i, w := range want {
+		if have := valueAt(t, got, i); have != w {
+			t.Errorf("value %d is %v, want %v", i, have, w)
+		}
+	}
+}
+
+// TestTryCastDictionary is the same bad value with the strictness turned off,
+// where the rows pointing at it come out missing and the rest come out.
+func TestTryCastDictionary(t *testing.T) {
+	c := dictColumn(t, arrayOf(t, dtype.String, "1", "n/a", "2"), 1, 0, 1, 2)
+	got, err := kernel.TryCast(c, dtype.Int64)
+	if err != nil {
+		t.Fatalf("TryCast: %v", err)
+	}
+
+	want := []any{nil, int64(1), nil, int64(2)}
+	for i, w := range want {
+		if have := valueAt(t, got, i); have != w {
+			t.Errorf("value %d is %v, want %v", i, have, w)
+		}
+	}
+	if got.NullCount() != 2 {
+		t.Errorf("the result counts %d nulls, want 2", got.NullCount())
+	}
+}
+
+// TestCastDictionaryKeeps is a cast to another dictionary type, which keeps the
+// encoding. The values are cast and the indices are left where they are, so a
+// hundred thousand rows over three values convert three values.
+func TestCastDictionaryKeeps(t *testing.T) {
+	c := dictColumn(t, arrayOf(t, dtype.String, "10", "20", "30"), 2, 0, -1, 1)
+	to := dtype.Dictionary{Index: dtype.Int32, Value: dtype.Int64}
+
+	got, err := kernel.Cast(c, to)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if !dtype.Equal(got.DType(), to) {
+		t.Fatalf("the result is a %s column, want %s", got.DType(), to)
+	}
+	if d := got.Chunk(0).Dictionary(); d.Len() != 3 {
+		t.Errorf("the result holds %d values, want 3", d.Len())
+	}
+
+	want := []any{int64(30), int64(10), nil, int64(20)}
+	for i, w := range want {
+		if have := valueAt(t, got, i); have != w {
+			t.Errorf("value %d is %v, want %v", i, have, w)
+		}
+	}
+}
+
+// TestCastDictionaryIndex is a cast that changes nothing but the index type,
+// which is what narrowing a column read out of a file to what it turned out to
+// need looks like. There is nothing to convert, so the values are the ones that
+// were already there rather than a copy of them.
+func TestCastDictionaryIndex(t *testing.T) {
+	values := arrayOf(t, dtype.String, "de", "fr", "it")
+	c := dictColumn(t, values, 0, 2, -1, 1)
+
+	to := dtype.Dictionary{Index: dtype.Int8, Value: dtype.String}
+	got, err := kernel.Cast(c, to)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if !dtype.Equal(got.DType(), to) {
+		t.Fatalf("the result is a %s column, want %s", got.DType(), to)
+	}
+	if d := got.Chunk(0).Dictionary(); d != values {
+		t.Error("the result copied the values, want the ones it was given")
+	}
+	if k := got.Chunk(0).Indices().DType(); !dtype.Equal(k, dtype.Int8) {
+		t.Errorf("the result is indexed by %s, want int8", k)
+	}
+	wantCodes(t, got, "de", "it", "", "fr")
+}
+
+// TestCastDictionaryIndexTooSmall is the one thing that cannot be done. An
+// index of a type that cannot name every value of the dictionary would leave
+// rows pointing nowhere, so it is refused before anything is cast.
+func TestCastDictionaryIndexTooSmall(t *testing.T) {
+	b, err := array.NewBuilder(dtype.String)
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+	for i := range 200 {
+		b.AppendString(strings.Repeat("a", i%9+1))
+	}
+	c := dictColumn(t, b.Finish(), 0, 1, 2)
+
+	to := dtype.Dictionary{Index: dtype.Int8, Value: dtype.String}
+	_, err = kernel.Cast(c, to)
+	if err == nil {
+		t.Fatal("the cast numbered two hundred values in an int8")
+	}
+	if !strings.Contains(err.Error(), "can name") {
+		t.Errorf("Cast said %q, want it to say what an int8 can name", err)
+	}
+}
+
+// TestCastDictionaryIndexNotInteger is a destination that is a dictionary of
+// something that cannot be a position. It is a mistake in the type rather than
+// in the data, and it is refused before any value is read.
+func TestCastDictionaryIndexNotInteger(t *testing.T) {
+	c := dictColumn(t, arrayOf(t, dtype.String, "1", "2"), 0, 1)
+
+	to := dtype.Dictionary{Index: dtype.Float64, Value: dtype.Int64}
+	_, err := kernel.Cast(c, to)
+	if err == nil {
+		t.Fatal("the cast indexed a dictionary by a float")
+	}
+	if !strings.Contains(err.Error(), "indexed by an integer") {
+		t.Errorf("Cast said %q, want it to say an index is an integer", err)
+	}
+}
+
+// TestCastDictionaryNotYet is a cast of the values that this package has not
+// learned. The encoding does not change the answer, so it is the same error the
+// same cast gives on a plain column.
+func TestCastDictionaryNotYet(t *testing.T) {
+	c := dictColumn(t, arrayOf(t, dtype.String, "2026-08-29"), 0)
+
+	_, err := kernel.Cast(c, dtype.Timestamp{Unit: dtype.Second})
+	if err == nil {
+		t.Fatal("the cast parsed a date")
+	}
+	if !strings.Contains(err.Error(), "not implemented yet") {
+		t.Errorf("Cast said %q, want it to say the cast is not written yet", err)
+	}
+}
+
+// TestCastToDictionary is encoding a plain column, which is the other half of
+// this and is not written yet. It is worth a test because the error has to say
+// so rather than the cast quietly producing something else.
+func TestCastToDictionary(t *testing.T) {
+	c := col(t, dtype.String, []any{"de", "fr", "de"})
+
+	to := dtype.Dictionary{Index: dtype.Int32, Value: dtype.String}
+	_, err := kernel.Cast(c, to)
+	if err == nil {
+		t.Fatal("the cast encoded a plain column")
+	}
+	if !strings.Contains(err.Error(), "not implemented yet") {
+		t.Errorf("Cast said %q, want it to say the cast is not written yet", err)
+	}
+}
+
+// TestCastDictionaryToNull throws every value away, which is allowed because it
+// takes saying so. The rows are still there and every one of them is missing.
+func TestCastDictionaryToNull(t *testing.T) {
+	c := dictColumn(t, arrayOf(t, dtype.String, "de", "fr"), 0, 1, 0)
+	got, err := kernel.Cast(c, dtype.Null)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if got.Len() != 3 || got.NullCount() != 3 {
+		t.Errorf("the result has %d values and %d nulls, want 3 and 3", got.Len(), got.NullCount())
+	}
+}
+
+// TestCastDictionarySame is a cast to the type the column already has, which is
+// the column itself and no work at all.
+func TestCastDictionarySame(t *testing.T) {
+	c := dictColumn(t, arrayOf(t, dtype.String, "de", "fr"), 1, 0)
+	got, err := kernel.Cast(c, codeType)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if got != c {
+		t.Error("the cast built a new column, want the one it was given")
+	}
+}
+
+// TestCastDictionaryNumbers is a dictionary of something that is not a string,
+// since nothing in here knows what a value is and this is the test that says so.
+func TestCastDictionaryNumbers(t *testing.T) {
+	c := dictColumn(t, arrayOf(t, dtype.Int64, int64(1), int64(2)), 0, 1, 1)
+	got, err := kernel.Cast(c, dtype.Float64)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+
+	want := []any{1.0, 2.0, 2.0}
+	for i, w := range want {
+		if have := valueAt(t, got, i); have != w {
+			t.Errorf("value %d is %v, want %v", i, have, w)
+		}
+	}
+}
+
+// TestCastDictionaryEmpty is a column with no chunks in it, which has no
+// dictionary to cast and no rows to expand.
+func TestCastDictionaryEmpty(t *testing.T) {
+	c, err := array.NewChunked(codeType)
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+
+	got, err := kernel.Cast(c, dtype.Int64)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	if got.Len() != 0 {
+		t.Errorf("the result has %d values, want none", got.Len())
+	}
+	if !dtype.Equal(got.DType(), dtype.Int64) {
+		t.Errorf("the result is a %s column, want int64", got.DType())
+	}
+}
+
+// benchDictParse is a column of numbers written as text, stored both dictionary
+// encoded and plain. Parsing is the expensive cast and the one a Parquet file
+// of low cardinality strings actually asks for.
+func benchDictParse(b *testing.B) (dict, plain *array.Chunked) {
+	b.Helper()
+
+	values, err := array.NewBuilder(dtype.String)
+	if err != nil {
+		b.Fatalf("NewBuilder: %v", err)
+	}
+	for i := range benchDictValues {
+		values.AppendString(strconv.Itoa(i * 37))
+	}
+	vals := values.Finish()
+
+	idx, err := array.NewBuilder(dtype.Int32)
+	if err != nil {
+		b.Fatalf("NewBuilder: %v", err)
+	}
+	strs, err := array.NewBuilder(dtype.String)
+	if err != nil {
+		b.Fatalf("NewBuilder: %v", err)
+	}
+	for i := range benchDictRows {
+		at := i % benchDictValues
+		idx.Append(int32(at))
+		strs.AppendBytes(vals.Bytes(at))
+	}
+
+	a, err := array.NewDictionary(idx.Finish(), vals)
+	if err != nil {
+		b.Fatalf("NewDictionary: %v", err)
+	}
+	dict, err = array.NewChunked(codeType, a)
+	if err != nil {
+		b.Fatalf("NewChunked: %v", err)
+	}
+	plain, err = array.NewChunked(dtype.String, strs.Finish())
+	if err != nil {
+		b.Fatalf("NewChunked: %v", err)
+	}
+	return dict, plain
+}
+
+// BenchmarkCastDictionary parses the same column stored both ways. The keep
+// case is the one the encoding was built for, since it parses two hundred and
+// fifty numbers and copies nothing, and the decode case still parses only those
+// and then writes the hundred thousand rows the caller asked for.
+func BenchmarkCastDictionary(b *testing.B) {
+	dict, plain := benchDictParse(b)
+	keep := dtype.Dictionary{Index: dtype.Int32, Value: dtype.Int64}
+
+	b.Run("keep", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := kernel.Cast(dict, keep); err != nil {
+				b.Fatalf("Cast: %v", err)
+			}
+		}
+	})
+	b.Run("decode", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := kernel.Cast(dict, dtype.Int64); err != nil {
+				b.Fatalf("Cast: %v", err)
+			}
+		}
+	})
+	b.Run("strings", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := kernel.Cast(plain, dtype.Int64); err != nil {
+				b.Fatalf("Cast: %v", err)
+			}
+		}
+	})
+}
+
+// TestCastDictionarySliced checks that the cast reads the column it was given
+// rather than the buffers underneath it, which for a sliced column start
+// somewhere else.
+func TestCastDictionarySliced(t *testing.T) {
+	values := arrayOf(t, dtype.String, "1", "2", "3")
+	whole := codes(t, values, 0, 1, 2, -1, 0)
+	c, err := array.NewChunked(codeType, whole.Slice(1, 4))
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+
+	got, err := kernel.Cast(c, dtype.Int64)
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	want := []any{int64(2), int64(3), nil}
+	for i, w := range want {
+		if have := valueAt(t, got, i); have != w {
+			t.Errorf("value %d is %v, want %v", i, have, w)
+		}
+	}
+
+	keep, err := kernel.Cast(c, dtype.Dictionary{Index: dtype.Int16, Value: dtype.Int64})
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	for i, w := range want {
+		if have := valueAt(t, keep, i); have != w {
+			t.Errorf("value %d of the encoded result is %v, want %v", i, have, w)
+		}
+	}
 }

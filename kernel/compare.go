@@ -237,10 +237,13 @@ func builder(dt dtype.DataType) *array.Builder {
 	return b
 }
 
-// one returns a column of a single chunk. The builder was made for the type, so
-// the two agree and the error cannot happen.
-func one(dt dtype.DataType, a *array.Array) *array.Chunked {
-	c, err := array.NewChunked(dt, a)
+// one returns a column of a single chunk.
+func one(dt dtype.DataType, a *array.Array) *array.Chunked { return chunked(dt, a) }
+
+// chunked returns a column of chunks this package has just built as the type it
+// is putting them under, so the two agree and the error cannot happen.
+func chunked(dt dtype.DataType, chunks ...*array.Array) *array.Chunked {
+	c, err := array.NewChunked(dt, chunks...)
 	if err != nil {
 		panic("kernel: " + err.Error())
 	}
