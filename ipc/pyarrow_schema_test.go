@@ -167,10 +167,10 @@ func findPython(t *testing.T) string {
 
 // pyarrowCases are the schemas kuma writes for pyarrow to read.
 //
-// arrow is what pyarrow should make of it, written in pyarrow's own vocabulary,
-// and back is what kuma should read when pyarrow serializes it again. The two
-// of them are what the cross check is: a claim about another implementation,
-// written down before it runs.
+// The arrow field is what pyarrow should make of it, written in pyarrow's own
+// vocabulary, and back is what kuma should read when pyarrow serializes it
+// again. The two of them are what the cross check is: a claim about another
+// implementation, written down before it runs.
 var pyarrowCases = []struct {
 	name   string
 	schema dtype.Schema

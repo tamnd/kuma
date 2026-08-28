@@ -9,11 +9,11 @@ import (
 	"github.com/tamnd/kuma/ipc"
 )
 
-// schemaCases are the schemas that go out and come back. want is what comes
-// back when it is not what went out, which happens for the text layouts kuma
-// does not keep: a large string is written as a large string and read as a
-// string, the same collapse the format strings make, since kuma has one layout
-// for text and Arrow has four.
+// schemaCases are the schemas that go out and come back. The want field is
+// what comes back when it is not what went out, which happens for the text
+// layouts kuma does not keep: a large string is written as a large string and
+// read as a string, the same collapse the format strings make, since there is
+// one kuma layout for text and four Arrow ones.
 var schemaCases = []struct {
 	name   string
 	schema dtype.Schema

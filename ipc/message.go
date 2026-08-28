@@ -605,10 +605,10 @@ func encodeKeyValues(w *fbBuilder, m dtype.Metadata) []fbOffset {
 // is pointed at again rather than written twice.
 //
 // Text and bytes are the one place this is not a translation of the type but a
-// choice about it. kuma has one layout for each and Arrow has four, and what
-// goes on the wire is the layout kuma holds, so a string column is written as
-// a utf8 view. A reader that wants the classic layout can say so with
-// dtype.LargeString, which is there for exactly this.
+// choice about it. There is one kuma layout for each and four Arrow ones, and
+// what goes on the wire is the layout kuma holds, so a string column is
+// written as a utf8 view. A reader that wants the classic layout can say so
+// with dtype.LargeString, which is there for exactly this.
 func (sw *schemaWriter) dataType(t dtype.DataType) (int, fbOffset, error) {
 	if t == nil {
 		return 0, 0, fmt.Errorf("ipc: %w: nil type", ErrType)
