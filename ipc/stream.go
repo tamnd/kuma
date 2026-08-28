@@ -283,6 +283,14 @@ func readRest(r io.Reader, meta int32) ([]byte, uint8, error) {
 	if err != nil {
 		return nil, fbHeaderNone, err
 	}
+	// The body length has been read out of metadata that parsed, which is more
+	// than the length in front of the message had going for it, but it is still
+	// a number in a file and the same cap applies. A body larger than the cap
+	// costs one growth of the buffer per megabyte, which is what a reader with
+	// no idea how much was coming would pay anyway.
+	// The min is taken before the conversion, since a length that does not fit
+	// in an int would arrive here as anything at all.
+	out.Grow(int(min(body, maxHint)))
 	if err := copyN(&out, r, body, "the body of a message"); err != nil {
 		return nil, fbHeaderNone, err
 	}
