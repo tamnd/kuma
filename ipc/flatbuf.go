@@ -245,6 +245,30 @@ func (v fbVector) table(i int) (fbTable, error) {
 	return fbTableAt(v.buf, to)
 }
 
+// span reads element i of a vector of the two int64 structs the record batch
+// metadata is made of.
+func (v fbVector) span(i int) (span, error) {
+	pos, err := v.elem(i, fbNodeSize)
+	if err != nil {
+		return span{}, err
+	}
+	first, err := fbInt64(v.buf, pos)
+	if err != nil {
+		return span{}, err
+	}
+	second, err := fbInt64(v.buf, pos+8)
+	return span{first: first, second: second}, err
+}
+
+// int64at reads element i of a vector of int64.
+func (v fbVector) int64at(i int) (int64, error) {
+	pos, err := v.elem(i, 8)
+	if err != nil {
+		return 0, err
+	}
+	return fbInt64(v.buf, pos)
+}
+
 // elem is where element i of a vector of fixed size elements starts. A vector
 // of structs is read with this and the size of the struct, since a struct in
 // FlatBuffers is bytes in place rather than something pointed at.

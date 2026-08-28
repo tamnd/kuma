@@ -29,12 +29,19 @@
 // somebody else's bytes and the generated readers for this format are not
 // bounds checked.
 //
+// EncodeBatch and DecodeBatch are the values that go with a schema. A record
+// batch is a message describing where every buffer of every column sits,
+// followed by the buffers themselves, and the schema it belongs to is something
+// the reader is expected to have already. Nothing is copied on the way in, so
+// the arrays a batch decodes into point at the bytes it was decoded from.
+//
 // Both interfaces are checked against pyarrow, in both directions, by the tests
 // in testdata/pyarrow. The C one runs two libraries in one process and compares
 // buffer addresses, and the message one passes files.
 //
-// What is not here yet: arrays of the nested types, record batches and the
-// Arrow IPC file and stream formats, and the arrow-go bridge.
+// What is not here yet: arrays of the nested types, dictionary batches, a
+// compressed body, the Arrow IPC file and stream formats, and the arrow-go
+// bridge.
 //
 // Stability: tier 1, stable.
 package ipc

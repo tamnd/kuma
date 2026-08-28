@@ -259,6 +259,40 @@ func (w *fbBuilder) offsets(offs []fbOffset) fbOffset {
 	return w.endVector(len(offs))
 }
 
+// span is the one struct shape the Arrow metadata uses, which is two int64s in
+// place. A FieldNode is a length and a null count and a Buffer is an offset and
+// a length, so both of them are read and written by the same pair of calls.
+type span struct {
+	first  int64
+	second int64
+}
+
+// spans writes a vector of those structs. A struct in FlatBuffers is bytes
+// where they lie rather than something pointed at, so the elements go straight
+// into the buffer, backwards like everything else and with the second half of
+// each one first.
+func (w *fbBuilder) spans(vals []span) fbOffset {
+	w.startVector(fbNodeSize, len(vals), 8)
+	for i := len(vals) - 1; i >= 0; i-- {
+		w.prep(8, 0)
+		w.putUint64(uint64(vals[i].second))
+		w.prep(8, 0)
+		w.putUint64(uint64(vals[i].first))
+	}
+	return w.endVector(len(vals))
+}
+
+// int64s writes a vector of int64, which is what the variadic buffer counts of
+// a record batch are.
+func (w *fbBuilder) int64s(vals []int64) fbOffset {
+	w.startVector(8, len(vals), 8)
+	for i := len(vals) - 1; i >= 0; i-- {
+		w.prep(8, 0)
+		w.putUint64(uint64(vals[i]))
+	}
+	return w.endVector(len(vals))
+}
+
 // startVector makes room for n elements of the given width, aligned to the
 // given alignment, which is wider than the element for a vector of structs.
 // The elements are written by the caller and endVector writes the length.

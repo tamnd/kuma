@@ -119,6 +119,14 @@ func Import(format string, l Layout) (*array.Array, error) {
 	if l.Length < 0 || l.Offset < 0 {
 		return nil, fmt.Errorf("ipc: %w: length %d and offset %d", ErrBuffers, l.Length, l.Offset)
 	}
+	// Both halves are counts somebody else wrote, so the sum of them is checked
+	// before anything adds them again. Everything below works in values after
+	// the offset, and a total that has wrapped is a small number that passes
+	// every check underneath it.
+	if l.Offset+l.Length < 0 {
+		return nil, fmt.Errorf("ipc: %w: %d values after an offset of %d, which is more than an int can count",
+			ErrBuffers, l.Length, l.Offset)
+	}
 
 	switch format {
 	case "u":
@@ -185,9 +193,12 @@ func importViews(format string, t dtype.DataType, l Layout) (*array.Array, error
 			ErrBuffers, format, len(l.Buffers))
 	}
 	total := l.Offset + l.Length
-	if need := total * strview.Size; len(l.Buffers[1]) < need {
-		return nil, fmt.Errorf("ipc: %w: %d views need %d bytes, the buffer has %d",
-			ErrBuffers, total, need, len(l.Buffers[1]))
+	// Divided rather than multiplied, since a length near the top of an int
+	// times the width of a view is a small number, and the check would pass on
+	// the way to a slice of that length.
+	if len(l.Buffers[1])/strview.Size < total {
+		return nil, fmt.Errorf("ipc: %w: %d views of %d bytes each need more than the %d the buffer has",
+			ErrBuffers, total, strview.Size, len(l.Buffers[1]))
 	}
 
 	var views []strview.View
