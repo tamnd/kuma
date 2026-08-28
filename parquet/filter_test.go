@@ -27,9 +27,9 @@ func groupsOf(tb testing.TB, r *parquet.FileReader, filter ...parquet.Predicate)
 // TestRowGroupsBounds skips row groups on what the footer says their columns
 // hold.
 //
-// stats.parquet is twelve rows of n running from nought to eleven in three
-// groups of four, so every group covers a range of its own and every comparison
-// against a number has a different answer. That is the whole of the pushdown on
+// The file holds twelve rows of n running from nought to eleven in three groups
+// of four, so every group covers a range of its own and every comparison against
+// a number has a different answer. That is the whole of the pushdown on
 // a column written in order, which is the column a scan is usually filtered on.
 func TestRowGroupsBounds(t *testing.T) {
 	r := openFileReader(t, "stats.parquet")
@@ -251,8 +251,8 @@ func TestRowGroupsUnprojected(t *testing.T) {
 // TestRowGroupsBloom skips a row group on a bloom filter, which is the case the
 // bounds cannot answer.
 //
-// bloom.parquet holds identifiers going up in sevens, so a value between two of
-// them is inside the range of a group and is not in the group. The bounds keep
+// The file holds identifiers going up in sevens, so a value between two of them
+// is inside the range of a group and is not in the group. The bounds keep
 // it and the filter throws it out, which is the whole reason a writer is ever
 // asked for one.
 func TestRowGroupsBloom(t *testing.T) {

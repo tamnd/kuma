@@ -160,7 +160,8 @@ func holds(op kernel.CompareOp, loLe, loGe, hiLe, hiGe bool) bool {
 	case kernel.OpNe:
 		// Every value of the chunk is the value being looked for, which is the
 		// one range that holds nothing unequal to it.
-		return !(loLe && loGe && hiLe && hiGe)
+		one := loLe && loGe && hiLe && hiGe
+		return !one
 	case kernel.OpLt:
 		return loLe && !loGe
 	case kernel.OpLe:
@@ -374,8 +375,9 @@ func bloomHash(c *Column, a *array.Array) (uint64, bool) {
 		switch a.DType().Kind() {
 		case dtype.StringKind, dtype.BinaryKind, dtype.FixedSizeBinaryKind:
 			return xxh64(a.Bytes(0)), true
+		default:
+			return 0, false
 		}
-		return 0, false
 	default:
 		// A boolean, whose values are bits and which the format leaves out of
 		// this for want of a byte to hash, and an int96, which no writer has
