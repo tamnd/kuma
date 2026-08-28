@@ -48,11 +48,19 @@
 // FileReader takes an io.ReaderAt and the size, the way archive/zip does, and
 // hands out batches by number in any order.
 //
+// A dictionary encoded column travels split in two. The record batch carries
+// the indices and the values are sent once in a message of their own, so a file
+// of ten thousand batches of country codes holds the two hundred and fifty
+// strings once. Both readers put the two halves back together, and the columns
+// they hand out share the one copy of the values. The writers take the column
+// and do the splitting, so nothing outside this package has to know about the
+// identifiers the format ties the halves together with.
+//
 // Both interfaces are checked against pyarrow, in both directions, by the tests
 // in testdata/pyarrow. The C one runs two libraries in one process and compares
 // buffer addresses, and the message one passes files.
 //
-// What is not here yet: arrays of the nested types, dictionary batches, a
+// What is not here yet: arrays of the nested types, dictionary deltas, a
 // compressed body, and the arrow-go bridge.
 //
 // Stability: tier 1, stable.
@@ -103,7 +111,8 @@ var (
 	ErrClosed = errors.New("the stream is closed")
 
 	// ErrUnsupported is returned for the shapes this package understands and
-	// cannot build yet, which is the nested types, since the array package has
-	// no nested arrays to put them in.
+	// cannot build yet: the nested types, since the array package has no nested
+	// arrays to put them in, a dictionary that arrives as a delta, and a file
+	// whose dictionary was written twice.
 	ErrUnsupported = errors.New("not supported yet")
 )

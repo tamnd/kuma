@@ -369,10 +369,14 @@ func TestDecodeBatchError(t *testing.T) {
 			want:   ipc.ErrUnsupported,
 		},
 		{
-			name:   "a dictionary column",
-			schema: dtype.Schema{Fields: []dtype.Field{{Name: "id", Type: dtype.Dictionary{Index: dtype.Int32, Value: dtype.String}}}},
+			// A dictionary column decodes to its indices, so a schema saying the
+			// column is one reads the int64 batch as int64 indices and is fine.
+			// An index type that is not an integer is not a dictionary anything
+			// could have written.
+			name:   "a dictionary indexed by strings",
+			schema: dtype.Schema{Fields: []dtype.Field{{Name: "id", Type: dtype.Dictionary{Index: dtype.String, Value: dtype.String}}}},
 			msg:    msg,
-			want:   ipc.ErrUnsupported,
+			want:   ipc.ErrType,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

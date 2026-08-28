@@ -562,7 +562,14 @@ func equalArrays(t *testing.T, got, want *array.Array) {
 }
 
 // valueAt returns the bytes of one value, whatever the type means by them.
+//
+// A dictionary encoded column is the value behind the index rather than the
+// index, since two columns holding the same values under different indices are
+// the same column and comparing the indices would say they are not.
 func valueAt(a *array.Array, i int) []byte {
+	if d := a.Dictionary(); d != nil {
+		return valueAt(d, a.Index(i))
+	}
 	switch a.DType().Kind() {
 	case dtype.BoolKind:
 		if a.Bool(i) {

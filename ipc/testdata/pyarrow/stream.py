@@ -64,8 +64,14 @@ def read_go(directory):
 
 
 # The streams that start in pyarrow. These are the shapes kuma does not write:
-# text as offsets rather than views, a stream with no batches in it at all, and
-# a stream whose batches were sliced out of a longer one.
+# text as offsets rather than views, a stream with no batches in it at all, a
+# stream whose batches were sliced out of a longer one, and the dictionary
+# encoded column, whose values pyarrow stores as offsets and sends in a message
+# of their own.
+#
+# The dictionary is one object shared by both batches on purpose. Sending new
+# values half way through is something a stream allows and a file does not, and
+# these cases are written in both formats.
 def python_cases():
     long_value = "y" * 40
     text = pa.schema([
@@ -73,6 +79,23 @@ def python_cases():
         pa.field("binary", pa.binary()),
     ])
     ints = pa.schema([pa.field("id", pa.int64())])
+
+    codes = pa.schema([
+        pa.field("code", pa.dictionary(pa.int32(), pa.string())),
+        pa.field("size", pa.dictionary(pa.int8(), pa.int64())),
+        pa.field("id", pa.int64()),
+    ])
+    countries = pa.array(["GB", "JP", "US"])
+    sizes = pa.array([100, 200], type=pa.int64())
+
+    def coded(at, sized, ids):
+        return pa.record_batch([
+            pa.DictionaryArray.from_arrays(
+                pa.array(at, type=pa.int32()), countries),
+            pa.DictionaryArray.from_arrays(
+                pa.array(sized, type=pa.int8()), sizes),
+            pa.array(ids, type=pa.int64()),
+        ], schema=codes)
 
     sliced = pa.record_batch([
         pa.array(list(range(8))),
@@ -102,6 +125,11 @@ def python_cases():
         ("nothing", ints, []),
 
         ("sliced", sliced.schema, [sliced.slice(3, 4), sliced.slice(1, 1)]),
+
+        ("coded", codes, [
+            coded([0, 2, None, 1], [1, 0, 1, None], [1, 2, 3, 4]),
+            coded([1, 1], [0, 0], [5, 6]),
+        ]),
     ]
 
 

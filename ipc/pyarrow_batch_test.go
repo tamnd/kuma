@@ -187,9 +187,17 @@ func renderBatch(s dtype.Schema, b ipc.Batch) string {
 // renderValue writes one value as the two sides agree to write it: bytes as
 // hex, a timestamp or a date as the number it is stored as rather than the day
 // it means, and a float as the shortest text that reads back as itself.
+//
+// A dictionary encoded column is written as the value behind the index. Which
+// index a value sits at is up to whoever built the column and both sides are
+// free to renumber it, so a rendering of the indices would differ for two
+// columns holding exactly the same values.
 func renderValue(a *array.Array, i int) string {
 	if a.IsNull(i) {
 		return "null"
+	}
+	if d := a.Dictionary(); d != nil {
+		return renderValue(d, a.Index(i))
 	}
 	switch a.DType().Kind() {
 	case dtype.BoolKind:
@@ -391,6 +399,47 @@ func batchPyarrowCases(t *testing.T) []pyarrowBatchCase {
 			}}},
 		},
 	}
+}
+
+// dictPyarrowCases are the cases the whole format checks add and the message
+// check cannot have. The values of a dictionary encoded column are in a message
+// of their own, so a record batch passed across on its own carries indices into
+// something the other side has never seen.
+//
+// The batches share their dictionaries, since replacing one is a thing a stream
+// may do and a file may not, and these cases go through both.
+func dictPyarrowCases(t *testing.T) []pyarrowBatchCase {
+	t.Helper()
+
+	countries := buildStrings(t, []string{"GB", "JP", "US"})
+	sides := buildStrings(t, []string{"buy", "sell"})
+	holes := buildStrings(t, []string{"one", "", "three"}, 1)
+
+	s := dtype.Schema{Fields: []dtype.Field{
+		{Name: "id", Type: dtype.Int64},
+		{Name: "code", Type: codeType, Nullable: true},
+		{Name: "side", Type: codeType, Nullable: true},
+		{Name: "note", Type: codeType, Nullable: true},
+	}}
+
+	return []pyarrowBatchCase{{
+		name:   "dictionary",
+		schema: s,
+		batches: []ipc.Batch{
+			{Length: 4, Columns: []*array.Array{
+				buildInts(t, []int64{1, 2, 3, 4}),
+				codes(t, countries, 2, 0, -1, 1),
+				codes(t, sides, 0, 1, 1, 0),
+				codes(t, holes, 0, 1, 2, -1),
+			}},
+			{Length: 2, Columns: []*array.Array{
+				buildInts(t, []int64{5, 6}),
+				codes(t, countries, 1, 1),
+				codes(t, sides, 1, 0),
+				codes(t, holes, 2, 2),
+			}},
+		},
+	}}
 }
 
 // buildBools builds a bool column, which is the one type the builders next to

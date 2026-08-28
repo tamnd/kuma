@@ -376,6 +376,9 @@ var fuzzBatchSchemas = []dtype.Schema{
 		{Name: "nothing", Type: dtype.Null, Nullable: true},
 		{Name: "bytes", Type: dtype.Binary, Nullable: true},
 	}},
+	{Fields: []dtype.Field{
+		{Name: "code", Type: dtype.Dictionary{Index: dtype.Int32, Value: dtype.String}, Nullable: true},
+	}},
 	{},
 }
 
@@ -399,6 +402,12 @@ func fuzzBatchOf(f *testing.F, s dtype.Schema) ipc.Batch {
 			b.Columns = append(b.Columns, array.OfBools(true, false, true))
 		case dtype.NullKind:
 			b.Columns = append(b.Columns, array.NewNull(3))
+		case dtype.DictionaryKind:
+			col, err := array.NewDictionary(array.Of[int32](0, 1, 0), array.OfStrings("GB", "JP"))
+			if err != nil {
+				f.Fatalf("NewDictionary: %v", err)
+			}
+			b.Columns = append(b.Columns, col)
 		default:
 			builder, err := array.NewBuilder(field.Type)
 			if err != nil {

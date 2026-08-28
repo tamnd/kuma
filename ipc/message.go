@@ -215,24 +215,18 @@ const (
 // A type kuma can hold but Arrow cannot name, and there are none today, would
 // be an error here rather than a column that quietly changes type.
 func EncodeSchema(s dtype.Schema) ([]byte, error) {
-	msg, err := encodeSchemaMessage(s)
-	if err != nil {
-		return nil, err
-	}
-	if err := checkLength(len(msg), "a schema"); err != nil {
-		return nil, err
-	}
-	return frame(msg), nil
+	msg, _, err := encodeSchemaMessage(s)
+	return msg, err
 }
 
-// encodeSchemaMessage writes the message on its own, without the framing. The
-// stream and the file both hold one of these and put their own bytes around
-// it.
-func encodeSchemaMessage(s dtype.Schema) ([]byte, error) {
+// encodeSchemaMessage writes the framed message and the dictionary identifiers
+// it gave out. The stream and the file both write one of these, and both need
+// the identifiers afterwards to send the values the columns point at.
+func encodeSchemaMessage(s dtype.Schema) ([]byte, []int64, error) {
 	sw := schemaWriter{types: make(map[string]typeRef)}
 	schema, err := sw.schema(s)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	w := &sw.w
@@ -240,7 +234,12 @@ func encodeSchemaMessage(s dtype.Schema) ([]byte, error) {
 	w.slotInt(fbMessageVersion, fbVersionV5, 0)
 	w.slotUint8(fbMessageHeaderType, fbHeaderSchema)
 	w.slotOffset(fbMessageHeader, schema)
-	return w.finish(w.endTable()), nil
+
+	msg := w.finish(w.endTable())
+	if err := checkLength(len(msg), "a schema"); err != nil {
+		return nil, nil, err
+	}
+	return frame(msg), sw.ids, nil
 }
 
 // schemaWriter builds one schema message.
@@ -250,9 +249,20 @@ func encodeSchemaMessage(s dtype.Schema) ([]byte, error) {
 // already in the buffer can be pointed at again rather than written again, so
 // a hundred int64 columns cost one description of int64 and a hundred offsets
 // to it. The key is the type as it prints, which names every parameter of it.
+//
+// It also hands out the dictionary identifiers, which are what tie a dictionary
+// encoded column to the message carrying its values. They are given out in the
+// order the columns are read in, so the first dictionary column of a schema is
+// dictionary zero.
 type schemaWriter struct {
 	w     fbBuilder
 	types map[string]typeRef
+	next  int64
+
+	// ids is the identifier given to each column of the schema, and is nil
+	// until a dictionary encoded column turns up. It is what a writer needs to
+	// send the values under the number the schema it just wrote points at.
+	ids []int64
 }
 
 // typeRef is a type table already in the buffer: which member of the union it
@@ -268,6 +278,15 @@ type typeRef struct {
 func (sw *schemaWriter) schema(s dtype.Schema) (fbOffset, error) {
 	fields := make([]fbOffset, len(s.Fields))
 	for i, f := range s.Fields {
+		// The identifier a dictionary column is about to take, noted before it
+		// takes it, since the counter moves on as the children are written.
+		if _, isDict := f.Type.(dtype.Dictionary); isDict {
+			if sw.ids == nil {
+				sw.ids = make([]int64, len(s.Fields))
+			}
+			sw.ids[i] = sw.next
+		}
+
 		off, err := sw.field(f)
 		if err != nil {
 			return 0, err
@@ -309,41 +328,50 @@ func DecodeSchema(b []byte) (dtype.Schema, error) {
 	if body == nil {
 		return dtype.Schema{}, fmt.Errorf("ipc: %w: a schema of no bytes", ErrMessage)
 	}
-	return decodeSchemaMessage(body)
+	s, _, err := decodeSchemaMessage(body)
+	return s, err
 }
 
 // decodeSchemaMessage reads the message on its own, which is what the stream
-// reader has in hand once it has taken the framing off.
-func decodeSchemaMessage(b []byte) (dtype.Schema, error) {
+// reader has in hand once it has taken the framing off. It returns the
+// dictionary identifiers along with the schema, since they are in the message
+// and there is nowhere in a dtype.Schema to keep them.
+func decodeSchemaMessage(b []byte) (dtype.Schema, []int64, error) {
 	msg, err := fbRoot(b)
 	if err != nil {
-		return dtype.Schema{}, err
+		return dtype.Schema{}, nil, err
 	}
 	version, err := msg.integer(fbMessageVersion, int16(0))
 	if err != nil {
-		return dtype.Schema{}, err
+		return dtype.Schema{}, nil, err
 	}
 	if version > fbVersionV5 {
-		return dtype.Schema{}, fmt.Errorf("ipc: %w: metadata version %d, this reads up to V5",
+		return dtype.Schema{}, nil, fmt.Errorf("ipc: %w: metadata version %d, this reads up to V5",
 			ErrUnsupported, version)
 	}
 	header, err := msg.uint8(fbMessageHeaderType, fbHeaderNone)
 	if err != nil {
-		return dtype.Schema{}, err
+		return dtype.Schema{}, nil, err
 	}
 	if header != fbHeaderSchema {
-		return dtype.Schema{}, fmt.Errorf("ipc: %w: the message is a %s, want a schema",
+		return dtype.Schema{}, nil, fmt.Errorf("ipc: %w: the message is a %s, want a schema",
 			ErrMessage, headerName(header))
 	}
 	table, ok, err := msg.table(fbMessageHeader)
 	if err != nil {
-		return dtype.Schema{}, err
+		return dtype.Schema{}, nil, err
 	}
 	if !ok {
-		return dtype.Schema{}, fmt.Errorf("ipc: %w: the message says it holds a schema and holds nothing",
+		return dtype.Schema{}, nil, fmt.Errorf("ipc: %w: the message says it holds a schema and holds nothing",
 			ErrMessage)
 	}
-	return newDecoder(b).schema(table)
+
+	d := newDecoder(b)
+	s, err := d.schema(table)
+	if err != nil {
+		return dtype.Schema{}, nil, err
+	}
+	return s, d.ids, nil
 }
 
 // messageHeader reads the two fields of a message that a reader needs before it
@@ -407,6 +435,11 @@ func headerName(h uint8) string {
 type decoder struct {
 	left  int // fields it may still read
 	depth int // how far down it is now
+
+	// ids is the dictionary identifier of each column of the schema, and is nil
+	// for a schema with no dictionary encoded columns, which is nearly all of
+	// them. Only the entries whose field is a dtype.Dictionary mean anything.
+	ids []int64
 }
 
 // maxDepth is how deeply one field may nest. A list of a struct of a list is
@@ -448,6 +481,15 @@ func (d *decoder) schema(t fbTable) (dtype.Schema, error) {
 			if s.Fields[i], err = d.field(child); err != nil {
 				return dtype.Schema{}, err
 			}
+			if _, isDict := s.Fields[i].Type.(dtype.Dictionary); !isDict {
+				continue
+			}
+			if d.ids == nil {
+				d.ids = make([]int64, vec.len())
+			}
+			if d.ids[i], err = dictID(child); err != nil {
+				return dtype.Schema{}, err
+			}
 		}
 	}
 	if s.Metadata, err = decodeKeyValues(t, fbSchemaMetadata); err != nil {
@@ -458,24 +500,30 @@ func (d *decoder) schema(t fbTable) (dtype.Schema, error) {
 
 // field writes one Field table and returns where it starts.
 func (sw *schemaWriter) field(f dtype.Field) (fbOffset, error) {
+	// A dictionary column writes the type of its indices as its own type and
+	// hangs the value type off the dictionary table, the same split the C data
+	// interface makes for the same reason.
+	//
+	// The identifier is taken before the children are written so that the
+	// columns are numbered in the order a reader walks them, which is the order
+	// every other implementation numbers them in.
+	value := f.Type
+	var index dtype.DataType
+	var id int64
+	if d, isDict := f.Type.(dtype.Dictionary); isDict {
+		value, index = d.Value, d.Index
+		if !dtype.IsInteger(index) {
+			return 0, noFormat(f.Type)
+		}
+		id, sw.next = sw.next, sw.next+1
+	}
+
 	children := childFields(f.Type)
 	offs := make([]fbOffset, len(children))
 	for i, c := range children {
 		var err error
 		if offs[i], err = sw.field(c); err != nil {
 			return 0, err
-		}
-	}
-
-	// A dictionary column writes the type of its indices as its own type and
-	// hangs the value type off the dictionary table, the same split the C data
-	// interface makes for the same reason.
-	value := f.Type
-	var index dtype.DataType
-	if d, isDict := f.Type.(dtype.Dictionary); isDict {
-		value, index = d.Value, d.Index
-		if !dtype.IsInteger(index) {
-			return 0, noFormat(f.Type)
 		}
 	}
 
@@ -500,7 +548,7 @@ func (sw *schemaWriter) field(f dtype.Field) (fbOffset, error) {
 	}
 	dict := fbOffset(0)
 	if index != nil {
-		dict, err = encodeDictionary(w, index)
+		dict, err = encodeDictionary(w, id, index)
 		if err != nil {
 			return 0, err
 		}
@@ -582,11 +630,15 @@ func (d *decoder) children(t fbTable) ([]dtype.Field, error) {
 
 // encodeDictionary writes the DictionaryEncoding table of a dictionary column.
 //
-// The identifier is left at zero. It is what ties a column to the dictionary
-// batch that carries its values, and there are no dictionary batches to tie it
-// to yet, so writing an identifier that names nothing would be worse than
-// writing the one every reader treats as the first.
-func encodeDictionary(w *fbBuilder, index dtype.DataType) (fbOffset, error) {
+// The identifier is what ties the column to the dictionary batch carrying its
+// values, so it is written even at zero, where it would otherwise be left out
+// as the default. A reader that took an absent identifier for a column that is
+// not dictionary encoded would be reading the indices as the column.
+//
+// Ordered is left at false. It is a promise that the values are in order, which
+// makes a comparison of two indices a comparison of two values, and kuma does
+// not sort a dictionary on the way out.
+func encodeDictionary(w *fbBuilder, id int64, index dtype.DataType) (fbOffset, error) {
 	bits, ok := dtype.Bits(index)
 	if !ok {
 		return 0, noFormat(index)
@@ -597,8 +649,24 @@ func encodeDictionary(w *fbBuilder, index dtype.DataType) (fbOffset, error) {
 	indexType := w.endTable()
 
 	w.startTable()
+	w.slotInt(fbDictionaryID, id, -1)
 	w.slotOffset(fbDictionaryIndexType, indexType)
 	return w.endTable(), nil
+}
+
+// dictID is the identifier of a dictionary encoded field, which the caller has
+// already found out that it is. An identifier that is not there is zero, which
+// is what the schema says the default is.
+//
+// The table is read a second time rather than handed over by decodeDictionary,
+// because the identifier is of no interest to anything that only wants the type
+// and the schema decoder is the one place that needs both.
+func dictID(t fbTable) (int64, error) {
+	d, ok, err := t.table(fbFieldDictionary)
+	if err != nil || !ok {
+		return 0, err
+	}
+	return d.integer(fbDictionaryID, int64(0))
 }
 
 // decodeDictionary wraps a type in a dictionary if the field says it is one.

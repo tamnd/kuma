@@ -47,9 +47,15 @@ const maxHint = 1 << 20
 // point and nothing after it would be readable. An error about a batch does
 // not, since the stream is untouched and a caller can fix the batch and try
 // again.
+//
+// The values of a dictionary encoded column go out in a message of their own,
+// in front of the first batch that reads from them and again whenever a batch
+// arrives holding different ones. A batch that shares its dictionary with the
+// one before it, which is what reading a file gives, writes the values once.
 type Writer struct {
 	dst    io.Writer
 	schema dtype.Schema
+	dicts  *dictWriter
 	err    error
 	closed bool
 }
@@ -58,14 +64,14 @@ type Writer struct {
 // message of one. The error is either a schema Arrow cannot name or whatever w
 // said about the write.
 func NewWriter(w io.Writer, s dtype.Schema) (*Writer, error) {
-	msg, err := EncodeSchema(s)
+	msg, ids, err := encodeSchemaMessage(s)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := w.Write(msg); err != nil {
 		return nil, err
 	}
-	return &Writer{dst: w, schema: s}, nil
+	return &Writer{dst: w, schema: s, dicts: newDictWriter(s, ids)}, nil
 }
 
 // Schema is the schema every batch in the stream belongs to.
@@ -73,6 +79,10 @@ func (w *Writer) Schema() dtype.Schema { return w.schema }
 
 // Write appends one record batch. The columns have to be the types the schema
 // says they are and there have to be as many of them as it has fields.
+//
+// A dictionary encoded column has to arrive as the column and not as its
+// indices, since the values are what this has to write and the indices on their
+// own do not have them.
 func (w *Writer) Write(b Batch) error {
 	if w.err != nil {
 		return w.err
@@ -81,9 +91,23 @@ func (w *Writer) Write(b Batch) error {
 		return fmt.Errorf("ipc: %w", ErrClosed)
 	}
 
+	// Everything is encoded before anything is written, so that a batch that
+	// turns out to be wrong leaves the stream where it was.
 	msg, err := EncodeBatch(w.schema, b)
 	if err != nil {
 		return err
+	}
+	values, err := w.dicts.messages(w.schema, b)
+	if err != nil {
+		return err
+	}
+
+	for _, d := range values {
+		if _, err := w.dst.Write(d.msg); err != nil {
+			w.err = err
+			return err
+		}
+		w.dicts.done(d)
 	}
 	if _, err := w.dst.Write(msg); err != nil {
 		w.err = err
@@ -123,9 +147,15 @@ func (w *Writer) Close() error {
 // a buffer of its own rather than one the reader keeps reusing. Holding on to a
 // batch after reading the next one is fine and costs the memory of the batch
 // being held.
+//
+// The dictionaries are the exception, and they are shared on purpose. The
+// values of a dictionary encoded column arrive once and every batch after them
+// points at that one array, which is the whole reason the encoding is worth
+// having.
 type Reader struct {
 	src    io.Reader
 	schema dtype.Schema
+	dicts  *dicts
 	batch  Batch
 	err    error
 	done   bool
@@ -141,11 +171,22 @@ func NewReader(r io.Reader) (*Reader, error) {
 	if msg == nil {
 		return nil, fmt.Errorf("ipc: %w: a stream that ends where its schema should be", ErrMessage)
 	}
-	s, err := DecodeSchema(msg)
+	body, _, err := unframe(msg)
 	if err != nil {
 		return nil, err
 	}
-	return &Reader{src: r, schema: s}, nil
+	if body == nil {
+		return nil, fmt.Errorf("ipc: %w: a schema of no bytes", ErrMessage)
+	}
+	s, ids, err := decodeSchemaMessage(body)
+	if err != nil {
+		return nil, err
+	}
+	d, err := newDicts(s, ids)
+	if err != nil {
+		return nil, err
+	}
+	return &Reader{src: r, schema: s, dicts: d}, nil
 }
 
 // Schema is the schema every batch in the stream belongs to.
@@ -153,37 +194,49 @@ func (r *Reader) Schema() dtype.Schema { return r.schema }
 
 // Next reads the next batch and reports whether there is one. It returns false
 // at the end of the stream and at the first error, which Err then holds.
+//
+// The dictionary batches in between are read here rather than handed out. They
+// are not rows and a caller looping over the batches of a stream has nothing to
+// do with one, so the loop stops at the record batches and the values are
+// already on the columns by then.
 func (r *Reader) Next() bool {
 	if r.done {
 		return false
 	}
 
-	msg, kind, err := readMessage(r.src)
-	if err != nil {
-		r.done, r.err = true, err
-		return false
-	}
-	if msg == nil {
-		r.done = true
-		return false
-	}
-	if kind == fbHeaderDictionaryBatch {
-		r.done = true
-		r.err = fmt.Errorf("ipc: %w: the stream has a dictionary batch in it, which this cannot read yet",
-			ErrUnsupported)
-		return false
-	}
+	for {
+		msg, kind, err := readMessage(r.src)
+		if err != nil {
+			r.done, r.err = true, err
+			return false
+		}
+		if msg == nil {
+			r.done = true
+			return false
+		}
+		if kind == fbHeaderDictionaryBatch {
+			if err = r.dicts.read(msg); err != nil {
+				r.done, r.err = true, err
+				return false
+			}
+			continue
+		}
 
-	// The rest after a batch is the next message, which the next call reads for
-	// itself. Everything this reader hands back came out of one message and one
-	// body, so there is nothing left over to keep.
-	b, _, err := DecodeBatch(r.schema, msg)
-	if err != nil {
-		r.done, r.err = true, err
-		return false
+		// The rest after a batch is the next message, which the next call reads
+		// for itself. Everything this reader hands back came out of one message
+		// and one body, so there is nothing left over to keep.
+		b, _, err := DecodeBatch(r.schema, msg)
+		if err != nil {
+			r.done, r.err = true, err
+			return false
+		}
+		if err := r.dicts.bind(r.schema, &b); err != nil {
+			r.done, r.err = true, err
+			return false
+		}
+		r.batch = b
+		return true
 	}
-	r.batch = b
-	return true
 }
 
 // Batch is the batch the last call to Next read.
