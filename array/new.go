@@ -3,6 +3,7 @@ package array
 import (
 	"errors"
 	"fmt"
+	"math"
 	"unsafe"
 
 	"github.com/tamnd/kuma/bitmap"
@@ -177,6 +178,9 @@ func valueBytes(dt dtype.DataType, length int) (int, error) {
 	case dtype.LargeBinaryKind:
 		return 0, errors.New("array: a large_binary column is converted at the IPC boundary, store it as a binary")
 	case dtype.BoolKind:
+		if length > math.MaxInt-7 {
+			return 0, tooWide(dt, length)
+		}
 		return (length + 7) / 8, nil
 	default:
 		bits, ok := dtype.Bits(dt)
@@ -193,8 +197,21 @@ func valueBytes(dt dtype.DataType, length int) (int, error) {
 		if bits%8 != 0 {
 			return 0, fmt.Errorf("array: a %s column is %d bits wide, which is not a whole number of bytes", dt, bits)
 		}
-		return length * (bits / 8), nil
+		// The length is a number a producer sent, so the multiplication is
+		// checked rather than trusted. A length near the top of an int times
+		// eight comes out small, and a small answer here is a buffer that looks
+		// big enough for a column nothing could hold.
+		if width := bits / 8; width == 0 || length <= math.MaxInt/width {
+			return length * width, nil
+		}
+		return 0, tooWide(dt, length)
 	}
+}
+
+// tooWide is the error for a column of more values than there are bytes to
+// count them in.
+func tooWide(dt dtype.DataType, length int) error {
+	return fmt.Errorf("array: a %s column of %d values is more bytes than an int can count", dt, length)
 }
 
 // layoutDType returns the dtype a Go type maps to, which is the plain one

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/tamnd/kuma/array"
 	"github.com/tamnd/kuma/dtype"
 	"github.com/tamnd/kuma/ipc"
 )
@@ -192,6 +193,129 @@ func FuzzImport(f *testing.F) {
 			equalArrays(t, back, a)
 		}
 	})
+}
+
+// FuzzBatch checks that no arrangement of bytes gets a record batch past the
+// reader that then falls apart.
+//
+// A batch is the message that decides what to index and how far. The metadata
+// says how many rows there are, how many values each column has and where in
+// the body every buffer starts, and all of those are numbers somebody else
+// wrote. The reader has to refuse the ones that do not add up rather than build
+// a column out of them, and this is what says so.
+//
+// What is accepted has to survive being written again. Reading the offset
+// layout gives a column kuma writes as views, so the message is not the same
+// message the second time, but the values are the same values, and a batch that
+// changes on the way through is one this package would corrupt in the middle of
+// a copy from one file to another.
+func FuzzBatch(f *testing.F) {
+	for i, s := range fuzzBatchSchemas {
+		msg, err := ipc.EncodeBatch(s, fuzzBatchOf(f, s))
+		if err != nil {
+			f.Fatalf("EncodeBatch: %v", err)
+		}
+		f.Add(i, msg)
+	}
+	f.Add(0, []byte(nil))
+	f.Add(0, []byte{0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0})
+
+	f.Fuzz(func(t *testing.T, which int, msg []byte) {
+		s := fuzzBatchSchemas[uint(which)%uint(len(fuzzBatchSchemas))]
+		b, _, err := ipc.DecodeBatch(s, msg)
+		if err != nil {
+			return
+		}
+		if len(b.Columns) != len(s.Fields) {
+			t.Fatalf("a batch of %d columns for a schema of %d fields", len(b.Columns), len(s.Fields))
+		}
+		for i, col := range b.Columns {
+			if col.Len() != b.Length {
+				t.Fatalf("column %q has %d values in a batch of %d rows",
+					s.Fields[i].Name, col.Len(), b.Length)
+			}
+		}
+
+		// A null column has no buffers, so a batch of nothing else can claim any
+		// number of rows without carrying a byte for them. That is not a lie the
+		// reader can catch, and it is the one thing here that would take as long
+		// as the number says to look at.
+		if b.Length > 1<<20 {
+			return
+		}
+
+		written, err := ipc.EncodeBatch(s, b)
+		if err != nil {
+			t.Fatalf("DecodeBatch read a batch of %d rows that EncodeBatch refuses: %v", b.Length, err)
+		}
+		again, rest, err := ipc.DecodeBatch(s, written)
+		if err != nil {
+			t.Fatalf("EncodeBatch wrote a batch DecodeBatch refuses: %v", err)
+		}
+		if len(rest) != 0 {
+			t.Fatalf("%d bytes left after a batch this package wrote, want none", len(rest))
+		}
+		if again.Length != b.Length {
+			t.Fatalf("round trip of %d rows gave %d", b.Length, again.Length)
+		}
+		for i, col := range b.Columns {
+			equalArrays(t, again.Columns[i], col)
+		}
+	})
+}
+
+// The schemas a fuzzed batch is read against. A batch on the wire says nothing
+// about what it holds, so there has to be a schema to read it with, and these
+// are the shapes worth having one for: the fixed width column, the text column
+// whose layout is inferred rather than declared, the column with no buffers at
+// all, and the batch of no columns whose only content is a row count.
+var fuzzBatchSchemas = []dtype.Schema{
+	{Fields: []dtype.Field{{Name: "id", Type: dtype.Int64, Nullable: true}}},
+	{Fields: []dtype.Field{{Name: "text", Type: dtype.String, Nullable: true}}},
+	{Fields: []dtype.Field{
+		{Name: "id", Type: dtype.Int64, Nullable: true},
+		{Name: "text", Type: dtype.String, Nullable: true},
+		{Name: "live", Type: dtype.Bool, Nullable: true},
+	}},
+	{Fields: []dtype.Field{
+		{Name: "nothing", Type: dtype.Null, Nullable: true},
+		{Name: "bytes", Type: dtype.Binary, Nullable: true},
+	}},
+	{},
+}
+
+// fuzzBatchOf builds three rows of a schema, which is a seed rather than a test
+// of anything. The fuzzer needs one message per schema that is well formed all
+// the way through, since a corpus of nothing but rejects never reaches the code
+// that reads a column.
+func fuzzBatchOf(f *testing.F, s dtype.Schema) ipc.Batch {
+	f.Helper()
+	b := ipc.Batch{Length: 3}
+	if len(s.Fields) == 0 {
+		return b
+	}
+	for _, field := range s.Fields {
+		switch field.Type.Kind() {
+		case dtype.Int64Kind:
+			b.Columns = append(b.Columns, array.Of[int64](1, 2, 3))
+		case dtype.StringKind:
+			b.Columns = append(b.Columns, array.OfStrings("a", "bb", "ccc"))
+		case dtype.BoolKind:
+			b.Columns = append(b.Columns, array.OfBools(true, false, true))
+		case dtype.NullKind:
+			b.Columns = append(b.Columns, array.NewNull(3))
+		default:
+			builder, err := array.NewBuilder(field.Type)
+			if err != nil {
+				f.Fatalf("NewBuilder(%s) = %v", field.Type, err)
+			}
+			for i := range b.Length {
+				builder.AppendBytes([]byte{byte(i)})
+			}
+			b.Columns = append(b.Columns, builder.Finish())
+		}
+	}
+	return b
 }
 
 // The format strings FuzzImport picks from, one per layout it has to handle

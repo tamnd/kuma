@@ -34,9 +34,13 @@ var maxBlock int64 = strview.MaxValue
 // reinterpreting them would be correct, but it would also require the buffer to
 // be aligned, and the work here is a pass over the values either way.
 func viewsFromOffsets(offsets, data []byte, n, width int) (*strview.Data, error) {
-	if need := (n + 1) * width; len(offsets) < need {
-		return nil, fmt.Errorf("ipc: %w: %d values need %d bytes of offsets, the buffer has %d",
-			ErrBuffers, n, need, len(offsets))
+	// One offset per value and one more after the last, compared by dividing
+	// the buffer rather than multiplying the count, since a count near the top
+	// of an int times four is a small number and the check would pass on the
+	// way to allocating a view for every one of them.
+	if len(offsets)/width-1 < n {
+		return nil, fmt.Errorf("ipc: %w: %d values need %d bytes of offsets each and one more offset, the buffer has %d",
+			ErrBuffers, n, width, len(offsets))
 	}
 
 	at := func(i int) int64 { return int64(int32(binary.NativeEndian.Uint32(offsets[i*4:]))) }

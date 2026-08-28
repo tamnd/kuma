@@ -313,6 +313,53 @@ func TestImportErrors(t *testing.T) {
 	}
 }
 
+// TestImportOverflow checks the lengths that come out small when they are
+// multiplied by the width of a value.
+//
+// A length arrives from another process, and every layout here turns one into a
+// number of bytes before comparing it with a buffer. Two to the sixty first
+// values of eight bytes each is exactly eight bytes once the multiplication has
+// wrapped, so a buffer of any size at all looks big enough, and what follows is
+// a slice header claiming most of the address space. None of these is a
+// plausible column and all of them are two bytes of a message changed.
+func TestImportOverflow(t *testing.T) {
+	buf := make([]byte, 128)
+
+	for _, tt := range []struct {
+		name   string
+		format string
+		layout ipc.Layout
+	}{
+		{
+			name: "a total past an int", format: "l",
+			layout: ipc.Layout{Length: math.MaxInt, Offset: 1, Buffers: [][]byte{nil, buf}},
+		},
+		{
+			name: "values of eight bytes", format: "l",
+			layout: ipc.Layout{Length: 1<<61 + 1, Buffers: [][]byte{nil, buf}},
+		},
+		{
+			name: "bits of a bool", format: "b",
+			layout: ipc.Layout{Length: math.MaxInt, Buffers: [][]byte{nil, buf}},
+		},
+		{
+			name: "views of sixteen bytes", format: "vu",
+			layout: ipc.Layout{Length: 1<<60 + 3, Buffers: [][]byte{nil, buf}},
+		},
+		{
+			name: "offsets of four bytes", format: "u",
+			layout: ipc.Layout{Length: 1<<62 + 1, Buffers: [][]byte{nil, buf, nil}},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ipc.Import(tt.format, tt.layout)
+			if err == nil {
+				t.Fatalf("Import(%q) = %d values, want an error", tt.format, got.Len())
+			}
+		})
+	}
+}
+
 // TestImportNullBuffers pins down the one place implementations disagree. A
 // Null array carries no values, and whether it also carries a validity buffer
 // nobody reads is not worth refusing a table over.
