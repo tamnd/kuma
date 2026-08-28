@@ -24,11 +24,13 @@
 // the file, compressed and encoded as the writer left them, so nothing here
 // turns a page into values yet.
 //
-// RLEDecoder and BitPackedDecoder are the first part of that. Nulls, list
-// boundaries and dictionary indices are all written as runs of small integers
-// packed into as few bits as they need, and these two are the two ways parquet
-// has written them: the hybrid of repeated and packed runs that it uses now,
-// and the plain packing it used before that and that old files still have.
+// The decoders are what turns a page into values. RLEDecoder and
+// BitPackedDecoder read the runs of small integers that nulls, list boundaries
+// and dictionary indices are written as, which is the hybrid of repeated and
+// packed runs parquet uses now and the plain packing it used before that.
+// PlainDecoder reads the values themselves, written as they are, which is what
+// every other encoding in the format is a way of not doing and what every one
+// of them ends up at.
 package parquet
 
 import "errors"

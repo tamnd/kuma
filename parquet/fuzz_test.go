@@ -281,3 +281,87 @@ func FuzzRLE(f *testing.F) {
 		}
 	})
 }
+
+// FuzzPlain reads arbitrary bytes as plain values of every type.
+//
+// The plain encoding has almost nothing in it to get wrong, which is the point
+// of this: the one length it does read is the one in front of a byte array, and
+// that length is somebody else's number and is the only thing standing between
+// a page and a read off the end of it. The rest of what is asked for here is
+// that a page of n bytes read as values of m bytes is n over m values and not
+// one more, since a decoder that rounded that up would hand back a value made
+// half of the page and half of whatever came after it.
+func FuzzPlain(f *testing.F) {
+	f.Add([]byte{0x01, 0x00, 0x00, 0x00})
+	f.Add([]byte{0x03, 0x00, 0x00, 0x00, 'o', 'n', 'e'})
+	f.Add(bytes.Repeat([]byte{0xff}, 12))
+	f.Add([]byte(nil))
+	f.Add([]byte{0x05})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var d parquet.PlainDecoder
+
+		// Every fixed width type reads whole values until there are fewer bytes
+		// left than one takes, so how many come back is the size of the data
+		// divided by the size of a value, whatever the bytes say.
+		fixed := []struct {
+			name string
+			size int
+			read func() (int, error)
+		}{
+			{name: "int32", size: 4, read: func() (int, error) {
+				return d.Int32(make([]int32, len(data)/4+1))
+			}},
+			{name: "int64", size: 8, read: func() (int, error) {
+				return d.Int64(make([]int64, len(data)/8+1))
+			}},
+			{name: "float", size: 4, read: func() (int, error) {
+				return d.Float(make([]float32, len(data)/4+1))
+			}},
+			{name: "double", size: 8, read: func() (int, error) {
+				return d.Double(make([]float64, len(data)/8+1))
+			}},
+			{name: "fixed", size: 3, read: func() (int, error) {
+				return d.Fixed(make([][]byte, len(data)/3+1), 3)
+			}},
+		}
+		for _, c := range fixed {
+			d.Reset(data)
+			n, err := c.read()
+			if want := len(data) / c.size; n != want {
+				t.Fatalf("%d bytes read as %d values of %d bytes, want %d: %v",
+					len(data), n, c.size, want, err)
+			}
+		}
+
+		// The deprecated timestamp is the one fixed width type that can refuse a
+		// value it read cleanly, since twelve bytes hold days an int64 of
+		// nanoseconds does not reach.
+		d.Reset(data)
+		if n, _ := d.Int96(make([]int64, len(data)/12+1)); n > len(data)/12 {
+			t.Fatalf("%d bytes read as %d timestamps of twelve bytes", len(data), n)
+		}
+
+		// Booleans are one bit each with no padding until the end of the page.
+		d.Reset(data)
+		if n, _ := d.Boolean(make([]bool, len(data)*8+1)); n != len(data)*8 {
+			t.Fatalf("%d bytes read as %d booleans, want %d", len(data), n, len(data)*8)
+		}
+
+		// A byte array is the only value here whose length is in the data, so
+		// what is asked is that the values fit in the page they came out of.
+		d.Reset(data)
+		values := make([][]byte, len(data)/4+1)
+		n, _ := d.ByteArray(values)
+		used := 0
+		for _, v := range values[:n] {
+			used += 4 + len(v)
+		}
+		if used > len(data) {
+			t.Fatalf("%d values out of %d bytes take %d bytes", n, len(data), used)
+		}
+		if left := d.Left(); used+left != len(data) {
+			t.Fatalf("%d bytes read and %d left out of %d", used, left, len(data))
+		}
+	})
+}
