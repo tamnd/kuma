@@ -236,7 +236,7 @@ func FuzzRLE(f *testing.F) {
 		// that reads the wrong bytes rather than one that reads a lot of them.
 		mask := uint64(1)<<uint(width) - 1
 		buf := make([]int32, 97)
-		n := 0
+		var n int
 		for read := 0; read < 1<<14; {
 			n, err = d.Read(buf)
 			for _, v := range buf[:n] {
