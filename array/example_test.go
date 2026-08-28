@@ -230,3 +230,26 @@ func ExampleChunked_Chunks() {
 	fmt.Println(sum)
 	// Output: 17.5
 }
+
+// ExampleNewDictionary shows a column stored as indices into a shared set of
+// values, which is what a Parquet file mostly holds and what pandas calls a
+// Categorical.
+func ExampleNewDictionary() {
+	regions, err := array.NewDictionary(
+		array.Of[int32](1, 0, 0, 1, 2),
+		array.OfStrings("north", "south", "east"),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println(regions.Len(), regions.Dictionary().Len())
+	for i := range regions.Len() {
+		fmt.Print(string(regions.Dictionary().Bytes(regions.Index(i))), " ")
+	}
+	fmt.Println()
+	// Output:
+	// 5 3
+	// south north north south east
+}

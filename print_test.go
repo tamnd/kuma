@@ -726,6 +726,42 @@ func TestPrintEverythingShown(t *testing.T) {
 	}
 }
 
+// TestPrintDictionary checks that a dictionary encoded column prints the values
+// rather than the numbers standing in for them, which is the only place a
+// person notices the encoding at all.
+func TestPrintDictionary(t *testing.T) {
+	idx, err := array.NewBuilder(dtype.Int32)
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+	idx.Append(int32(1))
+	idx.Append(int32(0))
+	idx.AppendNull()
+
+	dt := dtype.Dictionary{Index: dtype.Int32, Value: dtype.String}
+	a, err := array.NewDictionary(idx.Finish(), array.OfStrings("north", "south"))
+	if err != nil {
+		t.Fatalf("NewDictionary: %v", err)
+	}
+	data, err := array.NewChunked(dt, a)
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+	c, err := kuma.NewColumn("region", data)
+	if err != nil {
+		t.Fatalf("NewColumn: %v", err)
+	}
+
+	for i, want := range []string{"south", "north", "null"} {
+		if got := cell(t, c, i); got != want {
+			t.Errorf("row %d printed as %q, want %q", i, got, want)
+		}
+	}
+	if got := c.Render(nil); !strings.Contains(got, dt.String()) {
+		t.Errorf("the header does not say what the column is:\n%s", got)
+	}
+}
+
 func ExampleFrame_Render() {
 	f, err := kuma.NewFrame(
 		kuma.NewSeries("symbol", "AAPL", "MSFT", "NVDA").Column(),

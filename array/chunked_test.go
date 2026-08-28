@@ -343,3 +343,33 @@ func TestChunkedSliceOfSlice(t *testing.T) {
 		}
 	}
 }
+
+// TestChunkedAt checks the mapping from a row of the column to a row of the
+// chunk holding it, which is what a caller needs to ask an Array something a
+// Chunked cannot answer.
+func TestChunkedAt(t *testing.T) {
+	c, err := array.NewChunked(dtype.Int64,
+		mustNew(t, dtype.Int64, 2, int64s(t, 1, 2), nil),
+		mustNew(t, dtype.Int64, 3, int64s(t, 3, 4, 5), nil),
+	)
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+
+	for i, want := range []int64{1, 2, 3, 4, 5} {
+		chunk, k := c.At(i)
+		if got := chunk.Value[int64](k); got != want {
+			t.Errorf("At(%d) reads %d, want %d", i, got, want)
+		}
+	}
+	if _, k := c.At(3); k != 1 {
+		t.Errorf("At(3) is index %d of its chunk, want 1", k)
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Error("At past the end did not panic")
+		}
+	}()
+	c.At(5)
+}

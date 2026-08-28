@@ -48,6 +48,17 @@
 // bytes laid out the way the column wants them, such as one reading a mapped
 // file.
 //
+// # Dictionary encoding
+//
+// A dictionary encoded column is small integers into a shared array of values,
+// which is what pandas calls a Categorical and what most of the data in a
+// Parquet file already is. NewDictionary builds one out of two ordinary arrays
+// and the column keeps them both: Indices reads the integers as an array of the
+// index type and Dictionary hands back the values.
+//
+// Slicing one is still constant time, since it slices the indices and the
+// values are shared by everything sliced from the same column.
+//
 // # Chunks
 //
 // A Chunked is a column held as several arrays rather than one, which is what
@@ -94,6 +105,11 @@ type Array struct {
 	// strings holds the values of a String or Binary column, and is nil for
 	// everything else.
 	strings *strview.Data
+
+	// dict holds the values of a dictionary encoded column, whose own values
+	// are the indices into it, and is nil for everything else. It is what says
+	// the values field is holding indices rather than the column itself.
+	dict *Array
 }
 
 // DType returns the type of the values.
@@ -139,6 +155,10 @@ func (a *Array) Validity() *bitmap.Bitmap { return a.validity }
 
 // Buffer returns the buffer holding the fixed width values, or nil for a
 // String, Binary or Null column. It is shared the same way Validity is.
+//
+// For a dictionary encoded column the fixed width values are the indices, and
+// Indices is the way to read them, since it comes back as an array of the index
+// type and this comes back as bytes.
 func (a *Array) Buffer() *buffer.Buffer { return a.values }
 
 // Strings returns the values of a String or Binary column, or nil for anything
@@ -183,6 +203,17 @@ func (a *Array) Slice(i, j int) *Array {
 // range so that slicing a chunk out of a column and cloning it does not carry
 // the rest of the column along with it.
 func (a *Array) Clone() *Array {
+	if a.dict != nil {
+		// Both halves have to come along, or the copy is a copy of the indices
+		// still pointing at the values it was copied from. The dictionary is
+		// copied whole, since it is the distinct values of the column rather
+		// than a range of it and there is nothing in it to leave behind.
+		out := *a.Indices().Clone()
+		out.dt = a.dt
+		out.dict = a.dict.Clone()
+		return &out
+	}
+
 	out := &Array{dt: a.dt, length: a.length, nulls: a.nulls}
 
 	if a.validity != nil {

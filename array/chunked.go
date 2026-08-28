@@ -203,6 +203,17 @@ func (c *Chunked) Bytes(i int) []byte {
 	return c.chunks[k].Bytes(n)
 }
 
+// At returns the chunk holding value i and where in that chunk it is. It panics
+// if i is out of range.
+//
+// It is for a caller that wants something an Array can answer and a Chunked
+// cannot, such as the dictionary a dictionary encoded column points at, which
+// each chunk carries its own of.
+func (c *Chunked) At(i int) (chunk *Array, index int) {
+	k, n := c.locate(i)
+	return c.chunks[k], n
+}
+
 // locate returns which chunk holds value i and where in that chunk it is. It
 // panics if i is out of range.
 func (c *Chunked) locate(i int) (chunk, index int) {
