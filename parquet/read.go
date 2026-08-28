@@ -281,7 +281,13 @@ func (r *FileReader) group(i int) (*RowGroup, error) {
 // leaf's rather than searched for, since a file whose row group is in another
 // order is one whose footer contradicts its own schema.
 func (r *FileReader) chunkOf(g *RowGroup, group, j int) (*ColumnChunk, *Column, error) {
-	k := r.take[j]
+	return r.chunkFor(g, group, r.take[j])
+}
+
+// chunkFor is chunkOf for a column named by its place in the file rather than
+// in the projection, which is how a filter names one. Filtering on a column and
+// reading it are different questions and the columns need not be the same.
+func (r *FileReader) chunkFor(g *RowGroup, group, k int) (*ColumnChunk, *Column, error) {
 	c := &r.columns[k]
 	if k >= len(g.Columns) || !slices.Equal(g.Columns[k].Meta.Path, c.Path) {
 		return nil, nil, fmt.Errorf("parquet: %w: row group %d holds %d chunks and none of them is %s",
