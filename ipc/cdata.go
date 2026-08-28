@@ -357,7 +357,7 @@ func importField(s *CSchema) (dtype.Field, error) {
 			return dtype.Field{}, err
 		}
 		t = dtype.Dictionary{Index: t, Value: value.Type}
-		if err := dtype.Validate(t); err != nil {
+		if err = dtype.Validate(t); err != nil {
 			return dtype.Field{}, fmt.Errorf("ipc: format %q: %w", format, err)
 		}
 	}
