@@ -41,6 +41,7 @@ golangci-lint run
 govulncheck ./...
 30 seconds of fuzzing per target
 a cross compile across seven targets
+the pyarrow cross check
 ```
 
 Nightly adds twenty minutes of fuzzing per target, the microbenchmarks, and the race suite twenty times over.
@@ -55,6 +56,8 @@ golangci-lint run
 ```
 
 If a fuzzer finds something, commit the failing input in `testdata/fuzz/`. That is what turns a one time discovery into a permanent regression test.
+
+`TestPyarrow` in the `ipc` package builds a shared library and lets pyarrow hand columns to kuma and take them back, which is the only way to check an ABI. It skips unless `python3` can import pyarrow, so install it with `pip install pyarrow` if you are touching that code. CI always runs it.
 
 ## Style
 

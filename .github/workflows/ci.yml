@@ -96,6 +96,38 @@ jobs:
       - name: Test with simd
         run: go test -race ./...
 
+  # The C data interface is an agreement with other libraries, so it is checked
+  # against one. pyarrow and kuma end up in the same process and hand columns
+  # to each other in both directions, and the test compares buffer addresses,
+  # which is the only way to see that nothing was copied.
+  pyarrow:
+    name: pyarrow cross check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install pyarrow
+        run: pip install --disable-pip-version-check pyarrow
+
+      # The test skips itself when pyarrow is not importable, which is right on
+      # a laptop and wrong here. This step fails the job instead, so that a
+      # broken install shows up as a broken install rather than as a check that
+      # quietly stopped running.
+      - name: pyarrow is importable
+        run: python -c "import pyarrow; print(pyarrow.__version__)"
+
+      - name: Cross check
+        run: go test -v -run TestPyarrow ./ipc/
+
   vet:
     name: vet and formatting
     runs-on: ubuntu-latest
@@ -109,6 +141,12 @@ jobs:
 
       - name: go vet
         run: go vet ./...
+
+      # ./... does not reach into testdata, and the pyarrow cross check lives
+      # there because it is a main package nothing imports. It still has to be
+      # held to the same standard as the rest.
+      - name: go vet the cross check
+        run: go vet ./ipc/testdata/pyarrow
 
       - name: gofmt
         run: |
