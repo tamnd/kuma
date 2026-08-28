@@ -218,7 +218,7 @@ func present(c *array.Chunked, g *Groups, last bool) *array.Chunked {
 	row := 0
 	for _, a := range c.Chunks() {
 		for i := range a.Len() {
-			if a.IsValid(i) {
+			if !missing(a, i) {
 				id := g.ids[row]
 				if last || at[id] < 0 {
 					at[id] = row
@@ -263,15 +263,15 @@ func countInto(c *array.Chunked, g *Groups, n int) []int64 {
 	acc := make([]int64, n)
 	row := 0
 	for _, a := range c.Chunks() {
-		switch a.NullCount() {
-		case 0:
+		switch {
+		case !anyMissing(a):
 			for range a.Len() {
 				acc[g.ids[row]]++
 				row++
 			}
 		default:
 			for i := range a.Len() {
-				if a.IsValid(i) {
+				if !missing(a, i) {
 					acc[g.ids[row]]++
 				}
 				row++

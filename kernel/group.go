@@ -72,6 +72,12 @@ func (g *Groups) Keys() []*array.Chunked { return g.keys }
 // quietly and is the wrong thing for a library people will use to count
 // things.
 //
+// A dictionary encoded key groups by the value behind the index rather than by
+// the index, so two chunks that hold the same country codes in a different
+// order still group together, and a row pointing at a value the dictionary says
+// is missing groups with the rows that have no value at all. The keys come back
+// dictionary encoded and pointing at the values they came from.
+//
 // NaN keys land in one group rather than in one group each. There are millions
 // of bit patterns that are NaN and telling them apart would put a row in a
 // group of its own for a reason nobody asked about. The same goes for negative
@@ -191,7 +197,7 @@ func (k *key) appendRow(dst []byte, i int) []byte {
 	}
 
 	a, j := k.chunks[k.chunk], i-k.base
-	if a.IsNull(j) {
+	if missing(a, j) {
 		// A byte that no value can start with, so a missing value groups with
 		// the other missing values and with nothing else.
 		return append(dst, 0)
@@ -205,6 +211,15 @@ func newKey(c *array.Chunked) (*key, error) {
 	bind, err := binderFor(c.DType())
 	if err != nil {
 		return nil, err
+	}
+
+	// A dictionary encoded column whose chunks agree and whose values are
+	// distinct is keyed by its indices, which is the same grouping for a
+	// fraction of the work. See indexKey for when that holds.
+	if dt, ok := c.DType().(dtype.Dictionary); ok {
+		if fast, ok := indexKey(c, dt); ok {
+			bind = fast
+		}
 	}
 
 	k := &key{chunks: c.Chunks(), bind: bind}
@@ -228,6 +243,20 @@ func newKey(c *array.Chunked) (*key, error) {
 // precision and scale, so equal values are equal bytes, and it does not matter
 // that the byte order says nothing about which is bigger.
 func binderFor(dt dtype.DataType) (func(*array.Array) writer, error) {
+	// A dictionary encoded column is written as the value behind the index and
+	// not as the index. Two chunks of one column may read from two different
+	// dictionaries, so the same index is not the same value, and the group a
+	// row belongs to cannot depend on which chunk it turned up in. This is the
+	// binder that always works. The one that writes the index instead is faster
+	// and is chosen by newKey for the columns that allow it.
+	if d, ok := dt.(dtype.Dictionary); ok {
+		value, err := binderFor(d.Value)
+		if err != nil {
+			return nil, err
+		}
+		return bindDictionary(value), nil
+	}
+
 	switch dt.Kind() {
 	case dtype.NullKind:
 		// Every value is missing, so appendRow answers before it gets here.

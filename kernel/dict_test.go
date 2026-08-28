@@ -1,6 +1,7 @@
 package kernel_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -386,6 +387,245 @@ func TestFilterDictionary(t *testing.T) {
 	}
 }
 
+// TestGroupByDictionary is the ordinary case. Rows group by the string behind
+// the index, and the keys come back dictionary encoded rather than expanded.
+func TestGroupByDictionary(t *testing.T) {
+	values := array.OfStrings("GB", "JP", "US")
+	src := dictColumn(t, values, 1, 0, 1, 2, -1, 0)
+
+	g, err := kernel.GroupBy(src)
+	if err != nil {
+		t.Fatalf("GroupBy: %v", err)
+	}
+	if want := []int{0, 1, 0, 2, 3, 1}; !slices.Equal(g.IDs(), want) {
+		t.Errorf("the groups are %v, want %v", g.IDs(), want)
+	}
+	if want := []int{2, 2, 1, 1}; !slices.Equal(g.Sizes(), want) {
+		t.Errorf("the sizes are %v, want %v", g.Sizes(), want)
+	}
+
+	keys := g.Keys()[0]
+	if !dtype.Equal(keys.DType(), codeType) {
+		t.Errorf("the keys are a %s column, want %s", keys.DType(), codeType)
+	}
+	wantCodes(t, keys, "JP", "GB", "US", "")
+}
+
+// TestGroupByDictionaryChunks is two chunks that hold the same strings in a
+// different order, which is what reading two files gives. The index of a row
+// says nothing about the group it belongs to until it is read through the
+// dictionary of its own chunk, and this is the test that says so.
+func TestGroupByDictionaryChunks(t *testing.T) {
+	left := array.OfStrings("GB", "JP")
+	right := array.OfStrings("JP", "US", "GB")
+	src, err := array.NewChunked(codeType,
+		codes(t, left, 0, 1),
+		codes(t, right, 0, 2, 1),
+	)
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+
+	g, err := kernel.GroupBy(src)
+	if err != nil {
+		t.Fatalf("GroupBy: %v", err)
+	}
+	if want := []int{0, 1, 1, 0, 2}; !slices.Equal(g.IDs(), want) {
+		t.Errorf("the groups are %v, want %v", g.IDs(), want)
+	}
+	if want := []int{2, 2, 1}; !slices.Equal(g.Sizes(), want) {
+		t.Errorf("the sizes are %v, want %v", g.Sizes(), want)
+	}
+	wantCodes(t, g.Keys()[0], "GB", "JP", "US")
+}
+
+// TestGroupByDictionaryNullValue is a dictionary that holds a null of its own.
+// A row pointing at it is a row whose value is missing, so it groups with the
+// rows that have no value at all rather than with the strings.
+func TestGroupByDictionaryNullValue(t *testing.T) {
+	b, err := array.NewBuilder(dtype.String)
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+	b.AppendString("GB")
+	b.AppendNull()
+	values := b.Finish()
+
+	src := dictColumn(t, values, 0, 1, -1, 1, 0)
+	g, err := kernel.GroupBy(src)
+	if err != nil {
+		t.Fatalf("GroupBy: %v", err)
+	}
+	if want := []int{0, 1, 1, 1, 0}; !slices.Equal(g.IDs(), want) {
+		t.Errorf("the groups are %v, want %v", g.IDs(), want)
+	}
+	if want := []int{2, 3}; !slices.Equal(g.Sizes(), want) {
+		t.Errorf("the sizes are %v, want %v", g.Sizes(), want)
+	}
+
+	keys := g.Keys()[0]
+	if got := valueAt(t, keys, 0); got != "GB" {
+		t.Errorf("the first key is %v, want GB", got)
+	}
+	if got := valueAt(t, keys, 1); got != nil {
+		t.Errorf("the second key is %v, want a missing value", got)
+	}
+}
+
+// TestGroupByDictionaryDuplicates is a dictionary holding the same string
+// twice, which nothing forbids and which two indices then stand for. The rows
+// have to land in one group, so this is the case where the indices cannot be
+// the key and the values have to be read after all.
+func TestGroupByDictionaryDuplicates(t *testing.T) {
+	values := array.OfStrings("GB", "JP", "GB")
+	src := dictColumn(t, values, 0, 2, 1, 0)
+
+	g, err := kernel.GroupBy(src)
+	if err != nil {
+		t.Fatalf("GroupBy: %v", err)
+	}
+	if want := []int{0, 0, 1, 0}; !slices.Equal(g.IDs(), want) {
+		t.Errorf("the groups are %v, want %v", g.IDs(), want)
+	}
+	wantCodes(t, g.Keys()[0], "GB", "JP")
+
+	n, err := kernel.NUnique(src, kernel.OneGroup(src.Len()))
+	if err != nil {
+		t.Fatalf("NUnique: %v", err)
+	}
+	if got := n.Value[int64](0); got != 2 {
+		t.Errorf("the column has %d distinct values, want 2", got)
+	}
+}
+
+// TestGroupByDictionaryMixed is a dictionary encoded key next to a plain one,
+// which is what a group by over a table read from Parquet looks like.
+func TestGroupByDictionaryMixed(t *testing.T) {
+	code := dictColumn(t, array.OfStrings("GB", "JP"), 0, 0, 1, 0)
+	day := col(t, dtype.Int32, []any{int32(1), int32(2), int32(1), int32(1)})
+
+	g, err := kernel.GroupBy(code, day)
+	if err != nil {
+		t.Fatalf("GroupBy: %v", err)
+	}
+	if want := []int{0, 1, 2, 0}; !slices.Equal(g.IDs(), want) {
+		t.Errorf("the groups are %v, want %v", g.IDs(), want)
+	}
+	wantCodes(t, g.Keys()[0], "GB", "GB", "JP")
+
+	wantDay := []any{int32(1), int32(2), int32(1)}
+	for i, want := range wantDay {
+		if got := valueAt(t, g.Keys()[1], i); got != want {
+			t.Errorf("day of group %d is %v, want %v", i, got, want)
+		}
+	}
+}
+
+// TestGroupByDictionaryIndexTypes runs a group by once per index type, since
+// reading the indices of a chunk is a case for each of them.
+func TestGroupByDictionaryIndexTypes(t *testing.T) {
+	values := array.OfStrings("GB", "JP", "US")
+	indexes := []dtype.DataType{
+		dtype.Int8, dtype.Int16, dtype.Int32, dtype.Int64,
+		dtype.Uint8, dtype.Uint16, dtype.Uint32, dtype.Uint64,
+	}
+
+	for _, index := range indexes {
+		t.Run(index.String(), func(t *testing.T) {
+			b, err := array.NewBuilder(index)
+			if err != nil {
+				t.Fatalf("NewBuilder: %v", err)
+			}
+			appendIndices(t, b, index, 2, 0, 2)
+			b.AppendNull()
+
+			a, err := array.NewDictionary(b.Finish(), values)
+			if err != nil {
+				t.Fatalf("NewDictionary: %v", err)
+			}
+			src, err := array.NewChunked(dtype.Dictionary{Index: index, Value: dtype.String}, a)
+			if err != nil {
+				t.Fatalf("NewChunked: %v", err)
+			}
+
+			g, err := kernel.GroupBy(src)
+			if err != nil {
+				t.Fatalf("GroupBy: %v", err)
+			}
+			if want := []int{0, 1, 0, 2}; !slices.Equal(g.IDs(), want) {
+				t.Errorf("the groups are %v, want %v", g.IDs(), want)
+			}
+			wantCodes(t, g.Keys()[0], "US", "GB", "")
+		})
+	}
+}
+
+// TestGroupByDictionarySliced groups a column that starts partway into its
+// buffers, which is what a slice of a batch is.
+func TestGroupByDictionarySliced(t *testing.T) {
+	whole := dictColumn(t, array.OfStrings("GB", "JP", "US"), 0, 1, 2, 1, 0)
+	src := whole.Slice(1, 4)
+
+	g, err := kernel.GroupBy(src)
+	if err != nil {
+		t.Fatalf("GroupBy: %v", err)
+	}
+	if want := []int{0, 1, 0}; !slices.Equal(g.IDs(), want) {
+		t.Errorf("the groups are %v, want %v", g.IDs(), want)
+	}
+	wantCodes(t, g.Keys()[0], "JP", "US")
+}
+
+// TestAggDictionary covers the aggregations that read a dictionary encoded
+// column without decoding it. A count skips the row pointing at the missing
+// value the same way it skips the row that has no value, first and last skip
+// them too, and a distinct count counts the strings rather than the indices.
+func TestAggDictionary(t *testing.T) {
+	b, err := array.NewBuilder(dtype.String)
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+	b.AppendString("GB")
+	b.AppendNull()
+	b.AppendString("JP")
+	values := b.Finish()
+
+	// Two groups, taken one row each in turn: the first holds GB, a missing
+	// value and GB again, the second a missing row, JP and JP.
+	src := dictColumn(t, values, 0, -1, 1, 2, 0, 2)
+	by := col(t, dtype.Int32, []any{int32(0), int32(1), int32(0), int32(1), int32(0), int32(1)})
+
+	g, err := kernel.GroupBy(by)
+	if err != nil {
+		t.Fatalf("GroupBy: %v", err)
+	}
+
+	counts := kernel.Count(src, g)
+	for i, want := range []int64{2, 2} {
+		if got := counts.Value[int64](i); got != want {
+			t.Errorf("group %d counts %d values, want %d", i, got, want)
+		}
+	}
+	if got := kernel.Size(g); got.Value[int64](0) != 3 {
+		t.Errorf("group 0 has %d rows, want 3", got.Value[int64](0))
+	}
+
+	first := kernel.First(src, g)
+	wantCodes(t, first, "GB", "JP")
+	last := kernel.Last(src, g)
+	wantCodes(t, last, "GB", "JP")
+
+	n, err := kernel.NUnique(src, g)
+	if err != nil {
+		t.Fatalf("NUnique: %v", err)
+	}
+	for i, want := range []int64{1, 1} {
+		if got := n.Value[int64](i); got != want {
+			t.Errorf("group %d has %d distinct values, want %d", i, got, want)
+		}
+	}
+}
+
 const (
 	benchDictRows   = 100_000
 	benchDictValues = 250
@@ -454,6 +694,29 @@ func BenchmarkTakeDictionary(b *testing.B) {
 	b.Run("strings", func(b *testing.B) {
 		for b.Loop() {
 			kernel.Take(plain, idx)
+		}
+	})
+}
+
+// BenchmarkGroupByDictionary groups the same column stored both ways. The
+// dictionary side keys the rows by their indices, so it hashes four bytes where
+// the other hashes a string, and it pays a pass over the two hundred and fifty
+// values first to find out that it may.
+func BenchmarkGroupByDictionary(b *testing.B) {
+	dict, plain := benchDictColumn(b)
+
+	b.Run("dictionary", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := kernel.GroupBy(dict); err != nil {
+				b.Fatalf("GroupBy: %v", err)
+			}
+		}
+	})
+	b.Run("strings", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := kernel.GroupBy(plain); err != nil {
+				b.Fatalf("GroupBy: %v", err)
+			}
 		}
 	})
 }

@@ -29,6 +29,14 @@ import (
 // hundred and fifty strings produce five hundred, because finding out that they
 // hold the same values means comparing all of them against all of them, and the
 // case this path exists for is chunks that hold different ones.
+//
+// Grouping one is the other half of this file. The key of a row is the index
+// when the column allows it, which is a group by over an int32 no matter what
+// the values are, and is the value behind the index when it does not. What
+// decides is whether every chunk reads from the one dictionary and whether its
+// values are distinct, since the same index is only the same value when both
+// hold. Either way the values are read where they are and the column is never
+// decoded into the million strings it stands for.
 
 // takeDictionary gathers a dictionary encoded column at the positions given.
 //
@@ -203,4 +211,136 @@ func emptyOf(dt dtype.DataType) *array.Array {
 		panic("kernel: " + err.Error())
 	}
 	return b.Finish()
+}
+
+// bindDictionary writes the value behind an index, using the writer the value
+// type would have used had the column not been encoded at all.
+//
+// Both halves are bound once per chunk, the values so that the string data is
+// found once and the indices so that reading one is a slice index rather than a
+// switch on the index type. A row whose value is missing never arrives here,
+// since the key has already written it as one.
+func bindDictionary(value func(*array.Array) writer) func(*array.Array) writer {
+	return func(a *array.Array) writer {
+		write, idx := value(a.Dictionary()), a.Indices()
+		switch idx.DType().Kind() {
+		case dtype.Int8Kind:
+			return bindIndices[int8](write, idx)
+		case dtype.Int16Kind:
+			return bindIndices[int16](write, idx)
+		case dtype.Int32Kind:
+			return bindIndices[int32](write, idx)
+		case dtype.Int64Kind:
+			return bindIndices[int64](write, idx)
+		case dtype.Uint8Kind:
+			return bindIndices[uint8](write, idx)
+		case dtype.Uint16Kind:
+			return bindIndices[uint16](write, idx)
+		case dtype.Uint32Kind:
+			return bindIndices[uint32](write, idx)
+		case dtype.Uint64Kind:
+			return bindIndices[uint64](write, idx)
+		default:
+			panic(fmt.Sprintf("kernel: group by a dictionary indexed by %s", idx.DType()))
+		}
+	}
+}
+
+// indexKey returns a binder that writes the index of a row rather than the
+// value behind it, and reports whether this column allows one.
+//
+// It is allowed when every chunk reads from the one dictionary and no two of
+// its values are equal, because then two rows hold the same value exactly when
+// they hold the same index, and the key of a column of country codes is an
+// int32 rather than a string. That is the whole point of the encoding as far as
+// a group by is concerned, and it is what makes grouping a dictionary column
+// beat grouping the strings it stands for rather than merely tie with them.
+//
+// The dictionary is not allowed to hold a null, since a row pointing at one is
+// a row with no value and has to group with the rows that have none, which an
+// index cannot say. Finding out whether the values are distinct costs a pass
+// over them, so the question is only asked when there are fewer of them than
+// there are rows to group, which is the shape the encoding is used for.
+func indexKey(c *array.Chunked, dt dtype.Dictionary) (func(*array.Array) writer, bool) {
+	chunks := c.Chunks()
+	if len(chunks) == 0 {
+		return nil, false
+	}
+	d := chunks[0].Dictionary()
+	if d.NullCount() > 0 || d.Len() > c.Len() {
+		return nil, false
+	}
+	for _, a := range chunks[1:] {
+		if a.Dictionary() != d {
+			return nil, false
+		}
+	}
+	if !distinct(d) {
+		return nil, false
+	}
+
+	bind, err := binderFor(dt.Index)
+	if err != nil {
+		return nil, false
+	}
+	return func(a *array.Array) writer { return bind(a.Indices()) }, true
+}
+
+// distinct reports whether no two values of d are equal.
+//
+// The comparison is the encoding a group by would have used on the values
+// anyway, so two values are equal here exactly when they would have landed in
+// one group there. A dictionary written by anything that reads Parquet or Arrow
+// has distinct values already, and this is here because nothing says it has to.
+func distinct(d *array.Array) bool {
+	bind, err := binderFor(d.DType())
+	if err != nil {
+		return false
+	}
+
+	write := bind(d)
+	seen := make(map[string]struct{}, d.Len())
+	var scratch []byte
+	for i := range d.Len() {
+		scratch = write(scratch[:0], i)
+		if _, ok := seen[string(scratch)]; ok {
+			return false
+		}
+		seen[string(scratch)] = struct{}{}
+	}
+	return true
+}
+
+// bindIndices reads the indices of one chunk as T and hands each of them to the
+// writer over the values.
+func bindIndices[T array.Numeric](write writer, idx *array.Array) writer {
+	vs := idx.Values[T]()
+	return func(dst []byte, i int) []byte {
+		return write(dst, int(vs[i]))
+	}
+}
+
+// missing reports whether row j of a has no value.
+//
+// For a dictionary encoded column that is two questions rather than one: the
+// row itself can be missing, and the row can be there and point at a value in
+// the dictionary that is missing. Both of them are a missing value, they have
+// to group together and a count has to skip both, so every part of this package
+// that asks the question asks it here.
+func missing(a *array.Array, j int) bool {
+	if a.IsNull(j) {
+		return true
+	}
+	d := a.Dictionary()
+	return d != nil && d.NullCount() > 0 && d.IsNull(a.Index(j))
+}
+
+// anyMissing reports whether a has a row with no value in it, which is the
+// question a loop asks once so that it does not have to ask about every row.
+func anyMissing(a *array.Array) bool {
+	if a.NullCount() > 0 {
+		return true
+	}
+	d := a.Dictionary()
+	return d != nil && d.NullCount() > 0
 }
