@@ -37,16 +37,23 @@
 //
 // Writer and Reader are those two messages put together into the Arrow IPC
 // stream format, which is a schema, a record batch for every batch, and a
-// marker saying there are no more. That is what a file of Arrow data is, and
-// what one process sends another over a socket.
+// marker saying there are no more. That is what one process sends another over
+// a socket, and it is read from front to back because that is the only way
+// anything arriving over a socket can be read.
+//
+// FileWriter and FileReader are the Arrow IPC file format, which is that same
+// stream with a magic number in front of it and a footer behind it. The footer
+// holds a block per batch saying where in the file it starts and how long it is,
+// so a reader that can seek does not have to walk the batches it does not want.
+// FileReader takes an io.ReaderAt and the size, the way archive/zip does, and
+// hands out batches by number in any order.
 //
 // Both interfaces are checked against pyarrow, in both directions, by the tests
 // in testdata/pyarrow. The C one runs two libraries in one process and compares
 // buffer addresses, and the message one passes files.
 //
 // What is not here yet: arrays of the nested types, dictionary batches, a
-// compressed body, the Arrow IPC file format with its footer and block index,
-// and the arrow-go bridge.
+// compressed body, and the arrow-go bridge.
 //
 // Stability: tier 1, stable.
 package ipc
@@ -89,10 +96,10 @@ var (
 	// number in it is checked before it is used.
 	ErrMessage = errors.New("bad message")
 
-	// ErrClosed is returned by a write to a stream whose end of stream marker
-	// has already gone out. There is nowhere left in the stream to put a batch,
-	// so this is a mistake in the calling code rather than anything the bytes
-	// did.
+	// ErrClosed is returned by a write to a stream or a file whose end of stream
+	// marker has already gone out. There is nowhere left to put a batch, and in
+	// a file the footer saying where the batches are is already behind it, so
+	// this is a mistake in the calling code rather than anything the bytes did.
 	ErrClosed = errors.New("the stream is closed")
 
 	// ErrUnsupported is returned for the shapes this package understands and

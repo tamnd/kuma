@@ -207,6 +207,106 @@ func renderValue(a *array.Array, i int) string {
 	}
 }
 
+// The plumbing the stream and the file cross checks share. Both of them write
+// one of these cases per file along with a manifest saying what is in it, hand
+// the directory to a script, and read back what the script wrote. The only
+// difference between the two is what one of those files is, so that is a pair of
+// functions rather than two copies of the rest.
+type (
+	crossWriter func(t *testing.T, path string, s dtype.Schema, batches []ipc.Batch)
+	crossReader func(t *testing.T, path string) ([]ipc.Batch, dtype.Schema)
+)
+
+// writeCases writes a file per case and the manifest, which is one line per case
+// holding the name and the rendering of every batch in it joined by a bar.
+func writeCases(t *testing.T, dir, ext string, cases []pyarrowBatchCase, write crossWriter) {
+	t.Helper()
+
+	var manifest strings.Builder
+	for _, c := range cases {
+		rendered := make([]string, len(c.batches))
+		for i, b := range c.batches {
+			rendered[i] = renderBatch(c.schema, b)
+		}
+		write(t, filepath.Join(dir, "go-"+c.name+ext), c.schema, c.batches)
+		fmt.Fprintf(&manifest, "%s\t%s\n", c.name, strings.Join(rendered, "|"))
+	}
+	// One with no batches in it, which the batch cases cannot cover since a case
+	// with no batches has no message to write.
+	write(t, filepath.Join(dir, "go-none"+ext),
+		dtype.Schema{Fields: []dtype.Field{{Name: "id", Type: dtype.Int64}}}, nil)
+	fmt.Fprint(&manifest, "none\t\n")
+
+	if err := os.WriteFile(filepath.Join(dir, "go.txt"), []byte(manifest.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// checkBackWhole reads what kuma wrote and pyarrow wrote back out with its own
+// writer, and compares it with what kuma sent. The schema in these is pyarrow's
+// spelling of the one kuma wrote, so this is also where a type that survives one
+// trip and not two would show up.
+func checkBackWhole(t *testing.T, dir, ext string, cases []pyarrowBatchCase, read crossReader) {
+	t.Helper()
+	for _, c := range cases {
+		got, s := read(t, filepath.Join(dir, "back-"+c.name+ext))
+		if got == nil {
+			continue
+		}
+		if len(got) != len(c.batches) {
+			t.Errorf("%s: came back with %d batches, want %d", c.name, len(got), len(c.batches))
+			continue
+		}
+		if !s.Equal(c.schema) {
+			t.Errorf("%s: came back with the schema %v, want %v", c.name, s, c.schema)
+		}
+		for i, want := range c.batches {
+			if got[i].Length != want.Length {
+				t.Errorf("%s batch %d: came back with %d rows, want %d",
+					c.name, i, got[i].Length, want.Length)
+				continue
+			}
+			for k, col := range want.Columns {
+				equalArrays(t, got[i].Columns[k], col)
+			}
+		}
+	}
+}
+
+// checkPythonWhole reads what pyarrow built itself and compares each one with the
+// values pyarrow says are in it. These are the layouts kuma does not write,
+// arriving the way they arrive from anywhere else.
+func checkPythonWhole(t *testing.T, dir, ext string, read crossReader) {
+	t.Helper()
+	manifest, err := os.ReadFile(filepath.Join(dir, "py.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for line := range strings.Lines(string(manifest)) {
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			continue
+		}
+		name, want, ok := strings.Cut(line, "\t")
+		if !ok {
+			t.Fatalf("py.txt: %q is not a name and a rendering", line)
+		}
+
+		batches, s := read(t, filepath.Join(dir, "py-"+name+ext))
+		if batches == nil && want != "" {
+			continue
+		}
+		got := make([]string, len(batches))
+		for i, b := range batches {
+			got[i] = renderBatch(s, b)
+		}
+		if joined := strings.Join(got, "|"); joined != want {
+			t.Errorf("%s: read as\n%s\nwant\n%s", name, joined, want)
+		}
+	}
+}
+
 type pyarrowBatchCase struct {
 	name    string
 	schema  dtype.Schema

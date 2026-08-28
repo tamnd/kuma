@@ -230,12 +230,28 @@ func EncodeSchema(s dtype.Schema) ([]byte, error) {
 // it.
 func encodeSchemaMessage(s dtype.Schema) ([]byte, error) {
 	sw := schemaWriter{types: make(map[string]typeRef)}
+	schema, err := sw.schema(s)
+	if err != nil {
+		return nil, err
+	}
 
+	w := &sw.w
+	w.startTable()
+	w.slotInt(fbMessageVersion, fbVersionV5, 0)
+	w.slotUint8(fbMessageHeaderType, fbHeaderSchema)
+	w.slotOffset(fbMessageHeader, schema)
+	return w.finish(w.endTable()), nil
+}
+
+// schema writes the Schema table itself and returns where it starts. A schema
+// message holds one of these and so does the footer of a file, and the table is
+// the same table either way.
+func (sw *schemaWriter) schema(s dtype.Schema) (fbOffset, error) {
 	fields := make([]fbOffset, len(s.Fields))
 	for i, f := range s.Fields {
 		off, err := sw.field(f)
 		if err != nil {
-			return nil, err
+			return 0, err
 		}
 		fields[i] = off
 	}
@@ -253,13 +269,7 @@ func encodeSchemaMessage(s dtype.Schema) ([]byte, error) {
 	w.startTable()
 	w.slotOffset(fbSchemaFields, fieldsVec)
 	w.slotOffset(fbSchemaMetadata, metadataVec)
-	schema := w.endTable()
-
-	w.startTable()
-	w.slotInt(fbMessageVersion, fbVersionV5, 0)
-	w.slotUint8(fbMessageHeaderType, fbHeaderSchema)
-	w.slotOffset(fbMessageHeader, schema)
-	return w.finish(w.endTable()), nil
+	return w.endTable(), nil
 }
 
 // schemaWriter builds one schema message.

@@ -260,6 +260,26 @@ func (v fbVector) span(i int) (span, error) {
 	return span{first: first, second: second}, err
 }
 
+// block reads element i of a vector of the structs a file indexes its messages
+// with. The four bytes between the metadata length and the body length are the
+// padding an int64 after an int32 needs, and nothing is written in them.
+func (v fbVector) block(i int) (block, error) {
+	pos, err := v.elem(i, fbBlockSize)
+	if err != nil {
+		return block{}, err
+	}
+	offset, err := fbInt64(v.buf, pos)
+	if err != nil {
+		return block{}, err
+	}
+	meta, err := fbInt32(v.buf, pos+8)
+	if err != nil {
+		return block{}, err
+	}
+	body, err := fbInt64(v.buf, pos+16)
+	return block{offset: offset, meta: meta, body: body}, err
+}
+
 // int64at reads element i of a vector of int64.
 func (v fbVector) int64at(i int) (int64, error) {
 	pos, err := v.elem(i, 8)
