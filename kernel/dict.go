@@ -596,6 +596,11 @@ func failedRow(a *array.Array, fails []*CastError, start int, from, to dtype.Dat
 //
 // A row pointing at a value that would not cast is a null here, since a strict
 // cast has already stopped on it and a loose one wanted the null.
+//
+// The positions are handed to the gather rather than written out here, which
+// costs a slice of them and buys the one copy of the per type writing loop. A
+// decode that wanted that slice back could have it, and would be a second copy
+// of take.go for what is already the cheaper half of this cast.
 func decodeChunk(a, values *array.Array, to dtype.DataType) *array.Array {
 	b := builder(to)
 	b.Grow(a.Len())
