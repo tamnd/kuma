@@ -26,6 +26,80 @@ import (
 // narrower and is what a hostile file attacks: no read past the end of the
 // footer, and nothing allocated by a number in the file that the bytes of the
 // file do not pay for.
+// FuzzReadPages walks arbitrary bytes as the pages of a column chunk.
+//
+// A chunk is a run of pages with nothing in front of it saying how many, so the
+// walk is driven entirely by the sizes in the headers it is reading. That is a
+// tighter loop than the footer decoder is in: one size read wrong and the next
+// header is read out of the middle of somebody's values, which is a header of
+// arbitrary bytes and is exactly what this generates.
+//
+// What is asked for is that the walk stays inside the chunk. A page may be
+// refused, and most of what is generated here will be, but a page that comes
+// back has to hold the bytes its header said it would and cannot hold more
+// bytes than the chunk has.
+func FuzzReadPages(f *testing.F) {
+	for _, name := range []string{"pages.parquet", "alltypes.parquet", "chunks.parquet"} {
+		b, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			f.Fatalf("read: %v", err)
+		}
+		m, err := parquet.ReadMetadata(bytes.NewReader(b), int64(len(b)))
+		if err != nil {
+			f.Fatalf("%s: %v", name, err)
+		}
+		for _, g := range m.RowGroups {
+			for i := range g.Columns {
+				at := g.Columns[i].Start()
+				f.Add(b[at : at+g.Columns[i].Meta.TotalCompressedSize])
+			}
+		}
+	}
+
+	f.Add([]byte(nil))
+	f.Add([]byte{0x15})
+	f.Add([]byte("PAR1"))
+
+	f.Fuzz(func(t *testing.T, chunk []byte) {
+		n := int64(len(chunk))
+		c := &parquet.ColumnChunk{Meta: parquet.ColumnMeta{
+			Path:                []string{"x"},
+			TotalCompressedSize: n,
+		}}
+
+		pages, err := parquet.ReadPages(bytes.NewReader(chunk), n, c)
+		if err != nil {
+			t.Fatalf("a chunk of %d bytes that is the whole of a file of %d: %v", n, n, err)
+		}
+
+		read := 0
+		for {
+			p, err := pages.Next()
+			if err != nil {
+				break
+			}
+
+			// A page holds what its header said it holds, and its header said
+			// something that fits in the chunk. The second is the one a bad
+			// file attacks, since the size is what the walk adds to its
+			// position to find the next header.
+			if len(p.Data) != int(p.CompressedSize) {
+				t.Fatalf("a page of %d bytes holds %d", p.CompressedSize, len(p.Data))
+			}
+			if int64(len(p.Data)) > n {
+				t.Fatalf("a page of %d bytes came out of a chunk of %d", len(p.Data), n)
+			}
+
+			// The smallest page in the format is a header of one byte and a
+			// body of none, so a chunk cannot hold more pages than it has
+			// bytes.
+			if read++; int64(read) > n {
+				t.Fatalf("a chunk of %d bytes read as %d pages", n, read)
+			}
+		}
+	})
+}
+
 func FuzzReadMetadata(f *testing.F) {
 	for _, name := range []string{
 		"alltypes.parquet", "chunks.parquet", "nested.parquet", "empty.parquet",
