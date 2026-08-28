@@ -16,9 +16,10 @@ import (
 // helper per line of the schema they stand for, and the helpers do nothing but
 // fill in a struct.
 
-// schemaOf wraps nodes in a root that claims the given number of fields.
-func schemaOf(fields int32, nodes ...parquet.SchemaElement) *parquet.Metadata {
-	root := parquet.SchemaElement{Name: "schema", NumChildren: fields}
+// schemaOf wraps nodes in a root with one field, which is the node the test is
+// about together with everything under it.
+func schemaOf(nodes ...parquet.SchemaElement) *parquet.Metadata {
+	root := parquet.SchemaElement{Name: "schema", NumChildren: 1}
 	return &parquet.Metadata{Nodes: append([]parquet.SchemaElement{root}, nodes...)}
 }
 
@@ -302,7 +303,7 @@ func TestSchemaTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s, err := schemaOf(1, tt.node).Schema()
+			s, err := schemaOf(tt.node).Schema()
 			if err != nil {
 				t.Fatalf("Schema: %v", err)
 			}
@@ -386,7 +387,7 @@ func TestSchemaTypesRefused(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := schemaOf(1, tt.node)
+			m := schemaOf(tt.node)
 			if s, err := m.Schema(); !errors.Is(err, tt.want) {
 				t.Fatalf("read as %s, %v, want %v", s, err, tt.want)
 			}
@@ -578,7 +579,7 @@ func TestSchemaShapes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s, err := schemaOf(1, tt.nodes...).Schema()
+			s, err := schemaOf(tt.nodes...).Schema()
 			if err != nil {
 				t.Fatalf("Schema: %v", err)
 			}
@@ -738,7 +739,7 @@ func TestSchemaShapesRefused(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := schemaOf(1, tt.nodes...)
+			m := schemaOf(tt.nodes...)
 			if s, err := m.Schema(); !errors.Is(err, tt.want) {
 				t.Fatalf("read as %s, %v, want %v", s, err, tt.want)
 			}

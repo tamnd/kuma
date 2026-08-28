@@ -38,6 +38,14 @@ import (
 // be a stack overflow rather than an error.
 const maxSchemaDepth = 64
 
+// utc is the only zone parquet can name.
+//
+// A timestamp the file says is adjusted to UTC is a real instant, and one it
+// says nothing about is a reading off a wall clock somewhere unstated. Which of
+// the two it is has to survive the conversion, and the zone is where kuma keeps
+// it.
+const utc = "UTC"
+
 // Node is one node of the schema tree.
 //
 // A node with no children is a column and carries a physical type. A node with
@@ -483,7 +491,7 @@ func int64Type(e *SchemaElement) (dtype.DataType, error) {
 		// and UTC is the only name parquet can write down.
 		var zone string
 		if e.Logical.UTC {
-			zone = "UTC"
+			zone = utc
 		}
 		return dtype.Timestamp{Unit: u, Zone: zone}, nil
 	case DecimalLogical:
@@ -504,9 +512,9 @@ func int64Type(e *SchemaElement) (dtype.DataType, error) {
 		// The converted timestamps are instants, which is the one thing the
 		// logical type had to add a flag for because these two could not say
 		// they were anything else.
-		return dtype.Timestamp{Unit: dtype.Millisecond, Zone: "UTC"}, nil
+		return dtype.Timestamp{Unit: dtype.Millisecond, Zone: utc}, nil
 	case ConvertedTimestampMicros:
-		return dtype.Timestamp{Unit: dtype.Microsecond, Zone: "UTC"}, nil
+		return dtype.Timestamp{Unit: dtype.Microsecond, Zone: utc}, nil
 	case ConvertedDecimal:
 		return decimalType(e)
 	case NoConverted:
