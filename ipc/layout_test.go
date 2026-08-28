@@ -152,7 +152,7 @@ func TestImportOffsets(t *testing.T) {
 				t.Fatalf("Import = %v", err)
 			}
 
-			var want dtype.DataType = dtype.String
+			want := dtype.String
 			if format == "z" || format == "Z" {
 				want = dtype.Binary
 			}
