@@ -103,7 +103,7 @@ type PageBounds struct {
 // reads all of the ones it keeps, which is where the reader was before.
 func ReadColumnIndex(r io.ReaderAt, size int64, c *ColumnChunk) (*ColumnIndex, error) {
 	name := strings.Join(c.Meta.Path, ".")
-	buf, err := indexBytes(r, size, c.ColumnIndexOffset, c.ColumnIndexLength, "column index", name)
+	buf, err := chunkBytes(r, size, c.ColumnIndexOffset, int64(c.ColumnIndexLength), "column index", name)
 	if buf == nil || err != nil {
 		return nil, err
 	}
@@ -131,7 +131,7 @@ func ReadColumnIndex(r io.ReaderAt, size int64, c *ColumnChunk) (*ColumnIndex, e
 // for where those pages are.
 func ReadOffsetIndex(r io.ReaderAt, size int64, c *ColumnChunk) (*OffsetIndex, error) {
 	name := strings.Join(c.Meta.Path, ".")
-	buf, err := indexBytes(r, size, c.OffsetIndexOffset, c.OffsetIndexLength, "offset index", name)
+	buf, err := chunkBytes(r, size, c.OffsetIndexOffset, int64(c.OffsetIndexLength), "offset index", name)
 	if buf == nil || err != nil {
 		return nil, err
 	}
@@ -283,17 +283,18 @@ func (x *ColumnIndex) bounds(c *Column, i int, rows int64) (Bounds, error) {
 	return b, nil
 }
 
-// indexBytes reads one of the two index structures out of the file.
+// chunkBytes reads a run of bytes a chunk's metadata pointed at, which is one
+// of the two indexes or a bloom filter.
 //
-// An offset of nought is a writer that wrote no index, since a parquet file
-// starts with its magic and nothing else can live at the front of it. Everything
-// else is a claim about a file this reader has not read, and is checked against
-// the size before anything is allocated for it.
-func indexBytes(r io.ReaderAt, size, at int64, n int32, what, column string) ([]byte, error) {
+// An offset of nought is a writer that wrote nothing there, since a parquet
+// file starts with its magic and nothing else can live at the front of it.
+// Everything else is a claim about a file this reader has not read, and is
+// checked against the size before anything is allocated for it.
+func chunkBytes(r io.ReaderAt, size, at, n int64, what, column string) ([]byte, error) {
 	if at <= 0 || n <= 0 {
 		return nil, nil
 	}
-	if at > size || int64(n) > size-at {
+	if at > size || n > size-at {
 		return nil, fmt.Errorf("parquet: %w: the %s of %s is %d bytes at %d of a file of %d",
 			ErrFormat, what, column, n, at, size)
 	}
