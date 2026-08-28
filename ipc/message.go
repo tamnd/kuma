@@ -243,6 +243,25 @@ func encodeSchemaMessage(s dtype.Schema) ([]byte, error) {
 	return w.finish(w.endTable()), nil
 }
 
+// schemaWriter builds one schema message.
+//
+// It is a FlatBuffers builder and a note of the type tables written so far. A
+// wide table is mostly the same handful of types over and over, and a table
+// already in the buffer can be pointed at again rather than written again, so
+// a hundred int64 columns cost one description of int64 and a hundred offsets
+// to it. The key is the type as it prints, which names every parameter of it.
+type schemaWriter struct {
+	w     fbBuilder
+	types map[string]typeRef
+}
+
+// typeRef is a type table already in the buffer: which member of the union it
+// is, and where it starts.
+type typeRef struct {
+	kind int
+	off  fbOffset
+}
+
 // schema writes the Schema table itself and returns where it starts. A schema
 // message holds one of these and so does the footer of a file, and the table is
 // the same table either way.
@@ -270,25 +289,6 @@ func (sw *schemaWriter) schema(s dtype.Schema) (fbOffset, error) {
 	w.slotOffset(fbSchemaFields, fieldsVec)
 	w.slotOffset(fbSchemaMetadata, metadataVec)
 	return w.endTable(), nil
-}
-
-// schemaWriter builds one schema message.
-//
-// It is a FlatBuffers builder and a note of the type tables written so far. A
-// wide table is mostly the same handful of types over and over, and a table
-// already in the buffer can be pointed at again rather than written again, so
-// a hundred int64 columns cost one description of int64 and a hundred offsets
-// to it. The key is the type as it prints, which names every parameter of it.
-type schemaWriter struct {
-	w     fbBuilder
-	types map[string]typeRef
-}
-
-// typeRef is a type table already in the buffer: which member of the union it
-// is, and where it starts.
-type typeRef struct {
-	kind int
-	off  fbOffset
 }
 
 // DecodeSchema reads an encapsulated Arrow IPC schema message.

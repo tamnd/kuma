@@ -30,15 +30,15 @@ import (
 // Nothing here closes what it was given, the same as the stream.
 
 const (
-	// fileMagic is what a file starts and ends with.
+	// What a file starts and ends with.
 	fileMagic = "ARROW1"
 
-	// filePad is the magic and the padding after it, which is where the stream
-	// inside a file begins.
+	// The magic and the padding after it, which is where the stream inside a
+	// file begins.
 	filePad = fileMagic + "\x00\x00"
 
-	// fileTail is the length of the footer and the magic after it, which is what
-	// a reader looking for the footer reads first.
+	// The footer length and the magic after it, which is what a reader looking
+	// for the footer reads first.
 	fileTail = 4 + len(fileMagic)
 )
 
