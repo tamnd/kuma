@@ -15,13 +15,18 @@
 // for, so the array it returns is only alive for as long as the memory behind
 // those buffers is.
 //
-// Everything in this package is pure Go and works on any platform. The C
-// structs themselves need cgo and live behind a build tag, so that a program
-// that only reads Parquet does not pay for a C toolchain and still cross
-// compiles.
+// The C structs themselves are CSchema and CArray, with ExportField,
+// ExportArray, ImportField and ImportArray between them and kuma. Those need
+// cgo and live behind a build tag, so that a program that only reads Parquet
+// does not pay for a C toolchain and still cross compiles. Everything else
+// here is pure Go and works on any platform, including the ones with no C
+// toolchain at all.
 //
-// What is not here yet: the C structs and the release callbacks, arrays of the
-// nested types, the Arrow IPC file and stream formats, and the arrow-go bridge.
+// The whole interface is checked against pyarrow in one process, in both
+// directions, by the test in testdata/pyarrow.
+//
+// What is not here yet: arrays of the nested types, the Arrow IPC file and
+// stream formats, and the arrow-go bridge.
 //
 // Stability: tier 1, stable.
 package ipc
