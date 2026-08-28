@@ -173,6 +173,41 @@ def pages():
     )
 
 
+def legacy():
+    """Timestamps as int96, which is how parquet wrote them before it had a type.
+
+    Nothing has written one for years and everybody still has to read them. The
+    value is twelve bytes, a count of nanoseconds into the day and then the
+    Julian day it is in, which is a day number counted from a morning in 4713
+    BC. One of the two rows is before 1970 so that the day comes out negative
+    once it is moved to the epoch everything else counts from.
+
+    Written the old way all round, so the schema has converted types and no
+    logical ones and the pages are the first version of the data page.
+    """
+    schema = pa.schema([pa.field("moment", pa.timestamp("ns")), pa.field("label", pa.string())])
+    table = pa.table(
+        {
+            "moment": [
+                datetime.datetime(2026, 8, 28, 12, 0, 0, 123456),
+                datetime.datetime(1969, 7, 20, 20, 17, 40),
+            ],
+            "label": ["now", "then"],
+        },
+        schema=schema,
+    )
+    pq.write_table(
+        table,
+        "legacy.parquet",
+        compression="none",
+        version="1.0",
+        use_deprecated_int96_timestamps=True,
+        use_dictionary=False,
+        write_statistics=False,
+        store_schema=False,
+    )
+
+
 def empty():
     """A file with a schema and no rows, which still has a footer."""
     schema = pa.schema([pa.field("id", pa.int64()), pa.field("label", pa.string())])
@@ -184,5 +219,9 @@ if __name__ == "__main__":
     chunks()
     nested()
     pages()
+    legacy()
     empty()
-    print("wrote alltypes.parquet, chunks.parquet, nested.parquet, pages.parquet and empty.parquet")
+    print(
+        "wrote alltypes.parquet, chunks.parquet, nested.parquet, pages.parquet, "
+        "legacy.parquet and empty.parquet"
+    )
