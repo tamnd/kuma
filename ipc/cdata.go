@@ -263,6 +263,7 @@ func (i *Imported) Release() {
 // to whoever allocated it either way, and neither of these frees that.
 func ReleaseSchema(s *CSchema) { C.kuma_call_schema_release(s) }
 
+// ReleaseArray releases an array struct, whoever produced it.
 func ReleaseArray(a *CArray) { C.kuma_call_array_release(a) }
 
 // ImportField reads a C schema and returns the field it describes.
@@ -350,7 +351,8 @@ func importField(s *CSchema) (dtype.Field, error) {
 	// A dictionary is the one type the format string does not name. It says
 	// what the indices are and the values hang off their own schema.
 	if s.dictionary != nil {
-		value, err := importField(s.dictionary)
+		var value dtype.Field
+		value, err = importField(s.dictionary)
 		if err != nil {
 			return dtype.Field{}, err
 		}
@@ -453,8 +455,8 @@ func metadataSize(p unsafe.Pointer) (int, error) {
 //
 // A producer that allocated less than its own length says is not caught here
 // and cannot be. There is no size in the struct to compare against, so the
-// length is a promise, and the only defence is that this works out the same
-// size the specification says the producer wrote. What is checked is everything
+// length is a promise. All this can do is work out the same size the
+// specification says the producer wrote. What is checked is everything
 // the struct is wrong about on its own terms: a buffer count that does not
 // match the layout, a negative length, offset, block size or offset value.
 func importLayout(format string, a *CArray) (Layout, error) {
@@ -636,11 +638,11 @@ func exportSizes(state *exportedArray, blocks [][]byte) unsafe.Pointer {
 func childFields(t dtype.DataType) ([]dtype.Field, error) {
 	switch x := t.(type) {
 	case dtype.List:
-		return []dtype.Field{{Name: "item", Type: x.Elem, Nullable: true}}, nil
+		return itemField(x.Elem), nil
 	case dtype.LargeList:
-		return []dtype.Field{{Name: "item", Type: x.Elem, Nullable: true}}, nil
+		return itemField(x.Elem), nil
 	case dtype.FixedSizeList:
-		return []dtype.Field{{Name: "item", Type: x.Elem, Nullable: true}}, nil
+		return itemField(x.Elem), nil
 	case dtype.Struct:
 		return x.Fields, nil
 	case dtype.Map:
@@ -655,6 +657,13 @@ func childFields(t dtype.DataType) ([]dtype.Field, error) {
 	default:
 		return nil, nil
 	}
+}
+
+// itemField is the single child of a list, under the name Arrow gives it. The
+// values of a list are nullable whatever the list itself is, since a list of
+// two that holds one value has to say which one is missing.
+func itemField(t dtype.DataType) []dtype.Field {
+	return []dtype.Field{{Name: "item", Type: t, Nullable: true}}
 }
 
 // callocPointers allocates a zeroed array of n pointers.

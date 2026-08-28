@@ -414,10 +414,10 @@ func TestCReexport(t *testing.T) {
 
 	outSchema, outValues := ipctest.Pair(t)
 	field := dtype.Field{Name: "col", Type: imported.Array.DType(), Nullable: true}
-	if err := ipc.ExportField(field, outSchema); err != nil {
+	if err = ipc.ExportField(field, outSchema); err != nil {
 		t.Fatalf("ExportField = %v", err)
 	}
-	if err := ipc.ExportArray(imported.Array, outValues); err != nil {
+	if err = ipc.ExportArray(imported.Array, outValues); err != nil {
 		t.Fatalf("ExportArray = %v", err)
 	}
 

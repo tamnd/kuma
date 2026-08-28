@@ -115,10 +115,11 @@ func Array(t testing.TB, length int, buffers [][]byte) *ipc.CArray {
 // the tests of one package share the count.
 func Releases() int { return int(C.kuma_test_release_count()) }
 
-// SchemaReleased and ArrayReleased report whether a struct has been released,
-// which the interface says is a release callback that is now a null pointer.
+// SchemaReleased reports whether a schema has been released, which the
+// interface says is a release callback that is now a null pointer.
 func SchemaReleased(s *ipc.CSchema) bool { return cSchema(s).release == nil }
 
+// ArrayReleased reports whether an array has been released.
 func ArrayReleased(a *ipc.CArray) bool { return cArray(a).release == nil }
 
 // Format is the format string of a schema, or the empty string if it has none.
@@ -130,10 +131,11 @@ func Format(s *ipc.CSchema) string {
 	return C.GoString(c.format)
 }
 
-// Length and Offset are what an array struct says about itself, as written
-// rather than as corrected, so a test can see a producer's own numbers.
+// Length is the length an array struct says it has, as written rather than as
+// corrected, so a test can see a producer's own number.
 func Length(a *ipc.CArray) int { return int(cArray(a).length) }
 
+// Offset is where an array struct says its values start.
 func Offset(a *ipc.CArray) int { return int(cArray(a).offset) }
 
 // SetLength writes the length of an array struct. It is here so that a test can

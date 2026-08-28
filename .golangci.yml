@@ -107,6 +107,16 @@ linters:
           - dupword
           - prealloc
 
+      # A file that imports "C" imports unsafe as well, and once cgo has
+      # rewritten it the two of them look like one package imported twice,
+      # which is what dupImport reports. uncheckedInlineErr on the same files
+      # points into the C preamble, where there is no Go error to check and no
+      # Go statement either. Both are the rewriting rather than the code.
+      - path: (cdata|cdata_export|ipctest)\.go
+        linters:
+          - gocritic
+        text: (dupImport|uncheckedInlineErr)
+
 formatters:
   enable:
     - gofmt
