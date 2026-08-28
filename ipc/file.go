@@ -114,10 +114,17 @@ func blockOf(at int64, msg []byte) (block, error) {
 //
 // An error from the underlying writer sticks, since the file is broken at that
 // point. An error about a batch does not, since nothing went out.
+//
+// The values of a dictionary encoded column go out once, in front of the first
+// batch that reads from them, and the footer says where they are. A file has one
+// dictionary per column and no way to replace it, so a batch arriving with
+// different values is an error rather than a second dictionary.
 type FileWriter struct {
 	dst     io.Writer
 	schema  dtype.Schema
+	dicts   *dictWriter
 	at      int64 // how many bytes have gone out, which is where the next message starts
+	values  []block
 	batches []block
 	err     error
 	closed  bool
@@ -126,11 +133,11 @@ type FileWriter struct {
 // NewFileWriter starts a file on w and writes the magic and the schema. The
 // error is either a schema Arrow cannot name or whatever w said about the write.
 func NewFileWriter(w io.Writer, s dtype.Schema) (*FileWriter, error) {
-	msg, err := EncodeSchema(s)
+	msg, ids, err := encodeSchemaMessage(s)
 	if err != nil {
 		return nil, err
 	}
-	f := &FileWriter{dst: w, schema: s}
+	f := &FileWriter{dst: w, schema: s, dicts: newDictWriter(s, ids)}
 	if err := f.write([]byte(filePad)); err != nil {
 		return nil, err
 	}
@@ -146,6 +153,10 @@ func (w *FileWriter) Schema() dtype.Schema { return w.schema }
 // Write appends one record batch and remembers where it went. The columns have
 // to be the types the schema says they are and there have to be as many of them
 // as it has fields.
+//
+// A dictionary encoded column has to arrive as the column and not as its
+// indices, since the values are what this has to write, and every batch of one
+// column has to arrive with the same values.
 func (w *FileWriter) Write(b Batch) error {
 	if w.err != nil {
 		return w.err
@@ -154,10 +165,21 @@ func (w *FileWriter) Write(b Batch) error {
 		return fmt.Errorf("ipc: %w", ErrClosed)
 	}
 
+	// Everything is encoded before anything is written, so that a batch that
+	// turns out to be wrong leaves the file where it was.
 	msg, err := EncodeBatch(w.schema, b)
 	if err != nil {
 		return err
 	}
+	values, err := w.dicts.once(w.schema, b)
+	if err != nil {
+		return err
+	}
+
+	if err = w.writeValues(values); err != nil {
+		return err
+	}
+
 	at, err := blockOf(w.at, msg)
 	if err != nil {
 		return err
@@ -166,6 +188,25 @@ func (w *FileWriter) Write(b Batch) error {
 		return err
 	}
 	w.batches = append(w.batches, at)
+	return nil
+}
+
+// writeValues writes the dictionary messages that go in front of a batch and
+// remembers where each of them went. They are blocks in the footer of their own
+// rather than batches, since a reader needs all of them before it reads
+// anything and none of them are rows.
+func (w *FileWriter) writeValues(values []dictMessage) error {
+	for _, d := range values {
+		at, err := blockOf(w.at, d.msg)
+		if err != nil {
+			return err
+		}
+		if err := w.write(d.msg); err != nil {
+			return err
+		}
+		w.values = append(w.values, at)
+		w.dicts.done(d)
+	}
 	return nil
 }
 
@@ -190,7 +231,7 @@ func (w *FileWriter) Close() error {
 		return err
 	}
 
-	footer, err := encodeFooter(w.schema, w.batches)
+	footer, err := encodeFooter(w.schema, w.values, w.batches)
 	if err != nil {
 		w.err = err
 		return err
@@ -218,20 +259,20 @@ func (w *FileWriter) write(p []byte) error {
 }
 
 // encodeFooter writes the footer of a file, which is the schema and where every
-// batch is.
-func encodeFooter(s dtype.Schema, batches []block) ([]byte, error) {
+// message a reader has to find again is.
+func encodeFooter(s dtype.Schema, values, batches []block) ([]byte, error) {
 	sw := schemaWriter{types: make(map[string]typeRef)}
 	schema, err := sw.schema(s)
 	if err != nil {
 		return nil, err
 	}
 
-	// The vectors go down before the table that points at them. The dictionaries
-	// are written as a vector of nothing rather than left out, because that is
-	// what every other writer produces and a reader of somebody else's file is
-	// the last place to find out which readers check.
+	// The vectors go down before the table that points at them. A file with no
+	// dictionaries in it writes a vector of nothing rather than leaving the
+	// field out, because that is what every other writer produces and a reader
+	// of somebody else's file is the last place to find out which readers check.
 	w := &sw.w
-	dicts := w.blocks(nil)
+	dicts := w.blocks(values)
 	index := w.blocks(batches)
 
 	w.startTable()
@@ -260,22 +301,52 @@ func encodeFooter(s dtype.Schema, batches []block) ([]byte, error) {
 type FileReader struct {
 	src     io.ReaderAt
 	schema  dtype.Schema
+	dicts   *dicts
 	batches []block
 }
 
 // NewFileReader reads the footer of a file and returns a reader for the batches
 // it indexes. The size is how many bytes the file has, which the caller knows
 // and an io.ReaderAt does not, the same way a zip reader is opened.
+//
+// The dictionaries are read here as well. They are needed by any batch that
+// reads from them, so a reader that put it off would be doing it on whichever
+// batch happened to be asked for first, and there is one of them per column
+// rather than one per batch.
 func NewFileReader(r io.ReaderAt, size int64) (*FileReader, error) {
 	footer, limit, err := readFooter(r, size)
 	if err != nil {
 		return nil, err
 	}
-	s, batches, err := decodeFooter(footer, limit)
+	f, err := decodeFooter(footer, limit)
 	if err != nil {
 		return nil, err
 	}
-	return &FileReader{src: r, schema: s, batches: batches}, nil
+	d, err := newDicts(f.schema, f.ids)
+	if err != nil {
+		return nil, err
+	}
+
+	out := &FileReader{src: r, schema: f.schema, dicts: d, batches: f.batches}
+	for i, at := range f.values {
+		buf := make([]byte, int(at.size()))
+		if err := readAt(r, buf, at.offset); err != nil {
+			return nil, fmt.Errorf("ipc: %w: reading dictionary %d: %w", ErrMessage, i, err)
+		}
+		if err := d.read(buf); err != nil {
+			return nil, err
+		}
+	}
+	// A file writes one dictionary per identifier and the footer says how many
+	// it wrote, so a file that wrote two of them under one identifier is one
+	// whose dictionaries do not add up. Replacing a dictionary is a thing a
+	// stream may do and a file may not, since the batches of a file are read in
+	// whatever order the reader wants them.
+	if d.count() != len(f.values) {
+		return nil, fmt.Errorf("ipc: %w: the file has %d dictionary batches under %d identifiers, and a file cannot replace a dictionary",
+			ErrUnsupported, len(f.values), d.count())
+	}
+	return out, nil
 }
 
 // Schema is the schema every batch in the file belongs to.
@@ -297,7 +368,13 @@ func (r *FileReader) Batch(i int) (Batch, error) {
 		return Batch{}, fmt.Errorf("ipc: %w: reading batch %d: %w", ErrMessage, i, err)
 	}
 	b, _, err := DecodeBatch(r.schema, buf)
-	return b, err
+	if err != nil {
+		return Batch{}, err
+	}
+	if err := r.dicts.bind(r.schema, &b); err != nil {
+		return Batch{}, err
+	}
+	return b, nil
 }
 
 // readFooter reads the footer off the end of a file and returns it along with
@@ -343,75 +420,76 @@ func readFooter(r io.ReaderAt, size int64) ([]byte, int64, error) {
 	return footer, limit, nil
 }
 
+// footer is what the end of a file says: the schema its batches belong to, the
+// dictionary identifier of each of its columns, and where every message a
+// reader has to find again is.
+type footer struct {
+	schema  dtype.Schema
+	ids     []int64
+	values  []block
+	batches []block
+}
+
 // decodeFooter reads the schema and the block index out of a footer.
-func decodeFooter(footer []byte, limit int64) (dtype.Schema, []block, error) {
-	root, err := fbRoot(footer)
+func decodeFooter(b []byte, limit int64) (footer, error) {
+	root, err := fbRoot(b)
 	if err != nil {
-		return dtype.Schema{}, nil, err
+		return footer{}, err
 	}
 	version, err := root.integer(fbFooterVersion, int16(0))
 	if err != nil {
-		return dtype.Schema{}, nil, err
+		return footer{}, err
 	}
 	if version > fbVersionV5 {
-		return dtype.Schema{}, nil, fmt.Errorf("ipc: %w: metadata version %d, this reads up to V5",
+		return footer{}, fmt.Errorf("ipc: %w: metadata version %d, this reads up to V5",
 			ErrUnsupported, version)
-	}
-
-	// A file with dictionaries in it is refused here rather than when a batch
-	// turns out to need one, since the reader knows from the footer alone and
-	// the caller would rather hear it on the way in.
-	dicts, ok, err := root.vector(fbFooterDictionaries)
-	if err != nil {
-		return dtype.Schema{}, nil, err
-	}
-	if ok && dicts.len() > 0 {
-		return dtype.Schema{}, nil, fmt.Errorf("ipc: %w: the file has %d dictionary batches in it, which this cannot read yet",
-			ErrUnsupported, dicts.len())
 	}
 
 	table, ok, err := root.table(fbFooterSchema)
 	if err != nil {
-		return dtype.Schema{}, nil, err
+		return footer{}, err
 	}
 	if !ok {
-		return dtype.Schema{}, nil, fmt.Errorf("ipc: %w: a footer with no schema in it", ErrMessage)
-	}
-	s, err := newDecoder(footer).schema(table)
-	if err != nil {
-		return dtype.Schema{}, nil, err
+		return footer{}, fmt.Errorf("ipc: %w: a footer with no schema in it", ErrMessage)
 	}
 
-	index, ok, err := root.vector(fbFooterBatches)
-	if err != nil {
-		return dtype.Schema{}, nil, err
+	var f footer
+	d := newDecoder(b)
+	if f.schema, err = d.schema(table); err != nil {
+		return footer{}, err
 	}
-	if !ok {
-		return s, nil, nil
+	f.ids = d.ids
+
+	if f.values, err = footerBlocks(root, fbFooterDictionaries, limit); err != nil {
+		return footer{}, err
 	}
-	batches, err := footerBlocks(index, limit)
-	if err != nil {
-		return dtype.Schema{}, nil, err
+	if f.batches, err = footerBlocks(root, fbFooterBatches, limit); err != nil {
+		return footer{}, err
 	}
-	return s, batches, nil
+	return f, nil
 }
 
-// footerBlocks reads the block index and checks every block against the file it
-// came out of.
-func footerBlocks(index fbVector, limit int64) ([]block, error) {
-	batches := make([]block, index.len())
-	for i := range batches {
+// footerBlocks reads one of the two block indexes of a footer and checks every
+// block in it against the file it came out of.
+func footerBlocks(root fbTable, id int, limit int64) ([]block, error) {
+	index, ok, err := root.vector(id)
+	if err != nil || !ok {
+		return nil, err
+	}
+
+	blocks := make([]block, index.len())
+	for i := range blocks {
 		b, err := index.block(i)
 		if err != nil {
 			return nil, err
 		}
 		if !b.inside(limit) {
-			return nil, fmt.Errorf("ipc: %w: batch %d is %d bytes at %d, in %d bytes of messages",
+			return nil, fmt.Errorf("ipc: %w: message %d is %d bytes at %d, in %d bytes of messages",
 				ErrMessage, i, b.size(), b.offset, limit)
 		}
-		batches[i] = b
+		blocks[i] = b
 	}
-	return batches, nil
+	return blocks, nil
 }
 
 // readAt fills p from off and says so when there were not that many bytes.

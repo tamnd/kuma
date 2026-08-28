@@ -40,12 +40,22 @@ def render(batch):
 
 
 def render_value(column, i):
-    """One value, written the way both sides agree to write it."""
+    """One value, written the way both sides agree to write it.
+
+    A dictionary encoded column is written as the value behind the index rather
+    than as the index. Which index a value sits at is up to whoever built the
+    column, so a rendering of the indices would differ for two columns holding
+    the same values in the same order. The values are followed by hand rather
+    than by dictionary_decode, which cannot take from the string views kuma
+    writes.
+    """
     value = column[i]
     if not value.is_valid:
         return "null"
 
     kind = column.type
+    if pa.types.is_dictionary(kind):
+        return render_value(column.dictionary, column.indices[i].as_py())
     # The bool check comes first because pyarrow hands back a Python bool, and a
     # bool is an int, so any test for a number would take it as one.
     if pa.types.is_boolean(kind):

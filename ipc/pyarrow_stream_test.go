@@ -31,7 +31,7 @@ import (
 func TestPyarrowStream(t *testing.T) {
 	python := findPython(t)
 	dir := t.TempDir()
-	cases := batchPyarrowCases(t)
+	cases := append(batchPyarrowCases(t), dictPyarrowCases(t)...)
 	writeCases(t, dir, ".arrows", cases, writeStream)
 
 	run := exec.Command(python, filepath.Join("testdata", "pyarrow", "stream.py"), dir)

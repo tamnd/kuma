@@ -94,9 +94,9 @@ func TestFooterHandWritten(t *testing.T) {
 			want:   ErrMessage,
 		},
 		{
-			name:   "a dictionary batch",
+			name:   "a dictionary batch in a file with no dictionary columns",
 			footer: footerOf(t, fbVersionV5, true, []block{good}, []block{good}),
-			want:   ErrUnsupported,
+			want:   ErrMessage,
 		},
 		{
 			name: "a batch inside the magic",

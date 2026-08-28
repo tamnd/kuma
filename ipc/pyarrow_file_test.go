@@ -30,7 +30,7 @@ import (
 func TestPyarrowFile(t *testing.T) {
 	python := findPython(t)
 	dir := t.TempDir()
-	cases := batchPyarrowCases(t)
+	cases := append(batchPyarrowCases(t), dictPyarrowCases(t)...)
 	writeCases(t, dir, ".arrow", cases, writeFile)
 
 	run := exec.Command(python, filepath.Join("testdata", "pyarrow", "file.py"), dir)

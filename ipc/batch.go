@@ -69,50 +69,79 @@ type Batch struct {
 // promises.
 //
 // The columns have to be the types the schema says they are, and there have to
-// be as many of them as the schema has fields. The nested types and dictionary
-// encoded columns cannot be written yet, and the error names the column that
-// could not be.
+// be as many of them as the schema has fields. The nested types cannot be
+// written yet, and the error names the column that could not be.
+//
+// A dictionary encoded column is written as its indices. The values travel in a
+// dictionary batch of their own, which is a message this does not write, so a
+// caller doing its own framing has to write those as well and the Writer and the
+// FileWriter are the ones that do. Either form of the column is taken: the
+// dictionary encoded column itself, which is what array.NewDictionary builds, or
+// the indices on their own, which is what DecodeBatch hands back.
 //
 // A column carrying an offset, which is what slicing a batch out of a longer one
 // gives, is trimmed on the way out. The format has no per column offset, so the
 // values in front of the first one are not written, and a validity bitmap that
 // begins part way through a byte is shifted rather than sliced.
 func EncodeBatch(s dtype.Schema, b Batch) ([]byte, error) {
+	nodes, body, variadic, err := batchBody(s, b)
+	if err != nil {
+		return nil, err
+	}
+
+	msg := encodeBatchMessage(b.Length, nodes, body.descs, variadic, len(body.buf))
+	if err := checkLength(len(msg), "a record batch"); err != nil {
+		return nil, err
+	}
+	return append(frame(msg), body.buf...), nil
+}
+
+// batchBody lays the buffers of every column of a batch out in a body and
+// returns the field nodes describing the columns along with it. A record batch
+// message and a dictionary batch message are the same thing at this level and
+// differ only in what is written around it.
+func batchBody(s dtype.Schema, b Batch) ([]span, bodyWriter, []int64, error) {
+	var body bodyWriter
 	if len(b.Columns) != len(s.Fields) {
-		return nil, fmt.Errorf("ipc: %w: a batch of %d columns for a schema of %d fields",
+		return nil, body, nil, fmt.Errorf("ipc: %w: a batch of %d columns for a schema of %d fields",
 			ErrBuffers, len(b.Columns), len(s.Fields))
 	}
 	if b.Length < 0 {
-		return nil, fmt.Errorf("ipc: %w: a batch of %d rows", ErrBuffers, b.Length)
+		return nil, body, nil, fmt.Errorf("ipc: %w: a batch of %d rows", ErrBuffers, b.Length)
 	}
 
-	var body bodyWriter
 	nodes := make([]span, len(b.Columns))
 	var variadic []int64
 
 	for i, col := range b.Columns {
 		f := s.Fields[i]
 		if col == nil {
-			return nil, fmt.Errorf("ipc: %w: column %q is nil", ErrBuffers, f.Name)
+			return nil, body, nil, fmt.Errorf("ipc: %w: column %q is nil", ErrBuffers, f.Name)
 		}
-		if !dtype.Equal(col.DType(), f.Type) {
-			return nil, fmt.Errorf("ipc: %w: column %q is a %s, the schema says %s",
+		stored := storedType(f.Type)
+		if !dtype.Equal(col.DType(), f.Type) && !dtype.Equal(col.DType(), stored) {
+			return nil, body, nil, fmt.Errorf("ipc: %w: column %q is a %s, the schema says %s",
 				ErrBuffers, f.Name, col.DType(), f.Type)
 		}
 		if col.Len() != b.Length {
-			return nil, fmt.Errorf("ipc: %w: column %q has %d values in a batch of %d rows",
+			return nil, body, nil, fmt.Errorf("ipc: %w: column %q has %d values in a batch of %d rows",
 				ErrBuffers, f.Name, col.Len(), b.Length)
+		}
+		if d := col.Indices(); d != nil {
+			// What goes on the wire is the indices, and the values went out in a
+			// message of their own or are about to.
+			col = d
 		}
 
 		l, err := Export(col)
 		if err != nil {
-			return nil, fmt.Errorf("%w: column %q", err, f.Name)
+			return nil, body, nil, fmt.Errorf("%w: column %q", err, f.Name)
 		}
-		bufs, err := trim(f.Type, l)
+		bufs, err := trim(stored, l)
 		if err != nil {
-			return nil, fmt.Errorf("%w: column %q", err, f.Name)
+			return nil, body, nil, fmt.Errorf("%w: column %q", err, f.Name)
 		}
-		if isText(f.Type) {
+		if isText(stored) {
 			variadic = append(variadic, int64(len(bufs)-2))
 		}
 
@@ -122,12 +151,7 @@ func EncodeBatch(s dtype.Schema, b Batch) ([]byte, error) {
 		}
 	}
 	body.pad()
-
-	msg := encodeBatchMessage(b.Length, nodes, body.descs, variadic, len(body.buf))
-	if err := checkLength(len(msg), "a record batch"); err != nil {
-		return nil, err
-	}
-	return append(frame(msg), body.buf...), nil
+	return nodes, body, variadic, nil
 }
 
 // encodeBatchMessage writes the metadata on its own. The stream and the file
@@ -135,7 +159,20 @@ func EncodeBatch(s dtype.Schema, b Batch) ([]byte, error) {
 // them started.
 func encodeBatchMessage(length int, nodes, buffers []span, variadic []int64, bodyLength int) []byte {
 	var w fbBuilder
+	batch := recordBatch(&w, length, nodes, buffers, variadic)
 
+	w.startTable()
+	w.slotInt(fbMessageVersion, fbVersionV5, 0)
+	w.slotUint8(fbMessageHeaderType, fbHeaderRecordBatch)
+	w.slotOffset(fbMessageHeader, batch)
+	w.slotInt(fbMessageBodyLength, int64(bodyLength), 0)
+	return w.finish(w.endTable())
+}
+
+// recordBatch writes the RecordBatch table and returns where it starts. It is
+// the header of a record batch message and the middle of a dictionary batch
+// message, which is a record batch of one column with an identifier on it.
+func recordBatch(w *fbBuilder, length int, nodes, buffers []span, variadic []int64) fbOffset {
 	// The vectors go down before the table that points at them, since nothing
 	// can be pointed at before it exists.
 	nodesVec := w.spans(nodes)
@@ -150,14 +187,21 @@ func encodeBatchMessage(length int, nodes, buffers []span, variadic []int64, bod
 	w.slotOffset(fbBatchNodes, nodesVec)
 	w.slotOffset(fbBatchBuffers, buffersVec)
 	w.slotOffset(fbBatchVariadic, variadicVec)
-	batch := w.endTable()
+	return w.endTable()
+}
 
-	w.startTable()
-	w.slotInt(fbMessageVersion, fbVersionV5, 0)
-	w.slotUint8(fbMessageHeaderType, fbHeaderRecordBatch)
-	w.slotOffset(fbMessageHeader, batch)
-	w.slotInt(fbMessageBodyLength, int64(bodyLength), 0)
-	return w.finish(w.endTable())
+// storedType is the type whose buffers a column of this type travels as. It is
+// the type itself for everything but a dictionary encoded column, which travels
+// as its indices and leaves its values to a message of their own.
+// A dictionary indexed by something that is not an integer is left alone, so
+// that it is refused as a type nothing can name rather than read as whatever
+// the index happens to be. Nothing that has been through dtype.Validate is one
+// of those, and a schema handed straight to DecodeBatch has not been.
+func storedType(t dtype.DataType) dtype.DataType {
+	if d, ok := t.(dtype.Dictionary); ok && dtype.IsInteger(d.Index) {
+		return d.Index
+	}
+	return t
 }
 
 // bodyWriter lays the buffers of a batch out one after another and remembers
@@ -267,11 +311,17 @@ func byteRange(b []byte, off, n, width int) ([]byte, error) {
 // Nothing is copied. The arrays point into b, so they are alive for as long as
 // those bytes are unmodified, the same bargain Import makes.
 //
+// A dictionary encoded column comes back as its indices, of the index type the
+// schema names, since the values are in a dictionary batch and one message on
+// its own has no way to know them. The Reader and the FileReader put the two
+// together, which is what a caller who wants the column rather than the message
+// should be using.
+//
 // The bytes are somebody else's, so everything in them is checked. Every buffer
 // has to lie inside the body, every column has to have as many values as the
 // batch says it has rows, and the buffers have to add up to what the schema
-// needs. A compressed body, a dictionary encoded column and the nested types are
-// refused rather than half read.
+// needs. A compressed body and the nested types are refused rather than half
+// read.
 //
 // Text and bytes are the one place a schema does not say enough. Arrow has four
 // layouts for each and kuma collapses them into one type, so this reads the
@@ -280,58 +330,72 @@ func byteRange(b []byte, off, n, width int) ([]byte, error) {
 // does. A batch that mixes the two is refused, since there is nothing in either
 // message saying which column is which.
 func DecodeBatch(s dtype.Schema, b []byte) (Batch, []byte, error) {
-	msg, rest, err := unframe(b)
+	table, body, after, err := messageBody(b, fbHeaderRecordBatch)
 	if err != nil {
 		return Batch{}, nil, err
-	}
-	if msg == nil {
-		return Batch{}, rest, fmt.Errorf("ipc: %w: a record batch of no bytes", ErrMessage)
-	}
-
-	root, err := fbRoot(msg)
-	if err != nil {
-		return Batch{}, nil, err
-	}
-	version, err := root.integer(fbMessageVersion, int16(0))
-	if err != nil {
-		return Batch{}, nil, err
-	}
-	if version > fbVersionV5 {
-		return Batch{}, nil, fmt.Errorf("ipc: %w: metadata version %d, this reads up to V5",
-			ErrUnsupported, version)
-	}
-	header, err := root.uint8(fbMessageHeaderType, fbHeaderNone)
-	if err != nil {
-		return Batch{}, nil, err
-	}
-	if header != fbHeaderRecordBatch {
-		return Batch{}, nil, fmt.Errorf("ipc: %w: the message is a %s, want a record batch",
-			ErrMessage, headerName(header))
-	}
-
-	size, err := root.integer(fbMessageBodyLength, int64(0))
-	if err != nil {
-		return Batch{}, nil, err
-	}
-	if size < 0 || size > int64(len(rest)) {
-		return Batch{}, nil, fmt.Errorf("ipc: %w: a body of %d bytes with %d left to read it from",
-			ErrMessage, size, len(rest))
-	}
-	body, after := rest[:size], rest[size:]
-
-	table, ok, err := root.table(fbMessageHeader)
-	if err != nil {
-		return Batch{}, nil, err
-	}
-	if !ok {
-		return Batch{}, nil, fmt.Errorf("ipc: %w: the message says it holds a record batch and holds nothing",
-			ErrMessage)
 	}
 	batch, err := decodeBatch(s, table, body)
 	if err != nil {
 		return Batch{}, nil, err
 	}
 	return batch, after, nil
+}
+
+// messageBody takes an encapsulated message apart into the header table, the
+// body the header describes and whatever follows the pair of them, and refuses
+// a message that is not the kind the caller is reading.
+//
+// It is the part of every message that is the same whatever the message holds:
+// the framing, the version, which of the headers it is, and how many of the
+// bytes after the metadata belong to it.
+func messageBody(b []byte, want uint8) (fbTable, []byte, []byte, error) {
+	msg, rest, err := unframe(b)
+	if err != nil {
+		return fbTable{}, nil, nil, err
+	}
+	if msg == nil {
+		return fbTable{}, nil, nil, fmt.Errorf("ipc: %w: a %s of no bytes", ErrMessage, headerName(want))
+	}
+
+	root, err := fbRoot(msg)
+	if err != nil {
+		return fbTable{}, nil, nil, err
+	}
+	version, err := root.integer(fbMessageVersion, int16(0))
+	if err != nil {
+		return fbTable{}, nil, nil, err
+	}
+	if version > fbVersionV5 {
+		return fbTable{}, nil, nil, fmt.Errorf("ipc: %w: metadata version %d, this reads up to V5",
+			ErrUnsupported, version)
+	}
+	header, err := root.uint8(fbMessageHeaderType, fbHeaderNone)
+	if err != nil {
+		return fbTable{}, nil, nil, err
+	}
+	if header != want {
+		return fbTable{}, nil, nil, fmt.Errorf("ipc: %w: the message is a %s, want a %s",
+			ErrMessage, headerName(header), headerName(want))
+	}
+
+	size, err := root.integer(fbMessageBodyLength, int64(0))
+	if err != nil {
+		return fbTable{}, nil, nil, err
+	}
+	if size < 0 || size > int64(len(rest)) {
+		return fbTable{}, nil, nil, fmt.Errorf("ipc: %w: a body of %d bytes with %d left to read it from",
+			ErrMessage, size, len(rest))
+	}
+
+	table, ok, err := root.table(fbMessageHeader)
+	if err != nil {
+		return fbTable{}, nil, nil, err
+	}
+	if !ok {
+		return fbTable{}, nil, nil, fmt.Errorf("ipc: %w: the message says it holds a %s and holds nothing",
+			ErrMessage, headerName(want))
+	}
+	return table, rest[:size], rest[size:], nil
 }
 
 // decodeBatch reads the RecordBatch table and builds the columns out of the
@@ -449,26 +513,27 @@ func columnBuffers(f dtype.Field, views bool, variadic fbVector, text int) (int,
 	if f.Type == nil {
 		return 0, "", fmt.Errorf("ipc: %w: field %q has no type", ErrType, f.Name)
 	}
-	if _, ok := f.Type.(dtype.Dictionary); ok {
-		return 0, "", fmt.Errorf("ipc: %w: column %q is dictionary encoded, which needs the dictionary batches this cannot read yet",
-			ErrUnsupported, f.Name)
-	}
 	if childFields(f.Type) != nil {
 		return 0, "", fmt.Errorf("ipc: %w: column %q is a %s, and there are no nested arrays to read it into",
 			ErrUnsupported, f.Name, f.Type)
 	}
 
-	format, err := Format(f.Type)
+	// A dictionary encoded column is its indices here, which are two buffers of
+	// an integer type whatever the values turn out to be. The values are a
+	// column of their own in a message of their own and come through this the
+	// same way when they get there.
+	t := storedType(f.Type)
+	format, err := Format(t)
 	if err != nil {
 		return 0, "", err
 	}
 	switch {
-	case f.Type.Kind() == dtype.NullKind:
+	case t.Kind() == dtype.NullKind:
 		// A null column is its own description: every value is missing and
 		// there is nothing to point at.
 		return 0, format, nil
 
-	case isText(f.Type) && views:
+	case isText(t) && views:
 		n, err := variadic.int64at(text)
 		if err != nil {
 			return 0, "", err
@@ -479,10 +544,10 @@ func columnBuffers(f dtype.Field, views bool, variadic fbVector, text int) (int,
 		}
 		return 2 + blocks, format, nil
 
-	case isText(f.Type):
+	case isText(t):
 		return 3, "", nil
 
-	case f.Type.Kind() == dtype.LargeStringKind, f.Type.Kind() == dtype.LargeBinaryKind:
+	case t.Kind() == dtype.LargeStringKind, t.Kind() == dtype.LargeBinaryKind:
 		// The wide offset layouts are the one text shape a schema does name,
 		// since kuma keeps them as their own types.
 		return 3, format, nil

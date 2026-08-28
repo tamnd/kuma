@@ -90,9 +90,9 @@ func handHeader(kind uint8) []byte {
 }
 
 // TestStreamMessageKinds checks what a reader says about the messages in a
-// stream that are not record batches. A dictionary batch is a real part of the
-// format that this cannot read yet, and the rest do not belong in a stream at
-// all.
+// stream that are not record batches. A dictionary batch belongs in one, and in
+// a stream whose schema has no dictionary encoded columns there is nothing it
+// could be the values of. The rest do not belong in a stream at all.
 func TestStreamMessageKinds(t *testing.T) {
 	s := streamSchema()
 	schema, err := EncodeSchema(s)
@@ -105,7 +105,7 @@ func TestStreamMessageKinds(t *testing.T) {
 		kind uint8
 		want error
 	}{
-		{"a dictionary batch", fbHeaderDictionaryBatch, ErrUnsupported},
+		{"a dictionary batch", fbHeaderDictionaryBatch, ErrMessage},
 		{"another schema", fbHeaderSchema, ErrMessage},
 		{"a tensor", fbHeaderTensor, ErrMessage},
 		{"no header at all", fbHeaderNone, ErrMessage},
