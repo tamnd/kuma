@@ -317,6 +317,55 @@ def fallback():
     )
 
 
+def delta():
+    """Integers written as differences rather than as values.
+
+    A column of row numbers, or of timestamps a second apart, is a column whose
+    differences are all the same, and writing the differences costs a bit a row
+    where writing the values costs thirty two. That is what this encoding is
+    for, and the columns here are the shapes it has to read: a run of a constant
+    difference, a run that goes down instead of up, differences that need most
+    of an int64 to hold, and a column with holes in it where the differences are
+    between the values that are there rather than between the rows.
+
+    The narrow columns are here because parquet has no type for them and writes
+    them as int32, so they arrive as differences of int32 and have to be
+    narrowed like any other value. The unsigned one runs past where an int32
+    turns negative, which is where the arithmetic has to wrap the way the writer
+    wrapped it.
+
+    The page size is small so that a column ends up in several pages, since the
+    encoding starts again from a first value in each of them.
+    """
+    rows = 1000
+    table = pa.table(
+        {
+            "n": pa.array(range(rows), pa.int32()),
+            "small": pa.array([(i % 251) - 125 for i in range(rows)], pa.int8()),
+            "unsigned": pa.array([(i * 4000000) % (1 << 32) for i in range(rows)], pa.uint32()),
+            "down": pa.array([rows - i for i in range(rows)], pa.int32()),
+            "wobble": pa.array([(i % 17) * (1000 if i % 2 else -1000) for i in range(rows)], pa.int32()),
+            "big": pa.array(
+                [((i * 6364136223846793005 + 1442695040888963407) % (1 << 62)) for i in range(rows)],
+                pa.int64(),
+            ),
+            "maybe": pa.array([None if i % 5 == 0 else i * 7 for i in range(rows)], pa.int64()),
+        }
+    )
+    pq.write_table(
+        table,
+        "delta.parquet",
+        compression="none",
+        version="2.6",
+        use_dictionary=False,
+        column_encoding={name: "DELTA_BINARY_PACKED" for name in table.column_names},
+        data_page_size=1024,
+        write_batch_size=100,
+        write_statistics=False,
+        store_schema=False,
+    )
+
+
 def legacy():
     """Timestamps as int96, which is how parquet wrote them before it had a type.
 
@@ -366,10 +415,11 @@ if __name__ == "__main__":
     pages()
     dictionary()
     fallback()
+    delta()
     legacy()
     empty()
     print(
         "wrote alltypes.parquet, plain.parquet, chunks.parquet, nested.parquet, "
-        "pages.parquet, dictionary.parquet, fallback.parquet, legacy.parquet and "
-        "empty.parquet"
+        "pages.parquet, dictionary.parquet, fallback.parquet, delta.parquet, "
+        "legacy.parquet and empty.parquet"
     )

@@ -65,22 +65,29 @@ func (r *ColumnReader) dictionary(p Page) error {
 	return nil
 }
 
-// encoding decides which of the two shapes a data page is in and refuses the
-// ones that are neither.
+// encoding decides which shape a data page is in and refuses the ones that are
+// none of them.
 //
 // It is the page that says whether the chunk is dictionary encoded rather than
 // the chunk, since the encodings a chunk lists are the ones it used somewhere. A
 // writer that fills its dictionary gives up on it and writes the rest of the
-// chunk plainly, which leaves a chunk that is indices at the front and values at
-// the back. Reading that would mean expanding the dictionary into the column,
-// which is the one thing reading it this way is for, so it is refused by name
-// rather than done quietly.
+// chunk the way it would have written all of it, which leaves a chunk that is
+// indices at the front and values at the back. Reading that would mean expanding
+// the dictionary into the column, which is the one thing reading it this way is
+// for, so it is refused by name rather than done quietly.
 func (r *ColumnReader) encoding(p Page) error {
 	switch p.Encoding {
-	case Plain:
+	case Plain, DeltaBinaryPacked:
 		if r.dict != nil {
-			return fmt.Errorf("parquet: %w: %s falls back from its dictionary to plain pages",
-				ErrUnsupported, r.column.Name())
+			return fmt.Errorf("parquet: %w: %s falls back from its dictionary to %s pages",
+				ErrUnsupported, r.column.Name(), p.Encoding)
+		}
+		if p.Encoding == DeltaBinaryPacked && r.values.delta == nil {
+			// The encoding is written for the two integer widths and nothing
+			// else, so this is a page that contradicts the schema in front of
+			// it rather than one this package has not got round to.
+			return fmt.Errorf("parquet: %w: a %s page of %s, which is a %s",
+				ErrFormat, p.Encoding, r.column.Name(), r.column.Type)
 		}
 		return nil
 
@@ -92,7 +99,7 @@ func (r *ColumnReader) encoding(p Page) error {
 		return nil
 
 	default:
-		return fmt.Errorf("parquet: %w: a %s page of %s and only plain and dictionary pages are read yet",
+		return fmt.Errorf("parquet: %w: a %s page of %s and only plain, dictionary and delta pages are read yet",
 			ErrUnsupported, p.Encoding, r.column.Name())
 	}
 }
