@@ -106,3 +106,58 @@ func FuzzMetadata(f *testing.F) {
 		}
 	})
 }
+
+// FuzzImport checks that no arrangement of buffers makes an import read past
+// the end of one.
+//
+// This is the call that takes bytes from another process and starts indexing
+// with the numbers it finds inside them, so the property being asked for is
+// mostly that a bad layout is refused rather than believed. What comes back
+// from a layout that is accepted has to hold together: every value readable,
+// exportable again, and the same values on the way back in.
+func FuzzImport(f *testing.F) {
+	f.Add(0, 3, 0, []byte{0xFF}, make([]byte, 24), []byte(nil))
+	f.Add(6, 2, 0, []byte(nil), []byte{0, 0, 0, 0, 1, 0, 0, 0, 4, 0, 0, 0}, []byte("abcd"))
+	f.Add(10, 1, 0, []byte(nil), make([]byte, 16), []byte(nil))
+	f.Add(12, 1, 1, []byte(nil), make([]byte, 8), []byte(nil))
+
+	f.Fuzz(func(t *testing.T, which, length, offset int, valid, values, data []byte) {
+		format := fuzzFormats[uint(which)%uint(len(fuzzFormats))]
+		length = int(uint(length) % 512)
+		offset = int(uint(offset) % 512)
+
+		for _, buffers := range [][][]byte{{valid, values}, {valid, values, data}} {
+			l := ipc.Layout{Length: length, Offset: offset, NullCount: -1, Buffers: buffers}
+			a, err := ipc.Import(format, l)
+			if err != nil {
+				continue
+			}
+			if a.Len() != length {
+				t.Fatalf("Import(%q) = %d values, want %d", format, a.Len(), length)
+			}
+
+			out, err := ipc.Export(a)
+			if err != nil {
+				t.Fatalf("Import(%q) built an array Export refuses: %v", format, err)
+			}
+			written, err := ipc.Format(a.DType())
+			if err != nil {
+				t.Fatalf("Import(%q) built a %s, which Format refuses: %v", format, a.DType(), err)
+			}
+			back, err := ipc.Import(written, out)
+			if err != nil {
+				t.Fatalf("Import(%q) exported as %q, which Import refuses: %v", format, written, err)
+			}
+			equalArrays(t, back, a)
+		}
+	})
+}
+
+// The format strings FuzzImport picks from, one per layout it has to handle
+// plus the two kinds of refusal, since a nested or unknown format arriving with
+// plausible buffers is as much a case as a real one.
+var fuzzFormats = []string{
+	"n", "b", "c", "s", "i", "l", "g", "w:3", "tsu:UTC", "d:18,2",
+	"u", "U", "z", "Z", "vu", "vz",
+	"+l", "+s", "e", "nonsense",
+}

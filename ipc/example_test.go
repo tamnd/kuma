@@ -1,6 +1,7 @@
 package ipc_test
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"github.com/tamnd/kuma/dtype"
@@ -62,4 +63,49 @@ func ExampleType() {
 	// u is string
 	// U is string
 	// vu is string
+}
+
+// A column of strings from another library usually arrives in the offset
+// layout, which kuma does not store. Import converts it to views, which is
+// sixteen bytes per value, and leaves the text itself where it is.
+func ExampleImport() {
+	// What pyarrow would hand over for the three values below: the offsets of
+	// each value in the data buffer, and the data buffer.
+	offsets := []byte{}
+	for _, n := range []uint32{0, 3, 6, 12} {
+		offsets = binary.NativeEndian.AppendUint32(offsets, n)
+	}
+	data := []byte("onetwothree!")
+
+	a, err := ipc.Import("u", ipc.Layout{
+		Length:  3,
+		Buffers: [][]byte{nil, offsets, data},
+	})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	for i := range a.Len() {
+		fmt.Printf("%d %s\n", i, a.Bytes(i))
+	}
+
+	// Going back out is the layout kuma stores, so the format string changes
+	// and nothing is copied.
+	format, err := ipc.Format(a.DType())
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	l, err := ipc.Export(a)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Printf("%s in %d buffers\n", format, len(l.Buffers))
+	// Output:
+	// 0 one
+	// 1 two
+	// 2 three!
+	// vu in 2 buffers
 }

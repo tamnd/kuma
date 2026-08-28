@@ -1,8 +1,10 @@
 package ipc_test
 
 import (
+	"strconv"
 	"testing"
 
+	"github.com/tamnd/kuma/array"
 	"github.com/tamnd/kuma/dtype"
 	"github.com/tamnd/kuma/ipc"
 )
@@ -43,6 +45,8 @@ var (
 	typeSink   dtype.DataType
 	metaSink   dtype.Metadata
 	blobSink   []byte
+	layoutSink ipc.Layout
+	arraySink  *array.Array
 )
 
 func BenchmarkFormat(b *testing.B) {
@@ -91,5 +95,95 @@ func BenchmarkDecodeMetadata(b *testing.B) {
 			b.Fatal(err)
 		}
 		metaSink = m
+	}
+}
+
+// The array benchmarks all use one column of this many values, so the numbers
+// are per column rather than per value. Import and Export are called once per
+// column per batch, and a batch is usually thousands of values, which is what
+// makes the difference between the cases that walk the values and the cases
+// that do not worth measuring.
+const benchRows = 4096
+
+func benchInts() *array.Array {
+	values := make([]int64, benchRows)
+	for i := range values {
+		values[i] = int64(i)
+	}
+	return array.Of(values...)
+}
+
+func benchStrings() *array.Array {
+	values := make([]string, benchRows)
+	for i := range values {
+		values[i] = "value number " + strconv.Itoa(i)
+	}
+	return array.OfStrings(values...)
+}
+
+func BenchmarkExport(b *testing.B) {
+	for _, bb := range []struct {
+		name string
+		a    *array.Array
+	}{
+		{"int64", benchInts()},
+		{"string", benchStrings()},
+	} {
+		b.Run(bb.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				l, err := ipc.Export(bb.a)
+				if err != nil {
+					b.Fatal(err)
+				}
+				layoutSink = l
+			}
+		})
+	}
+}
+
+// BenchmarkImport is three different jobs under one name. A fixed width column
+// wraps two buffers and counts the nulls, so it costs the same whatever the
+// column holds. A column of views is checked value by value against its blocks,
+// which is what buys every read after it. The two offset cases do that and
+// build a view per value on top, which is the price of taking a layout kuma
+// does not store.
+func BenchmarkImport(b *testing.B) {
+	ints, err := ipc.Export(benchInts())
+	if err != nil {
+		b.Fatal(err)
+	}
+	views, err := ipc.Export(benchStrings())
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	values := make([]string, benchRows)
+	for i := range values {
+		values[i] = "value number " + strconv.Itoa(i)
+	}
+	narrow, _ := offsetLayout(values, false)
+	wide, _ := offsetLayout(values, true)
+
+	for _, bb := range []struct {
+		name   string
+		format string
+		layout ipc.Layout
+	}{
+		{"int64", "l", ints},
+		{"views", "vu", views},
+		{"offsets32", "u", narrow},
+		{"offsets64", "U", wide},
+	} {
+		b.Run(bb.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				a, err := ipc.Import(bb.format, bb.layout)
+				if err != nil {
+					b.Fatal(err)
+				}
+				arraySink = a
+			}
+		})
 	}
 }

@@ -8,12 +8,20 @@
 // EncodeMetadata and DecodeMetadata are the small binary blob that carries the
 // key and value pairs attached to a field.
 //
-// Everything in this file is pure Go and works on any platform. The C structs
-// themselves need cgo and live behind a build tag, so that a program that only
-// reads Parquet does not pay for a C toolchain and still cross compiles.
+// Export and Import are the other half, the values. They work on a Layout,
+// which is what the C struct holds once the pointers are Go slices: a length,
+// an offset, a null count and the buffers. Neither of them copies a value.
+// Import borrows the buffers it is given, which is what the C data interface is
+// for, so the array it returns is only alive for as long as the memory behind
+// those buffers is.
 //
-// What is not here yet: the C structs and the export and import calls, the
-// Arrow IPC file and stream formats, and the arrow-go bridge.
+// Everything in this package is pure Go and works on any platform. The C
+// structs themselves need cgo and live behind a build tag, so that a program
+// that only reads Parquet does not pay for a C toolchain and still cross
+// compiles.
+//
+// What is not here yet: the C structs and the release callbacks, arrays of the
+// nested types, the Arrow IPC file and stream formats, and the arrow-go bridge.
 //
 // Stability: tier 1, stable.
 package ipc
@@ -43,4 +51,14 @@ var (
 	// ErrMetadata is returned when a metadata blob is truncated, claims a
 	// length that is not there, or is too large to be written.
 	ErrMetadata = errors.New("bad metadata")
+
+	// ErrBuffers is returned when the buffers of an array are not the ones its
+	// type needs: the wrong number of them, one too short for the values it has
+	// to hold, or offsets that point outside the data.
+	ErrBuffers = errors.New("bad buffers")
+
+	// ErrUnsupported is returned for the shapes this package understands and
+	// cannot build yet, which is the nested types, since the array package has
+	// no nested arrays to put them in.
+	ErrUnsupported = errors.New("not supported yet")
 )
