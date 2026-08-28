@@ -326,3 +326,94 @@ var fuzzFormats = []string{
 	"u", "U", "z", "Z", "vu", "vz",
 	"+l", "+s", "e", "nonsense",
 }
+
+// FuzzStream reads arbitrary bytes as a stream and checks that whatever comes
+// out of it is a stream that goes back in.
+//
+// The framing between messages is the part being fuzzed. A message on its own
+// is FuzzBatch's job, and the interesting inputs here are the ones between the
+// messages: a length that runs past the end of the file, the old framing with
+// no continuation, an end of stream marker in the middle, a file that stops
+// after the schema.
+//
+// A reader is given a lying length on purpose, so what this is really checking
+// is that a number in a file cannot make the reader allocate what it says
+// rather than what arrived.
+func FuzzStream(f *testing.F) {
+	for _, s := range fuzzBatchSchemas {
+		var buf bytes.Buffer
+		w, err := ipc.NewWriter(&buf, s)
+		if err != nil {
+			f.Fatalf("NewWriter: %v", err)
+		}
+		if err := w.Write(fuzzBatchOf(f, s)); err != nil {
+			f.Fatalf("Write: %v", err)
+		}
+		if err := w.Close(); err != nil {
+			f.Fatalf("Close: %v", err)
+		}
+		f.Add(buf.Bytes())
+	}
+	f.Add([]byte(nil))
+	f.Add([]byte{0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0})
+
+	f.Fuzz(func(t *testing.T, stream []byte) {
+		r, err := ipc.NewReader(bytes.NewReader(stream))
+		if err != nil {
+			return
+		}
+
+		var batches []ipc.Batch
+		for b := range r.All() {
+			if b.Length > 1<<20 {
+				// The same batch of nothing FuzzBatch stops at. A null column
+				// carries no bytes, so a row count of its own is free to write
+				// and expensive to take seriously.
+				return
+			}
+			batches = append(batches, b)
+		}
+		if r.Err() != nil {
+			return
+		}
+
+		var buf bytes.Buffer
+		w, err := ipc.NewWriter(&buf, r.Schema())
+		if err != nil {
+			t.Fatalf("a schema this package read is one it cannot write: %v", err)
+		}
+		for i, b := range batches {
+			if err = w.Write(b); err != nil {
+				t.Fatalf("batch %d read out of a stream is one Write refuses: %v", i, err)
+			}
+		}
+		if err = w.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+
+		again, err := ipc.NewReader(&buf)
+		if err != nil {
+			t.Fatalf("NewReader of a stream this package wrote: %v", err)
+		}
+		read := 0
+		for b := range again.All() {
+			if read >= len(batches) {
+				t.Fatalf("the stream came back with more than the %d batches written", len(batches))
+			}
+			want := batches[read]
+			if b.Length != want.Length {
+				t.Fatalf("batch %d came back with %d rows, want %d", read, b.Length, want.Length)
+			}
+			for i, col := range want.Columns {
+				equalArrays(t, b.Columns[i], col)
+			}
+			read++
+		}
+		if err := again.Err(); err != nil {
+			t.Fatalf("Err on a stream this package wrote: %v", err)
+		}
+		if read != len(batches) {
+			t.Fatalf("the stream came back with %d batches, want %d", read, len(batches))
+		}
+	})
+}

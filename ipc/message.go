@@ -336,6 +336,36 @@ func decodeSchemaMessage(b []byte) (dtype.Schema, error) {
 	return newDecoder(b).schema(table)
 }
 
+// messageHeader reads the two fields of a message that a reader needs before it
+// knows what the message is: what kind of thing the header holds, and how many
+// bytes of body come after the metadata.
+//
+// It takes the metadata on its own rather than the encapsulated message, since a
+// reader pulling one out of a stream has the metadata in hand and the body is
+// the thing it is about to go and read.
+//
+// The version is not checked here. Whichever decoder the kind leads to checks
+// it, and it is the one that knows which versions it can read.
+func messageHeader(meta []byte) (kind uint8, body int64, err error) {
+	root, err := fbRoot(meta)
+	if err != nil {
+		return 0, 0, err
+	}
+	kind, err = root.uint8(fbMessageHeaderType, fbHeaderNone)
+	if err != nil {
+		return 0, 0, err
+	}
+	body, err = root.integer(fbMessageBodyLength, int64(0))
+	if err != nil {
+		return 0, 0, err
+	}
+	if body < 0 {
+		return 0, 0, fmt.Errorf("ipc: %w: a %s with a body of %d bytes",
+			ErrMessage, headerName(kind), body)
+	}
+	return kind, body, nil
+}
+
 // headerName is what a message header number is called, so that a message that
 // is not the one expected says what it is instead.
 func headerName(h uint8) string {
