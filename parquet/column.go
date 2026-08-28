@@ -41,8 +41,9 @@ import (
 // it.
 //
 // The reader is for one column, decided when it is made. What it can read is
-// what the page decoders can read: a flat column, written plainly, in a chunk
-// that is not compressed. Anything else is refused rather than guessed at.
+// what the page decoders can read: a flat column, written plainly or as indices
+// into a dictionary, in a chunk that is not compressed. Anything else is refused
+// rather than guessed at.
 type ColumnReader struct {
 	column  Column
 	builder *array.Builder
@@ -146,8 +147,8 @@ func NewColumnReader(c Column) (*ColumnReader, error) {
 //
 // A chunk written as indices into a dictionary comes back dictionary encoded,
 // so what Finish hands back for one of those is a dictionary of this type
-// rather than this type. Which of the two a chunk is is not known until its
-// first page has been read.
+// rather than this type. Which of the two shapes a chunk has is not known
+// until its first page has been read.
 func (r *ColumnReader) DType() dtype.DataType { return r.column.Type }
 
 // Len returns how many values have been assembled, nulls included.

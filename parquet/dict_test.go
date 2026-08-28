@@ -164,9 +164,10 @@ func TestReadColumnDictionaryTypes(t *testing.T) {
 // TestReadColumnEmptyDictionary reads a chunk that is a dictionary of nothing
 // and no data pages at all, which is a column of a file with no rows.
 //
-// pyarrow writes one for every column of an empty table. It is still dictionary
-// encoded, so what comes back is a dictionary of no values indexed by no rows
-// rather than a column that was never encoded.
+// A table with no rows still has a chunk per column and pyarrow writes a
+// dictionary page into each of them. The chunk is still dictionary encoded, so
+// what comes back is a dictionary of no values indexed by no rows rather than a
+// column that was never encoded.
 func TestReadColumnEmptyDictionary(t *testing.T) {
 	a := readColumn(t, "empty.parquet", "label")
 	dictionaryShape(t, a, dtype.String, 0, 0)
@@ -438,8 +439,8 @@ func TestColumnReaderDictionaryIndex(t *testing.T) {
 //
 // A dictionary belongs to the chunk it was written in rather than to the
 // column, so a reader that kept one would read the second chunk's plain pages as
-// indices into the first chunk's values. Which of the two a chunk is is not
-// known until its first page has been read.
+// indices into the first chunk's values. Which of the two shapes a chunk has
+// is not known until its first page has been read.
 func TestColumnReaderDictionaryReuse(t *testing.T) {
 	r := readerOf(t, optional())
 
