@@ -44,7 +44,7 @@ import (
 // what the page decoders can read: a flat column, written plainly, as indices
 // into a dictionary or as differences of one of the three kinds. Anything else
 // is refused rather than guessed at. It reads a page that has already had its
-// compression undone, which is what ReadColumn uses a Decompressor for.
+// compression undone, which is what Chunk uses a Decompressor for.
 type ColumnReader struct {
 	column  Column
 	builder *array.Builder
@@ -217,10 +217,10 @@ func (r *ColumnReader) Finish() (*array.Array, error) {
 // Page assembles one page.
 //
 // The body is the page as it sits in the file with whatever compression the
-// chunk used already undone, which for now means a chunk that was not
-// compressed. The levels are still in front of the values, since where they are
-// depends on which version of the data page it is and that is this function's
-// business rather than its caller's.
+// chunk used already undone, which is what Chunk uses a Decompressor for. The
+// levels are still in front of the values, since where they are depends on
+// which version of the data page it is and that is this function's business
+// rather than its caller's.
 func (r *ColumnReader) Page(p Page) error {
 	switch p.Kind {
 	case DataPage, DataPageV2:
@@ -443,18 +443,42 @@ func (r *ColumnReader) assemble(count, present int) {
 // is the column the chunk holds, which is one of the leaves Metadata.Columns
 // returned. A chunk written as indices into a dictionary comes back dictionary
 // encoded, which is what ColumnReader.Finish says more about.
+//
+// This is one chunk read with a reader of its own. Something walking the row
+// groups of a file reads the same column again and again and wants one reader
+// for all of them, which is what ColumnReader.Chunk is.
 func ReadColumn(r io.ReaderAt, size int64, chunk *ColumnChunk, c Column) (*array.Array, error) {
-	codec, err := NewDecompressor(chunk.Meta.Codec)
-	if err != nil {
-		return nil, fmt.Errorf("parquet: %s: %w", c.Name(), err)
-	}
-
 	reader, err := NewColumnReader(c)
 	if err != nil {
 		return nil, err
 	}
+	return reader.Chunk(r, size, chunk)
+}
 
-	pages, err := ReadPages(r, size, chunk)
+// Chunk reads one column chunk of a file into an array.
+//
+// The size is the size of the file, the same one ReadMetadata was given, and
+// the chunk has to be one of this column's. A reader is made for one column and
+// knows what that column's pages should hold, so handing it another one's chunk
+// is a way of reading the wrong values without being told.
+//
+// A reader is good for one chunk after another, which is what makes it worth
+// keeping while a scan walks the row groups of a file: the builder and the
+// buffers a column is assembled in are made once rather than once per row
+// group. A reader that returned an error stopped somewhere inside a chunk and
+// is holding half a column, so it is not worth handing another one.
+//
+// The pages have their compression undone on the way through, which is what a
+// Decompressor is for. The codec is a property of the chunk, so a column
+// compressed one way in one row group and another way in the next is read the
+// way each of them was written.
+func (r *ColumnReader) Chunk(src io.ReaderAt, size int64, chunk *ColumnChunk) (*array.Array, error) {
+	codec, err := NewDecompressor(chunk.Meta.Codec)
+	if err != nil {
+		return nil, fmt.Errorf("parquet: %s: %w", r.column.Name(), err)
+	}
+
+	pages, err := ReadPages(src, size, chunk)
 	if err != nil {
 		return nil, err
 	}
@@ -467,18 +491,18 @@ func ReadColumn(r io.ReaderAt, size int64, chunk *ColumnChunk, c Column) (*array
 			return nil, err
 		}
 		if p, err = codec.Page(p); err != nil {
-			return nil, fmt.Errorf("parquet: %s: %w", c.Name(), err)
+			return nil, fmt.Errorf("parquet: %s: %w", r.column.Name(), err)
 		}
-		if err := reader.Page(p); err != nil {
+		if err := r.Page(p); err != nil {
 			return nil, err
 		}
 	}
 
-	if int64(reader.Len()) != chunk.Meta.NumValues {
+	if int64(r.Len()) != chunk.Meta.NumValues {
 		return nil, fmt.Errorf("parquet: %w: the chunk for %s says it has %d values and its pages hold %d",
-			ErrFormat, c.Name(), chunk.Meta.NumValues, reader.Len())
+			ErrFormat, r.column.Name(), chunk.Meta.NumValues, r.Len())
 	}
-	return reader.Finish()
+	return r.Finish()
 }
 
 // valuesFor decides how a column's values are read and appended.
