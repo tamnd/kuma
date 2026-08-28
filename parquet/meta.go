@@ -20,10 +20,13 @@ type Metadata struct {
 	// file in the wild and 2 for files using the newer page header.
 	Version int32
 
-	// Schema is the schema as a flattened tree, the root first, each node
+	// Nodes is the schema as a flattened tree, the root first, each node
 	// followed by its children. A node with no children is a column and a node
-	// with children is a group.
-	Schema []SchemaElement
+	// with children is a group. The format calls this the schema, and it is
+	// called something else here because the schema of a file is a tree of
+	// kuma types and this is the bytes it is built out of. Tree, Columns and
+	// Schema are the three ways to read it.
+	Nodes []SchemaElement
 
 	// NumRows is how many rows the whole file holds.
 	NumRows int64
@@ -248,7 +251,7 @@ func (m *Metadata) read(r *reader) error {
 		case 1:
 			m.Version, err = r.int32(t)
 		case 2:
-			m.Schema, err = structs(r, t, (*SchemaElement).read)
+			m.Nodes, err = structs(r, t, (*SchemaElement).read)
 		case 3:
 			m.NumRows, err = r.integer(t)
 		case 4:

@@ -786,7 +786,7 @@ func TestMetadataPrefixes(t *testing.T) {
 	if err := m.read(&reader{buf: footer}); err != nil {
 		t.Fatalf("the whole footer: %v", err)
 	}
-	if len(m.Schema) == 0 {
+	if len(m.Nodes) == 0 {
 		t.Error("the footer read with no schema in it")
 	}
 }

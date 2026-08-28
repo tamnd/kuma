@@ -19,7 +19,7 @@ import (
 // checked in rather than written by the test because a reader has to be checked
 // against files somebody else wrote and pyarrow is not installed on every
 // platform this is tested on.
-func read(t *testing.T, name string) *parquet.Metadata {
+func read(t testing.TB, name string) *parquet.Metadata {
 	t.Helper()
 
 	f, err := os.Open(filepath.Join("testdata", name))
@@ -72,10 +72,10 @@ func TestReadMetadataSchema(t *testing.T) {
 
 	// The root of the schema, which is a group with no type of its own and one
 	// child per column.
-	if len(m.Schema) != 16 {
-		t.Fatalf("the schema has %d nodes, want a root and 15 columns", len(m.Schema))
+	if len(m.Nodes) != 16 {
+		t.Fatalf("the schema has %d nodes, want a root and 15 columns", len(m.Nodes))
 	}
-	root := m.Schema[0]
+	root := m.Nodes[0]
 	if root.Type != parquet.NoType {
 		t.Errorf("the root has type %s, want none", root.Type)
 	}
@@ -107,7 +107,7 @@ func TestReadMetadataSchema(t *testing.T) {
 	}
 
 	for i, want := range tests {
-		got := m.Schema[i+1]
+		got := m.Nodes[i+1]
 		if got.Name != want.name {
 			t.Fatalf("column %d is %q, want %q", i, got.Name, want.name)
 		}
@@ -133,7 +133,7 @@ func TestReadMetadataSchema(t *testing.T) {
 func TestReadMetadataParameters(t *testing.T) {
 	m := read(t, "alltypes.parquet")
 	by := map[string]parquet.SchemaElement{}
-	for _, e := range m.Schema {
+	for _, e := range m.Nodes {
 		by[e.Name] = e
 	}
 
@@ -302,11 +302,11 @@ func TestReadMetadataEmpty(t *testing.T) {
 	if m.NumRows != 0 {
 		t.Errorf("the file holds %d rows, want none", m.NumRows)
 	}
-	if len(m.Schema) != 3 {
-		t.Fatalf("the schema has %d nodes, want a root and two columns", len(m.Schema))
+	if len(m.Nodes) != 3 {
+		t.Fatalf("the schema has %d nodes, want a root and two columns", len(m.Nodes))
 	}
-	if m.Schema[1].Name != "id" || m.Schema[2].Name != "label" {
-		t.Errorf("the columns are %q and %q, want id and label", m.Schema[1].Name, m.Schema[2].Name)
+	if m.Nodes[1].Name != "id" || m.Nodes[2].Name != "label" {
+		t.Errorf("the columns are %q and %q, want id and label", m.Nodes[1].Name, m.Nodes[2].Name)
 	}
 	for _, g := range m.RowGroups {
 		if g.NumRows != 0 {
