@@ -615,6 +615,56 @@ def index():
     )
 
 
+def bloom():
+    """Values a scan can rule out without reading a page of them.
+
+    Two row groups of a hundred rows holding identifiers, which is the column a
+    bloom filter is for. The bounds of such a column say almost nothing, since
+    every group covers a wide range and the value being looked for is nearly
+    always inside it, and yet only one group holds it. The identifiers here go
+    up in sevens so that a value between two of them is inside the bounds of a
+    group and not in it, which is the case the filter answers and the bounds
+    cannot.
+
+    The filters are written for two of the three columns, because a writer
+    writes them only where it is told to and a reader has to do something
+    sensible with a chunk that has none. The number of distinct values is the
+    rows of a group, which is what the format says to set it to, and it is
+    worth setting: left alone it is a million, and the bitset for a million
+    values is a megabyte a column.
+    """
+    rows = 200
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int64(), nullable=False),
+            pa.field("name", pa.string(), nullable=False),
+            pa.field("plain", pa.int32(), nullable=False),
+        ]
+    )
+    table = pa.table(
+        {
+            "id": [1000 + i * 7 for i in range(rows)],
+            "name": ["user-%04d" % (i * 7) for i in range(rows)],
+            "plain": list(range(rows)),
+        },
+        schema=schema,
+    )
+    pq.write_table(
+        table,
+        "bloom.parquet",
+        compression="none",
+        row_group_size=100,
+        version="2.6",
+        use_dictionary=False,
+        write_statistics=True,
+        bloom_filter_options={
+            "id": {"ndv": 100, "fpp": 0.05},
+            "name": {"ndv": 100, "fpp": 0.05},
+        },
+        store_schema=False,
+    )
+
+
 def empty():
     """A file with a schema and no rows, which still has a footer."""
     schema = pa.schema([pa.field("id", pa.int64()), pa.field("label", pa.string())])
@@ -635,10 +685,11 @@ if __name__ == "__main__":
     legacy()
     stats()
     index()
+    bloom()
     empty()
     print(
         "wrote alltypes.parquet, plain.parquet, chunks.parquet, nested.parquet, "
         "pages.parquet, dictionary.parquet, fallback.parquet, delta.parquet, "
         "strings.parquet, codecs.parquet, codecs2.parquet, legacy.parquet, "
-        "stats.parquet, index.parquet and empty.parquet"
+        "stats.parquet, index.parquet, bloom.parquet and empty.parquet"
     )

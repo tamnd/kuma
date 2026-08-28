@@ -74,6 +74,16 @@
 // two hundred has no reason to read the index of the rest. ReadPageBounds is the
 // two of them together and FileReader.PageBounds is it applied to a row group.
 //
+// BloomFilter answers for the values bounds cannot. A range says nothing useful
+// about a column of identifiers scattered across a file, since every row group
+// covers a range with the wanted value somewhere in the middle of it, and yet
+// only one group holds it. A writer that was asked for a filter hashed every
+// value of a chunk into a bitset at the end of the file, and a reader hashing
+// the value it wants looks at the same bits: a bit that is clear means the chunk
+// never held it. The other answer is a maybe rather than a yes, so a filter is
+// something to skip on and never to answer on. ReadBloomFilter is one chunk's
+// and FileReader.BloomFilter is it applied to a row group.
+//
 // Decompressor is what undoes the compression of a page on the way through.
 // Nearly every parquet file in the world is compressed and the codec is a
 // property of a column chunk rather than of the file, so one file may hold a
