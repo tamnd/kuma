@@ -37,6 +37,36 @@ import (
 // values are distinct, since the same index is only the same value when both
 // hold. Either way the values are read where they are and the column is never
 // decoded into the million strings it stands for.
+//
+// Comparing and ordering one is the third thing in here, and it is the smallest
+// of the three: a comparison of a dictionary encoded column is the comparison
+// of the values behind its indices, which is what dictValue reaches. The
+// encoding is storage rather than meaning, so a column of country codes answers
+// the same question the same way whether it was read out of a parquet file that
+// wrote a dictionary or one that did not.
+
+// dictValue follows a dictionary encoded column's index to the value behind it,
+// and says whether there is a value there at all.
+//
+// A column that is not dictionary encoded is itself and the position asked
+// about, so this is what every comparison in this package reads a value
+// through, whatever it was handed.
+//
+// There are two ways to be missing here and both of them are one answer. The
+// row may hold no index, which is the ordinary null, and the dictionary entry
+// the index names may itself be null, which is a producer writing the missing
+// value down once and pointing at it. Neither has a value to compare.
+func dictValue(a *array.Array, i int) (*array.Array, int, bool) {
+	if a.IsNull(i) {
+		return a, i, false
+	}
+	d := a.Dictionary()
+	if d == nil {
+		return a, i, true
+	}
+	j := a.Index(i)
+	return d, j, !d.IsNull(j)
+}
 
 // takeDictionary gathers a dictionary encoded column at the positions given.
 //

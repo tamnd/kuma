@@ -36,6 +36,14 @@ func col(t *testing.T, dt dtype.DataType, chunks ...[]any) *array.Chunked {
 	return c
 }
 
+// arrayOf builds one array of type dt, where a nil value is a null. It is col
+// for the places that want the array itself, which is a dictionary's values.
+func arrayOf(t *testing.T, dt dtype.DataType, values ...any) *array.Array {
+	t.Helper()
+
+	return col(t, dt, values).Chunk(0)
+}
+
 // appendValue adds one value of whatever type it turns out to be.
 func appendValue(t *testing.T, b *array.Builder, v any) {
 	t.Helper()

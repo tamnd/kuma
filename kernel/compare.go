@@ -59,6 +59,11 @@ func (o CompareOp) String() string {
 // the values. Polars decided the other way and calls NaN equal to itself.
 // The pandas answer is the IEEE one, by way of numpy.
 //
+// A dictionary encoded column is compared through its indices, so a column of
+// country codes read out of a parquet file answers the same question the same
+// way as one that was never encoded, and neither side has to be decoded to ask
+// it. A dictionary entry that is itself null is a missing value like any other.
+//
 // Not yet: the decimals, the intervals and the nested types, which have no
 // order here for the same reason [SortIndex] gives.
 func Compare(a, b *array.Chunked, op CompareOp) (*array.Chunked, error) {
@@ -73,6 +78,14 @@ func Compare(a, b *array.Chunked, op CompareOp) (*array.Chunked, error) {
 	dt, err := dtype.Coerce(a.DType(), b.DType())
 	if err != nil {
 		return nil, fmt.Errorf("kernel: cannot compare %s with %s: %w", a.DType(), b.DType(), err)
+	}
+
+	// Dictionary encoding is storage rather than meaning, so what is compared
+	// is the values behind the indices. Coerce keeps the encoding when both
+	// sides have one, because a gather and a group by would rather have it, and
+	// a comparison is the operation that has to see through it.
+	if d, ok := dt.(dtype.Dictionary); ok {
+		dt = d.Value
 	}
 
 	// A null column has no values to compare, so every answer is that nobody
@@ -91,9 +104,9 @@ func Compare(a, b *array.Chunked, op CompareOp) (*array.Chunked, error) {
 
 	ca, cb := newCursor(a, fixedA), newCursor(b, fixedB)
 	for range n {
-		x, i := ca.next()
-		y, j := cb.next()
-		if x.IsNull(i) || y.IsNull(j) {
+		x, i, okx := dictValue(ca.next())
+		y, j, oky := dictValue(cb.next())
+		if !okx || !oky {
 			out.AppendNull()
 			continue
 		}
