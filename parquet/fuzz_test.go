@@ -27,7 +27,9 @@ import (
 // footer, and nothing allocated by a number in the file that the bytes of the
 // file do not pay for.
 func FuzzReadMetadata(f *testing.F) {
-	for _, name := range []string{"alltypes.parquet", "chunks.parquet", "empty.parquet"} {
+	for _, name := range []string{
+		"alltypes.parquet", "chunks.parquet", "nested.parquet", "empty.parquet",
+	} {
 		b, err := os.ReadFile(filepath.Join("testdata", name))
 		if err != nil {
 			f.Fatalf("read: %v", err)
@@ -58,9 +60,9 @@ func FuzzReadMetadata(f *testing.F) {
 		// bound the reader promises, and a file of thirty bytes that gets a
 		// million schema nodes allocated has got past it.
 		n := len(file)
-		if len(m.Schema) > n || len(m.RowGroups) > n || len(m.KeyValue) > n {
+		if len(m.Nodes) > n || len(m.RowGroups) > n || len(m.KeyValue) > n {
 			t.Fatalf("a file of %d bytes read as %d schema nodes, %d row groups and %d metadata entries",
-				n, len(m.Schema), len(m.RowGroups), len(m.KeyValue))
+				n, len(m.Nodes), len(m.RowGroups), len(m.KeyValue))
 		}
 
 		// Every string and every byte slice was read out of the footer, so none
@@ -72,7 +74,7 @@ func FuzzReadMetadata(f *testing.F) {
 			}
 		}
 		within("the writer", len(m.CreatedBy))
-		for _, e := range m.Schema {
+		for _, e := range m.Nodes {
 			within("a column name", len(e.Name))
 		}
 		for _, kv := range m.KeyValue {
@@ -95,6 +97,22 @@ func FuzzReadMetadata(f *testing.F) {
 			}
 		}
 
+		// The schema conversion is the other half of reading a footer and it is
+		// the half that believes the child counts, so it is fuzzed along with
+		// it. Either it refuses the schema or it hands one back, and a tree
+		// built out of a list cannot have more nodes in it than the list had.
+		s, err := m.Schema()
+		if err == nil {
+			within("the schema", len(s.Fields))
+		}
+		columns, err := m.Columns()
+		if err == nil {
+			within("the columns", len(columns))
+			for _, c := range columns {
+				within("a column path", len(c.Path))
+			}
+		}
+
 		// Reading the same bytes twice gives the same thing, which is not
 		// interesting on its own and is the cheapest way to catch a reader that
 		// kept something between calls.
@@ -102,9 +120,9 @@ func FuzzReadMetadata(f *testing.F) {
 		if err != nil {
 			t.Fatalf("the same file read a second time: %v", err)
 		}
-		if again.NumRows != m.NumRows || len(again.Schema) != len(m.Schema) {
+		if again.NumRows != m.NumRows || len(again.Nodes) != len(m.Nodes) {
 			t.Fatalf("the same file read as %d rows and %d schema nodes, then as %d and %d",
-				m.NumRows, len(m.Schema), again.NumRows, len(again.Schema))
+				m.NumRows, len(m.Nodes), again.NumRows, len(again.Nodes))
 		}
 	})
 }

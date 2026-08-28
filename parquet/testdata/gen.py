@@ -86,6 +86,57 @@ def chunks():
     )
 
 
+def nested():
+    """Lists, maps and structs, which are what a schema tree is for.
+
+    Written without the Arrow schema, so that the parquet schema is all there is
+    to work from and the three level lists and the key_value groups have to be
+    read the way the format describes them.
+    """
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int32(), nullable=False),
+            pa.field("tags", pa.list_(pa.string())),
+            pa.field("counts", pa.list_(pa.field("item", pa.int32(), nullable=False))),
+            pa.field("props", pa.map_(pa.string(), pa.int64())),
+            pa.field(
+                "point",
+                pa.struct(
+                    [
+                        pa.field("x", pa.float64(), nullable=False),
+                        pa.field("y", pa.float64()),
+                    ]
+                ),
+            ),
+            pa.field("matrix", pa.list_(pa.list_(pa.int32()))),
+            pa.field(
+                "people",
+                pa.list_(pa.struct([pa.field("name", pa.string()), pa.field("age", pa.int32())])),
+            ),
+        ]
+    )
+    table = pa.table(
+        {
+            "id": [1, 2],
+            "tags": [["north", "east"], None],
+            "counts": [[1, 2, 3], []],
+            "props": [[("width", 10), ("height", 20)], None],
+            "point": [{"x": 1.5, "y": 2.5}, {"x": 3.5, "y": None}],
+            "matrix": [[[1], [2, 3]], None],
+            "people": [[{"name": "ann", "age": 30}], []],
+        },
+        schema=schema,
+    )
+    pq.write_table(
+        table,
+        "nested.parquet",
+        compression="none",
+        version="2.6",
+        write_statistics=True,
+        store_schema=False,
+    )
+
+
 def empty():
     """A file with a schema and no rows, which still has a footer."""
     schema = pa.schema([pa.field("id", pa.int64()), pa.field("label", pa.string())])
@@ -95,5 +146,6 @@ def empty():
 if __name__ == "__main__":
     alltypes()
     chunks()
+    nested()
     empty()
-    print("wrote alltypes.parquet, chunks.parquet and empty.parquet")
+    print("wrote alltypes.parquet, chunks.parquet, nested.parquet and empty.parquet")
