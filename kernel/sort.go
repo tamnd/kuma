@@ -40,6 +40,12 @@ type Order struct {
 // says. NaN is a value rather than a missing one, and it sorts after every
 // number, so descending order puts it first.
 //
+// A dictionary encoded key is ordered by the values behind its indices, since
+// the indices are the order a writer happened to meet the values in and mean
+// nothing about the order they belong in. A row with no index and a row
+// pointing at a dictionary entry that is itself null are both missing, and the
+// placement puts them in the same block.
+//
 // It panics if there are no keys, if a key column is nil, or if two of them are
 // different lengths, all of which are mistakes in the program rather than in
 // the data. It returns an error for a column of a type there is no order for,
@@ -108,7 +114,16 @@ type comparison func(i, j int) int
 func comparisonFor(k Order) (comparison, error) {
 	r := newRows(k.Column)
 
-	switch k.Column.DType().Kind() {
+	// A dictionary encoded column is ordered by the values behind its indices
+	// rather than by the indices, which are the order a writer happened to meet
+	// the values in. Which comparison that wants is the values' business, and
+	// reaching them is the rows' business.
+	dt := k.Column.DType()
+	if d, ok := dt.(dtype.Dictionary); ok {
+		dt = d.Value
+	}
+
+	switch dt.Kind() {
 	case dtype.NullKind:
 		// Every value is missing, so every pair is equal and the placement has
 		// nothing to place. A stable sort leaves the rows alone, which is the
@@ -155,18 +170,17 @@ func comparisonFor(k Order) (comparison, error) {
 // log n times, and taking a typed slice checks the layout of the chunk and
 // builds a slice header every time it is asked.
 func compareNumbers[T array.Numeric](r *rows, k Order, less func(a, b T) int) comparison {
-	vals := make([][]T, len(r.chunks))
-	for c, a := range r.chunks {
+	vals := make([][]T, len(r.values))
+	for c, a := range r.values {
 		vals[c] = a.Values[T]()
 	}
 
 	desc, nullsFirst := k.Descending, k.NullsFirst
 	return func(i, j int) int {
-		ci, xi := r.at(i)
-		cj, xj := r.at(j)
-		ni, nj := r.chunks[ci].IsNull(xi), r.chunks[cj].IsNull(xj)
-		if ni || nj {
-			return compareNulls(ni, nj, nullsFirst)
+		ci, xi, oki := r.value(i)
+		cj, xj, okj := r.value(j)
+		if !oki || !okj {
+			return compareNulls(!oki, !okj, nullsFirst)
 		}
 
 		d := less(vals[ci][xi], vals[cj][xj])
@@ -182,16 +196,14 @@ func compareNumbers[T array.Numeric](r *rows, k Order, less func(a, b T) int) co
 func compareBools(r *rows, k Order) comparison {
 	desc, nullsFirst := k.Descending, k.NullsFirst
 	return func(i, j int) int {
-		ci, xi := r.at(i)
-		cj, xj := r.at(j)
-		ai, aj := r.chunks[ci], r.chunks[cj]
-		ni, nj := ai.IsNull(xi), aj.IsNull(xj)
-		if ni || nj {
-			return compareNulls(ni, nj, nullsFirst)
+		ci, xi, oki := r.value(i)
+		cj, xj, okj := r.value(j)
+		if !oki || !okj {
+			return compareNulls(!oki, !okj, nullsFirst)
 		}
 
 		d := 0
-		switch vi, vj := ai.Bool(xi), aj.Bool(xj); {
+		switch vi, vj := r.values[ci].Bool(xi), r.values[cj].Bool(xj); {
 		case vi == vj:
 		case vi:
 			d = 1
@@ -216,15 +228,13 @@ func compareBools(r *rows, k Order) comparison {
 func compareBytes(r *rows, k Order) comparison {
 	desc, nullsFirst := k.Descending, k.NullsFirst
 	return func(i, j int) int {
-		ci, xi := r.at(i)
-		cj, xj := r.at(j)
-		ai, aj := r.chunks[ci], r.chunks[cj]
-		ni, nj := ai.IsNull(xi), aj.IsNull(xj)
-		if ni || nj {
-			return compareNulls(ni, nj, nullsFirst)
+		ci, xi, oki := r.value(i)
+		cj, xj, okj := r.value(j)
+		if !oki || !okj {
+			return compareNulls(!oki, !okj, nullsFirst)
 		}
 
-		d := bytes.Compare(ai.Bytes(xi), aj.Bytes(xj))
+		d := bytes.Compare(r.values[ci].Bytes(xi), r.values[cj].Bytes(xj))
 		if desc {
 			return -d
 		}
@@ -295,6 +305,15 @@ func compareFloat[T float32 | float64](a, b T) int {
 type rows struct {
 	chunks []*array.Array
 
+	// values[c] is where the values of chunk c are, which is the chunk itself
+	// unless it is dictionary encoded, in which case it is the dictionary it
+	// reads from.
+	values []*array.Array
+
+	// index[c] is where in values[c] a row of chunk c points, and is nil when
+	// the chunk is not encoded and a row is already a position in its values.
+	index []func(int) int
+
 	// starts[c] is the position in the column that chunk c begins at.
 	starts []int
 
@@ -306,13 +325,40 @@ type rows struct {
 // newRows returns a rows over the chunks of c.
 func newRows(c *array.Chunked) rows {
 	chunks := c.Chunks()
-	r := rows{chunks: chunks, starts: make([]int, len(chunks)), one: len(chunks) == 1}
+	r := rows{
+		chunks: chunks,
+		values: make([]*array.Array, len(chunks)),
+		index:  make([]func(int) int, len(chunks)),
+		starts: make([]int, len(chunks)),
+		one:    len(chunks) == 1,
+	}
+
 	n := 0
 	for k, a := range chunks {
+		r.values[k] = a
+		if d := a.Dictionary(); d != nil {
+			r.values[k], r.index[k] = d, dictIndex(a)
+		}
 		r.starts[k] = n
 		n += a.Len()
 	}
 	return r
+}
+
+// value returns the chunk holding row i, where in that chunk's values the value
+// of the row is, and whether there is a value there at all.
+//
+// The position is a position in values[chunk] rather than in the chunk, and the
+// two are the same thing unless the chunk is dictionary encoded, in which case
+// it is where in the dictionary the row's index points. A row with no index and
+// a row pointing at a dictionary entry that is itself null are both missing.
+func (r *rows) value(i int) (chunk, index int, ok bool) {
+	c, x := r.at(i)
+	if at := r.index[c]; at != nil {
+		x = at(x)
+		return c, x, x >= 0
+	}
+	return c, x, !r.chunks[c].IsNull(x)
 }
 
 // at returns the chunk holding position i and the position within it.

@@ -1,6 +1,7 @@
 package kernel_test
 
 import (
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -42,7 +43,38 @@ func codes(t *testing.T, values *array.Array, at ...int32) *array.Array {
 func dictColumn(t *testing.T, values *array.Array, at ...int32) *array.Chunked {
 	t.Helper()
 
-	c, err := array.NewChunked(codeType, codes(t, values, at...))
+	dt := dtype.Dictionary{Index: dtype.Int32, Value: values.DType()}
+	c, err := array.NewChunked(dt, codes(t, values, at...))
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+	return c
+}
+
+// indexed is dictColumn with a say in the index type, which is what a column
+// read out of a file that had few enough values to number in a byte comes back
+// as. Minus one is a null here too.
+func indexed(t *testing.T, index dtype.DataType, values *array.Array, at ...int) *array.Chunked {
+	t.Helper()
+
+	b, err := array.NewBuilder(index)
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+	for _, i := range at {
+		if i < 0 {
+			b.AppendNull()
+			continue
+		}
+		appendIndices(t, b, index, i)
+	}
+
+	a, err := array.NewDictionary(b.Finish(), values)
+	if err != nil {
+		t.Fatalf("NewDictionary: %v", err)
+	}
+	dt := dtype.Dictionary{Index: index, Value: values.DType()}
+	c, err := array.NewChunked(dt, a)
 	if err != nil {
 		t.Fatalf("NewChunked: %v", err)
 	}
@@ -626,6 +658,264 @@ func TestAggDictionary(t *testing.T) {
 	}
 }
 
+// TestCompareDictionary is the ordinary comparison: a dictionary encoded column
+// against one value, which is what a filter on a column read out of Parquet is.
+// The answers are the answers the same column of plain strings would give, and
+// the two ways of having no value both give a null.
+func TestCompareDictionary(t *testing.T) {
+	values := arrayOf(t, dtype.String, "GB", "JP", nil)
+	src := dictColumn(t, values, 0, 1, 2, -1, 1)
+	one := col(t, dtype.String, []any{"JP"})
+
+	tests := []struct {
+		op   kernel.CompareOp
+		want []any
+	}{
+		{kernel.OpEq, []any{false, true, nil, nil, true}},
+		{kernel.OpNe, []any{true, false, nil, nil, false}},
+		{kernel.OpLt, []any{true, false, nil, nil, false}},
+		{kernel.OpLe, []any{true, true, nil, nil, true}},
+		{kernel.OpGt, []any{false, false, nil, nil, false}},
+		{kernel.OpGe, []any{false, true, nil, nil, true}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.op.String(), func(t *testing.T) {
+			got, err := kernel.Compare(src, one, tt.op)
+			if err != nil {
+				t.Fatalf("Compare: %v", err)
+			}
+			if have := answers(t, got); !same(have, tt.want) {
+				t.Errorf("the answers are %v, want %v", have, tt.want)
+			}
+		})
+	}
+
+	// The same question from the other side, since either operand may be the
+	// encoded one and each is read through its own cursor.
+	got, err := kernel.Compare(one, src, kernel.OpGt)
+	if err != nil {
+		t.Fatalf("Compare: %v", err)
+	}
+	want := []any{true, false, nil, nil, false}
+	if have := answers(t, got); !same(have, want) {
+		t.Errorf("the answers from the other side are %v, want %v", have, want)
+	}
+}
+
+// TestCompareDictionaryBoth is two encoded columns against each other, which is
+// two files read into one table. They hold different dictionaries and number
+// them differently, so an answer that came from the indices would be wrong on
+// every row.
+func TestCompareDictionaryBoth(t *testing.T) {
+	left := dictColumn(t, array.OfStrings("GB", "JP", "US"), 0, 1, 2, 1)
+	right := indexed(t, dtype.Int8, array.OfStrings("JP", "GB"), 0, 0, 1, 1)
+
+	tests := []struct {
+		op   kernel.CompareOp
+		want []any
+	}{
+		{kernel.OpEq, []any{false, true, false, false}},
+		{kernel.OpLt, []any{true, false, false, false}},
+		{kernel.OpGt, []any{false, false, true, true}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.op.String(), func(t *testing.T) {
+			got, err := kernel.Compare(left, right, tt.op)
+			if err != nil {
+				t.Fatalf("Compare: %v", err)
+			}
+			if have := answers(t, got); !same(have, tt.want) {
+				t.Errorf("the answers are %v, want %v", have, tt.want)
+			}
+		})
+	}
+}
+
+// TestCompareDictionaryChunks is a column whose chunks number their values
+// differently, which is what putting two files end to end gives. Every row is
+// read through the dictionary of the chunk it is in.
+func TestCompareDictionaryChunks(t *testing.T) {
+	src, err := array.NewChunked(codeType,
+		codes(t, array.OfStrings("GB", "JP"), 0, 1),
+		codes(t, array.OfStrings("JP", "US"), 0, 1),
+	)
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+
+	got, err := kernel.Compare(src, col(t, dtype.String, []any{"JP"}), kernel.OpEq)
+	if err != nil {
+		t.Fatalf("Compare: %v", err)
+	}
+	want := []any{false, true, true, false}
+	if have := answers(t, got); !same(have, want) {
+		t.Errorf("the answers are %v, want %v", have, want)
+	}
+}
+
+// TestCompareDictionaryNumbers is a dictionary of something other than strings,
+// with a NaN in it. The encoding does not change what a NaN is, so it is
+// unordered against everything and only != is true of it.
+func TestCompareDictionaryNumbers(t *testing.T) {
+	values := arrayOf(t, dtype.Float64, 1.5, math.NaN(), 2.5)
+	src := dictColumn(t, values, 0, 1, 2)
+	one := col(t, dtype.Float64, []any{1.5})
+
+	tests := []struct {
+		op   kernel.CompareOp
+		want []any
+	}{
+		{kernel.OpEq, []any{true, false, false}},
+		{kernel.OpNe, []any{false, true, true}},
+		{kernel.OpLt, []any{false, false, false}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.op.String(), func(t *testing.T) {
+			got, err := kernel.Compare(src, one, tt.op)
+			if err != nil {
+				t.Fatalf("Compare: %v", err)
+			}
+			if have := answers(t, got); !same(have, tt.want) {
+				t.Errorf("the answers are %v, want %v", have, tt.want)
+			}
+		})
+	}
+}
+
+// TestCompareDictionaryIndexTypes compares and orders a column once per index
+// type. The indices of a chunk are read as the type they were written as, that
+// type is looked at once per chunk rather than once per row, and a case missing
+// from that would be found by whoever read a file that used it.
+func TestCompareDictionaryIndexTypes(t *testing.T) {
+	values := array.OfStrings("GB", "JP", "US")
+	one := col(t, dtype.String, []any{"JP"})
+	indexes := []dtype.DataType{
+		dtype.Int8, dtype.Int16, dtype.Int32, dtype.Int64,
+		dtype.Uint8, dtype.Uint16, dtype.Uint32, dtype.Uint64,
+	}
+
+	for _, index := range indexes {
+		t.Run(index.String(), func(t *testing.T) {
+			src := indexed(t, index, values, 2, 0, 1, -1)
+
+			got, err := kernel.Compare(src, one, kernel.OpEq)
+			if err != nil {
+				t.Fatalf("Compare: %v", err)
+			}
+			want := []any{false, false, true, nil}
+			if have := answers(t, got); !same(have, want) {
+				t.Errorf("the answers are %v, want %v", have, want)
+			}
+
+			order, err := kernel.SortIndex(kernel.Order{Column: src})
+			if err != nil {
+				t.Fatalf("SortIndex: %v", err)
+			}
+			if wantOrder := []int{1, 2, 0, 3}; !slices.Equal(order, wantOrder) {
+				t.Errorf("the order is %v, want %v", order, wantOrder)
+			}
+		})
+	}
+}
+
+// TestCompareDictionaryFilter is the whole of what this is for: a predicate on
+// an encoded column keeps the rows it names and the column that comes out is
+// still encoded and still points at the values that went in.
+func TestCompareDictionaryFilter(t *testing.T) {
+	values := array.OfStrings("GB", "JP", "US")
+	src := dictColumn(t, values, 0, 1, 2, -1, 1)
+
+	mask, err := kernel.Compare(src, col(t, dtype.String, []any{"JP"}), kernel.OpEq)
+	if err != nil {
+		t.Fatalf("Compare: %v", err)
+	}
+
+	got := kernel.Filter(src, mask)
+	wantCodes(t, got, "JP", "JP")
+	if d := got.Chunk(0).Dictionary(); d != values {
+		t.Errorf("the result points at %p, want the %p it was filtered from", d, values)
+	}
+}
+
+// TestSortDictionary orders an encoded column by the strings behind its indices
+// rather than by the indices, which are the order the writer happened to meet
+// the values in and here are the reverse of the order they sort in.
+func TestSortDictionary(t *testing.T) {
+	values := arrayOf(t, dtype.String, "US", "GB", nil, "JP")
+	src := dictColumn(t, values, 0, 1, 2, -1, 3)
+
+	tests := []struct {
+		name string
+		key  kernel.Order
+		want []int
+	}{
+		{"ascending", kernel.Order{Column: src}, []int{1, 4, 0, 2, 3}},
+		{"descending", kernel.Order{Column: src, Descending: true}, []int{0, 4, 1, 2, 3}},
+		{"nulls first", kernel.Order{Column: src, NullsFirst: true}, []int{2, 3, 1, 4, 0}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := kernel.SortIndex(tt.key)
+			if err != nil {
+				t.Fatalf("SortIndex: %v", err)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("the order is %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSortDictionaryChunks sorts across chunks that number their values
+// differently, so a sort reading the indices would put them in the wrong order
+// and a sort reading the wrong chunk's values would read the wrong strings.
+func TestSortDictionaryChunks(t *testing.T) {
+	src, err := array.NewChunked(codeType,
+		codes(t, array.OfStrings("GB", "US"), 0, 1),
+		codes(t, array.OfStrings("JP", "AA"), 0, 1),
+	)
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+
+	got, err := kernel.SortIndex(kernel.Order{Column: src})
+	if err != nil {
+		t.Fatalf("SortIndex: %v", err)
+	}
+	if want := []int{3, 0, 2, 1}; !slices.Equal(got, want) {
+		t.Errorf("the order is %v, want %v", got, want)
+	}
+
+	wantCodes(t, kernel.Take(src, got), "AA", "GB", "JP", "US")
+}
+
+// TestSortDictionaryValues sorts dictionaries of the other two shapes a value
+// can have, since the numbers are read through a typed slice of the dictionary
+// and the booleans are bits and are read one at a time.
+func TestSortDictionaryValues(t *testing.T) {
+	numbers := dictColumn(t, arrayOf(t, dtype.Int64, int64(30), int64(10), int64(20)), 0, 1, 2, -1)
+	got, err := kernel.SortIndex(kernel.Order{Column: numbers})
+	if err != nil {
+		t.Fatalf("SortIndex: %v", err)
+	}
+	if want := []int{1, 2, 0, 3}; !slices.Equal(got, want) {
+		t.Errorf("the numbers are ordered %v, want %v", got, want)
+	}
+
+	bools := dictColumn(t, arrayOf(t, dtype.Bool, true, false), 0, 1, 0)
+	got, err = kernel.SortIndex(kernel.Order{Column: bools})
+	if err != nil {
+		t.Fatalf("SortIndex: %v", err)
+	}
+	if want := []int{1, 0, 2}; !slices.Equal(got, want) {
+		t.Errorf("the booleans are ordered %v, want %v", got, want)
+	}
+}
+
 const (
 	benchDictRows   = 100_000
 	benchDictValues = 250
@@ -716,6 +1006,57 @@ func BenchmarkGroupByDictionary(b *testing.B) {
 		for b.Loop() {
 			if _, err := kernel.GroupBy(plain); err != nil {
 				b.Fatalf("GroupBy: %v", err)
+			}
+		}
+	})
+}
+
+// BenchmarkCompareDictionary is a predicate on the same column stored both
+// ways, which is the filter a scan of a Parquet file carries. The dictionary
+// side pays a load of the index before the load of the value, and it gets the
+// two hundred and fifty values back out of cache rather than walking a hundred
+// thousand strings.
+func BenchmarkCompareDictionary(b *testing.B) {
+	dict, plain := benchDictColumn(b)
+
+	one, err := array.NewChunked(dtype.String, plain.Chunk(0).Slice(0, 1))
+	if err != nil {
+		b.Fatalf("NewChunked: %v", err)
+	}
+
+	b.Run("dictionary", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := kernel.Compare(dict, one, kernel.OpEq); err != nil {
+				b.Fatalf("Compare: %v", err)
+			}
+		}
+	})
+	b.Run("strings", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := kernel.Compare(plain, one, kernel.OpEq); err != nil {
+				b.Fatalf("Compare: %v", err)
+			}
+		}
+	})
+}
+
+// BenchmarkSortDictionary sorts the same column stored both ways. A sort reads
+// every row log n times, so this is where the extra load per value is paid the
+// most times over and where the values staying in cache is worth the most.
+func BenchmarkSortDictionary(b *testing.B) {
+	dict, plain := benchDictColumn(b)
+
+	b.Run("dictionary", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := kernel.SortIndex(kernel.Order{Column: dict}); err != nil {
+				b.Fatalf("SortIndex: %v", err)
+			}
+		}
+	})
+	b.Run("strings", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := kernel.SortIndex(kernel.Order{Column: plain}); err != nil {
+				b.Fatalf("SortIndex: %v", err)
 			}
 		}
 	})
