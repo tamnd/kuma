@@ -72,6 +72,95 @@ def alltypes():
     )
 
 
+def plain():
+    """The same columns as alltypes with nothing encoded, so a decoder of plain
+    values has one of each to read.
+
+    alltypes is what pyarrow writes by default, which means a dictionary in
+    front of nearly every column, and a dictionary page says nothing about how a
+    plain value is read. This is the other half: no dictionary, no compression,
+    no statistics, and one page per column holding the values as they are.
+
+    The decimal is here for the column that cannot be read yet, so that the
+    refusal has a real file behind it rather than a made up one.
+    """
+    schema = pa.schema(
+        [
+            pa.field("flag", pa.bool_()),
+            pa.field("small", pa.int8()),
+            pa.field("short", pa.int16()),
+            pa.field("count", pa.int32()),
+            pa.field("total", pa.int64()),
+            pa.field("byte", pa.uint8()),
+            pa.field("ushort", pa.uint16()),
+            pa.field("unsigned", pa.uint32()),
+            pa.field("big", pa.uint64()),
+            pa.field("ratio", pa.float32()),
+            pa.field("weight", pa.float64()),
+            pa.field("name", pa.string()),
+            pa.field("blob", pa.binary()),
+            pa.field("fixed", pa.binary(4)),
+            pa.field("price", pa.decimal128(9, 2)),
+            pa.field("day", pa.date32()),
+            pa.field("clock", pa.time64("us")),
+            pa.field("moment", pa.timestamp("ms", tz="UTC")),
+            pa.field(
+                "point",
+                pa.struct(
+                    [pa.field("x", pa.float64(), nullable=False), pa.field("y", pa.float64())]
+                ),
+            ),
+        ]
+    )
+    table = pa.table(
+        {
+            "flag": [True, False, None, True],
+            "small": [1, -2, None, 127],
+            "short": [1000, -2000, None, 32767],
+            "count": [10, -20, None, 30],
+            "total": [100, -200, None, 300],
+            "byte": [1, 2, None, 255],
+            "ushort": [1, 2, None, 65535],
+            "unsigned": [1, 2, None, 4294967295],
+            "big": [1, 2, None, 18446744073709551615],
+            "ratio": [1.5, -2.5, None, 3.5],
+            "weight": [1.25, -2.5, None, 3.75],
+            "name": ["one", "", None, "four"],
+            "blob": [b"one", b"", None, b"four"],
+            "fixed": [b"abcd", b"efgh", None, b"mnop"],
+            "price": [decimal.Decimal("1.25"), decimal.Decimal("-2.50"), None, decimal.Decimal("3.75")],
+            "day": [datetime.date(2026, 8, 28), datetime.date(1969, 7, 20), None, datetime.date(1970, 1, 1)],
+            "clock": [datetime.time(12, 30, 15), datetime.time(0, 0, 0), None, datetime.time(23, 59, 59)],
+            "moment": [
+                datetime.datetime(2026, 8, 28, 12, 0, tzinfo=datetime.UTC),
+                datetime.datetime(1969, 7, 20, 20, 17, 40, tzinfo=datetime.UTC),
+                None,
+                datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC),
+            ],
+            # A struct with an optional field in it, which is the flattest
+            # column that needs a level of more than one bit. point.y is two
+            # deep, so a missing y and a missing point are told apart in the
+            # levels and are the same null in a flat column.
+            "point": [
+                {"x": 1.0, "y": 2.0},
+                {"x": 3.0, "y": None},
+                None,
+                {"x": 5.0, "y": 6.0},
+            ],
+        },
+        schema=schema,
+    )
+    pq.write_table(
+        table,
+        "plain.parquet",
+        compression="none",
+        version="2.6",
+        use_dictionary=False,
+        write_statistics=False,
+        store_schema=False,
+    )
+
+
 def chunks():
     """Two row groups of one column, compressed, so that a reader sees both."""
     table = pa.table({"code": ["GB", "JP", "US", "FR", "DE", "GB"], "n": list(range(6))})
@@ -216,12 +305,13 @@ def empty():
 
 if __name__ == "__main__":
     alltypes()
+    plain()
     chunks()
     nested()
     pages()
     legacy()
     empty()
     print(
-        "wrote alltypes.parquet, chunks.parquet, nested.parquet, pages.parquet, "
-        "legacy.parquet and empty.parquet"
+        "wrote alltypes.parquet, plain.parquet, chunks.parquet, nested.parquet, "
+        "pages.parquet, legacy.parquet and empty.parquet"
     )
