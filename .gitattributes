@@ -2,3 +2,9 @@
 # generator writes, so they have to arrive the way they were committed rather
 # than with the line endings of whatever machine checked them out.
 *.golden -text
+
+# Same for the compressed blocks in compress/snappy/testdata and the bytes they
+# have to come back as. The bytes are the test, and a checkout that turns one
+# line ending into two has changed both what went in and what came out.
+*.raw -text
+*.snappy -text
