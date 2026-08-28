@@ -356,3 +356,35 @@ func (u TimeUnit) String() string {
 	}
 	return unitNames[u]
 }
+
+// ColumnOrder is how the values of a column compare, which is the only thing
+// that makes the smallest and largest value of a chunk mean anything.
+//
+// The format has one order and a way of saying it has none. A column the file
+// gave TypeDefinedOrder is ordered the way the format defines for its type,
+// which is signed for a signed integer, unsigned for an unsigned one, and byte
+// by byte for a string. A column the file said nothing about is ordered however
+// the writer felt like ordering it, and the bounds on its chunks are one
+// writer's opinion rather than something a reader can act on.
+type ColumnOrder int32
+
+// The column orders. Undefined is the zero value because a file that says
+// nothing is the case a reader has to handle, and because an order this package
+// has never heard of is one it knows nothing about either.
+const (
+	UndefinedOrder ColumnOrder = iota
+	TypeDefinedOrder
+)
+
+var orderNames = [...]string{
+	UndefinedOrder:   noName,
+	TypeDefinedOrder: "type_defined_order",
+}
+
+// String returns the name the format gives the order, lowercased.
+func (o ColumnOrder) String() string {
+	if o < 0 || int(o) >= len(orderNames) {
+		return fmt.Sprintf("column order %d", int32(o))
+	}
+	return orderNames[o]
+}

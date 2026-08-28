@@ -31,6 +31,13 @@ import (
 // unit the format is written in and the unit a scan works in. A row group holds
 // as many rows as its writer thought fit in memory at once, and the reason to
 // have the boundaries is to be able to stop at them.
+//
+// Which of them to stop at is what Bounds is for. Nearly every writer writes the
+// smallest and largest value of every chunk into the footer, so a scan with a
+// filter on it can ask a row group what it holds and skip it whole. On a file
+// written in any sort of order that saves more than the projection does and it
+// costs nothing to ask, the numbers being in the footer that was read to open
+// the file.
 
 // Batch is the columns of one row group.
 type Batch struct {
@@ -196,16 +203,15 @@ func (r *FileReader) project(take []int) {
 // reads the file twice: nothing is cached, since a row group of a real file is
 // tens of megabytes and a caller that wants it twice can keep it.
 func (r *FileReader) RowGroup(i int) (Batch, error) {
-	if i < 0 || i >= len(r.meta.RowGroups) {
-		return Batch{}, fmt.Errorf("parquet: row group %d of a file that has %d",
-			i, len(r.meta.RowGroups))
+	g, err := r.group(i)
+	if err != nil {
+		return Batch{}, err
 	}
 
 	// The row count is a number out of a footer and every column is checked
 	// against it, so it is worth one look before any of them is read. What it
 	// has to fit in is memory, and an int is what says how much of that there
 	// is.
-	g := &r.meta.RowGroups[i]
 	if g.NumRows < 0 || int64(int(g.NumRows)) != g.NumRows {
 		return Batch{}, fmt.Errorf("parquet: %w: row group %d says it holds %d rows",
 			ErrFormat, i, g.NumRows)
@@ -225,30 +231,80 @@ func (r *FileReader) RowGroup(i int) (Batch, error) {
 	return b, nil
 }
 
+// Bounds returns what the writer said about the projected columns of one row
+// group, one entry per column and in the order they were projected.
+//
+// This is what a row group is skipped on. The bounds are in the footer, so
+// nothing is read out of the file to answer it: a scan asks each group what its
+// columns hold, works out that nothing in it can match, and moves on without
+// touching a page. ReadBounds is what each entry comes from and says what is in
+// one and how much of it is worth acting on.
+//
+// A column that says nothing about itself comes back with no bounds rather than
+// as an error, since a writer is allowed to write no statistics and most of the
+// old ones wrote none worth reading. What is an error is a footer that
+// contradicts itself, the same as it is for reading the values.
+func (r *FileReader) Bounds(i int) ([]Bounds, error) {
+	g, err := r.group(i)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]Bounds, len(r.take))
+	for j := range r.take {
+		var ch *ColumnChunk
+		var c *Column
+		if ch, c, err = r.chunkOf(g, i, j); err != nil {
+			return nil, err
+		}
+		if out[j], err = ReadBounds(*c, &ch.Meta); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// group returns the ith row group of the file.
+func (r *FileReader) group(i int) (*RowGroup, error) {
+	if i < 0 || i >= len(r.meta.RowGroups) {
+		return nil, fmt.Errorf("parquet: row group %d of a file that has %d",
+			i, len(r.meta.RowGroups))
+	}
+	return &r.meta.RowGroups[i], nil
+}
+
+// chunkOf returns the chunk holding the jth projected column of the row group g,
+// which is the ith of the file, and the column it holds.
+//
+// A row group holds one chunk per leaf of the schema, in the same order, so the
+// chunk for a column is the one in its place. The path is checked against the
+// leaf's rather than searched for, since a file whose row group is in another
+// order is one whose footer contradicts its own schema.
+func (r *FileReader) chunkOf(g *RowGroup, group, j int) (*ColumnChunk, *Column, error) {
+	k := r.take[j]
+	c := &r.columns[k]
+	if k >= len(g.Columns) || !slices.Equal(g.Columns[k].Meta.Path, c.Path) {
+		return nil, nil, fmt.Errorf("parquet: %w: row group %d holds %d chunks and none of them is %s",
+			ErrFormat, group, len(g.Columns), c.Name())
+	}
+	return &g.Columns[k], c, nil
+}
+
 // chunk reads the jth projected column of the row group g, which is the ith of
 // the file.
 func (r *FileReader) chunk(g *RowGroup, group, j int) (*array.Array, error) {
-	k := r.take[j]
-	c := &r.columns[k]
-
-	// A row group holds one chunk per leaf of the schema, in the same order, so
-	// the chunk for a column is the one in its place. The path is checked
-	// against the leaf's rather than searched for, since a file whose row group
-	// is in another order is one whose footer contradicts its own schema.
-	if k >= len(g.Columns) || !slices.Equal(g.Columns[k].Meta.Path, c.Path) {
-		return nil, fmt.Errorf("parquet: %w: row group %d holds %d chunks and none of them is %s",
-			ErrFormat, group, len(g.Columns), c.Name())
+	ch, c, err := r.chunkOf(g, group, j)
+	if err != nil {
+		return nil, err
 	}
 
 	if r.readers[j] == nil {
-		reader, err := NewColumnReader(*c)
-		if err != nil {
+		if r.readers[j], err = NewColumnReader(*c); err != nil {
 			return nil, err
 		}
-		r.readers[j] = reader
 	}
 
-	a, err := r.readers[j].Chunk(r.src, r.size, &g.Columns[k])
+	a, err := r.readers[j].Chunk(r.src, r.size, ch)
 	if err != nil {
 		return nil, err
 	}

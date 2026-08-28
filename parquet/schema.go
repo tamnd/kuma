@@ -142,6 +142,12 @@ type Column struct {
 	// all, which is the case for every column of a flat table.
 	MaxDefinition int
 	MaxRepetition int
+
+	// Order is how the file said the column's values compare, which is what
+	// the bounds on its chunks mean. It is UndefinedOrder when the file did not
+	// say and in a Column built by hand, and either way that is what makes
+	// ReadBounds fall back to the pair of bounds that predate the question.
+	Order ColumnOrder
 }
 
 // Name returns the column's path joined with dots, which is what the column is
@@ -184,6 +190,15 @@ func (m *Metadata) Columns() ([]Column, error) {
 		if err != nil {
 			return err
 		}
+
+		// The orders are a list parallel to the leaves, so the one for this
+		// column is at the index it is about to go in. A file that wrote fewer
+		// of them than it has columns has said nothing about the rest.
+		order := UndefinedOrder
+		if i := len(columns); i < len(m.Orders) {
+			order = m.Orders[i]
+		}
+
 		columns = append(columns, Column{
 			// The path is cloned because the append above writes into the same
 			// array for every sibling at this level.
@@ -192,6 +207,7 @@ func (m *Metadata) Columns() ([]Column, error) {
 			Type:          t,
 			MaxDefinition: definition,
 			MaxRepetition: repetition,
+			Order:         order,
 		})
 		return nil
 	}

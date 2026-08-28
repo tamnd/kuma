@@ -57,6 +57,15 @@
 // BytesRead is how a caller checks that, since a projection that quietly read
 // the whole file would give the same answers at ten times the cost.
 //
+// Bounds is the other half of not reading a file. A writer usually writes the
+// smallest and largest value of every column chunk into the footer, so a scan
+// carrying a filter can ask a row group what its columns hold and skip the whole
+// group without opening a page of it. What makes that worth care is that parquet
+// spent years without saying how its values compare, so a file holds two pairs
+// of bounds written by two different rules and only one of them is worth reading
+// on most types. ReadBounds is that rule, and FileReader.Bounds is it applied to
+// a row group.
+//
 // Decompressor is what undoes the compression of a page on the way through.
 // Nearly every parquet file in the world is compressed and the codec is a
 // property of a column chunk rather than of the file, so one file may hold a
