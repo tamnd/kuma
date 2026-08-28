@@ -16,6 +16,9 @@ import (
 // answer was a warning and is now an error, which is the same behavior with
 // more noise around it.
 //
+// A filter is a gather, so a dictionary encoded column comes back dictionary
+// encoded and pointing at the same values it went in with. See [Take].
+//
 // It panics if the two columns are not the same length, or if mask is not a
 // boolean column.
 func Filter(c, mask *array.Chunked) *array.Chunked {

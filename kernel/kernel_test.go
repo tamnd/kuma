@@ -83,6 +83,21 @@ func valueAt(t *testing.T, c *array.Chunked, i int) any {
 	if c.IsNull(i) {
 		return nil
 	}
+
+	// A dictionary encoded column is the value behind the index rather than the
+	// index, since the point of a gather over one is that the value at the new
+	// position is still the value that was at the old one. The dictionary is an
+	// ordinary array of the value type, so reading it is this function again.
+	if _, ok := c.DType().(dtype.Dictionary); ok {
+		a, k := c.At(i)
+		d := a.Dictionary()
+		one, err := array.NewChunked(d.DType(), d)
+		if err != nil {
+			t.Fatalf("NewChunked(%s): %v", d.DType(), err)
+		}
+		return valueAt(t, one, a.Index(k))
+	}
+
 	switch c.DType().Kind() {
 	case dtype.BoolKind:
 		return c.Bool(i)

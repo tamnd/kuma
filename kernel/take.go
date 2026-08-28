@@ -22,11 +22,19 @@ import (
 // That makes this the expensive operation it looks like: gathering a million
 // rows out of a column writes a million values.
 //
+// A dictionary encoded column is the exception and the reason the encoding is
+// worth having. Only the indices are gathered and the result points at the same
+// values as c, so taking a million rows out of a column of country codes writes
+// a million int32s rather than a million strings.
+//
 // It panics if c is nil or is a type this package cannot read yet, which today
 // means the nested types.
 func Take(c *array.Chunked, idx []int) *array.Chunked {
 	if c == nil {
 		panic("kernel: take from a nil column")
+	}
+	if dt, ok := c.DType().(dtype.Dictionary); ok {
+		return takeDictionary(c, dt, idx)
 	}
 
 	b, err := array.NewBuilder(c.DType())
