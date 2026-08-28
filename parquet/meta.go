@@ -44,6 +44,13 @@ type Metadata struct {
 	// keeping because the format has had bugs that are identified by which
 	// writer produced the file and nothing else.
 	CreatedBy string
+
+	// Orders is how the values of each column compare, one entry per leaf of
+	// the schema in the order Columns hands them back. It is empty in a file
+	// that did not say, and a file that did not say has left the bounds on its
+	// chunks meaning nothing, which is why Column carries the order along and
+	// ReadBounds asks for it.
+	Orders []ColumnOrder
 }
 
 // SchemaElement is one node of the schema tree.
@@ -210,7 +217,12 @@ type ColumnMeta struct {
 //
 // MinValue and MaxValue are the ones to use. Min and Max are the same idea from
 // before the format pinned down how values are ordered, and are only safe to
-// read for the types whose ordering nobody ever disagreed about.
+// read for the types whose ordering nobody ever disagreed about. ReadBounds is
+// what applies that rule and hands back the values decoded.
+//
+// A bound the file did not write is nil and one it wrote empty is not, which is
+// how a column of strings whose smallest value is the empty string is told from
+// a column that said nothing about itself.
 type Statistics struct {
 	MinValue []byte
 	MaxValue []byte
@@ -260,10 +272,27 @@ func (m *Metadata) read(r *reader) error {
 			m.KeyValue, err = structs(r, t, (*KeyValue).read)
 		case 6:
 			m.CreatedBy, err = r.text(t)
+		case 7:
+			m.Orders, err = structs(r, t, (*ColumnOrder).read)
 		default:
 			err = r.skip(t)
 		}
 		return err
+	})
+}
+
+// read fills in the order from the union in the file.
+//
+// One member is defined and it is the empty struct that says the order is the
+// one the format defines for the type. Anything else is a member written by
+// something newer than this, and a reader that took it for the one it knows
+// would be acting on an order it cannot see, so it stays undefined.
+func (o *ColumnOrder) read(r *reader) error {
+	return r.fields(func(id int16, t thriftType) error {
+		if id == 1 {
+			*o = TypeDefinedOrder
+		}
+		return r.skip(t)
 	})
 }
 

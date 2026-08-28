@@ -342,3 +342,36 @@ func TestKeyValueUnknownField(t *testing.T) {
 		t.Fatalf("read %q = %q, want ARROW:schema = blob", kv.Key, kv.Value)
 	}
 }
+
+// TestColumnOrder reads the union that says how a column's values compare.
+//
+// One member is defined and everything else is what something newer than this
+// would write. A member this package has never heard of leaves the order
+// undefined rather than being taken for the one it knows, since the whole point
+// of the field is that a reader acting on the wrong order skips row groups
+// holding rows it wanted.
+func TestColumnOrder(t *testing.T) {
+	tests := []struct {
+		id   int16
+		want ColumnOrder
+	}{
+		{1, TypeDefinedOrder},
+		{2, UndefinedOrder},
+	}
+
+	for _, tt := range tests {
+		w := &builder{}
+		w.structure(func() {
+			w.field(tt.id, thriftStruct)
+			w.structure(func() {})
+		})
+
+		var o ColumnOrder
+		if err := o.read(w.reader()); err != nil {
+			t.Fatalf("the union with field %d set: %v", tt.id, err)
+		}
+		if o != tt.want {
+			t.Errorf("the union with field %d set read as %s, want %s", tt.id, o, tt.want)
+		}
+	}
+}

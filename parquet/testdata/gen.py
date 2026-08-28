@@ -512,6 +512,57 @@ def legacy():
     )
 
 
+def stats():
+    """Row groups a scan can tell apart without reading them.
+
+    Three groups of four rows with n running from 0 to 11, so every group holds
+    a range of its own and a filter on n has something to decide with. The rest
+    of the columns are the ones whose bounds are easy to read wrongly: an
+    unsigned column holding a value that comes out negative when it is read
+    signed, a float column with a NaN in it, a string column whose smallest
+    value is the empty string, and a column that is missing everywhere and has
+    no bounds at all.
+
+    Written without a dictionary so that the pages are the values themselves,
+    and with the statistics on, which is what the file is for.
+    """
+    schema = pa.schema(
+        [
+            pa.field("n", pa.int64(), nullable=False),
+            pa.field("word", pa.string(), nullable=False),
+            pa.field("size", pa.uint32(), nullable=False),
+            pa.field("ratio", pa.float64(), nullable=False),
+            pa.field("absent", pa.int32()),
+            pa.field("flag", pa.bool_(), nullable=False),
+        ]
+    )
+    table = pa.table(
+        {
+            "n": list(range(12)),
+            "word": ["", "delta", "alpha", "echo"]
+            + ["mike", "november", "oscar", "papa"]
+            + ["zulu", "yankee", "victor", "sierra"],
+            "size": [1, 4294967295, 7, 9] + [10, 11, 12, 13] + [20, 21, 22, 23],
+            "ratio": [1.5, 2.5, 0.5, 3.5]
+            + [1.0, float("nan"), 2.0, 3.0]
+            + [-1.0, 0.0, 1.0, 2.0],
+            "absent": [None] * 12,
+            "flag": [True, False, True, False] * 3,
+        },
+        schema=schema,
+    )
+    pq.write_table(
+        table,
+        "stats.parquet",
+        compression="none",
+        row_group_size=4,
+        version="2.6",
+        use_dictionary=False,
+        write_statistics=True,
+        store_schema=False,
+    )
+
+
 def empty():
     """A file with a schema and no rows, which still has a footer."""
     schema = pa.schema([pa.field("id", pa.int64()), pa.field("label", pa.string())])
@@ -530,10 +581,11 @@ if __name__ == "__main__":
     strings()
     codecs()
     legacy()
+    stats()
     empty()
     print(
         "wrote alltypes.parquet, plain.parquet, chunks.parquet, nested.parquet, "
         "pages.parquet, dictionary.parquet, fallback.parquet, delta.parquet, "
-        "strings.parquet, codecs.parquet, codecs2.parquet, legacy.parquet and "
-        "empty.parquet"
+        "strings.parquet, codecs.parquet, codecs2.parquet, legacy.parquet, "
+        "stats.parquet and empty.parquet"
     )
