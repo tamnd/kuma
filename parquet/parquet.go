@@ -46,8 +46,16 @@
 // most of a real file, comes back dictionary encoded rather than expanded, since
 // that is the shape it was written in and the shape the kernels would rather
 // have it in. What it reads so far is a flat column of plain, dictionary or
-// delta encoded pages in a chunk that was not compressed, and anything else is
-// refused by name rather than guessed at.
+// delta encoded pages, and anything else is refused by name rather than guessed
+// at.
+//
+// Decompressor is what undoes the compression of a page on the way through.
+// Nearly every parquet file in the world is compressed and the codec is a
+// property of a column chunk rather than of the file, so one file may hold a
+// snappy column next to a gzip one next to one that was left alone. Those three
+// are what is undone so far. Snappy is read by kuma/compress/snappy and gzip by
+// the standard library, and a chunk written with a codec that is neither is
+// refused by name.
 package parquet
 
 import "errors"

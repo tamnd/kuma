@@ -42,8 +42,9 @@ import (
 //
 // The reader is for one column, decided when it is made. What it can read is
 // what the page decoders can read: a flat column, written plainly, as indices
-// into a dictionary or as differences of one of the three kinds, in a chunk that
-// is not compressed. Anything else is refused rather than guessed at.
+// into a dictionary or as differences of one of the three kinds. Anything else
+// is refused rather than guessed at. It reads a page that has already had its
+// compression undone, which is what ReadColumn uses a Decompressor for.
 type ColumnReader struct {
 	column  Column
 	builder *array.Builder
@@ -443,9 +444,9 @@ func (r *ColumnReader) assemble(count, present int) {
 // returned. A chunk written as indices into a dictionary comes back dictionary
 // encoded, which is what ColumnReader.Finish says more about.
 func ReadColumn(r io.ReaderAt, size int64, chunk *ColumnChunk, c Column) (*array.Array, error) {
-	if chunk.Meta.Codec != Uncompressed {
-		return nil, fmt.Errorf("parquet: %w: %s is %s and nothing is decompressed yet",
-			ErrUnsupported, c.Name(), chunk.Meta.Codec)
+	codec, err := NewDecompressor(chunk.Meta.Codec)
+	if err != nil {
+		return nil, fmt.Errorf("parquet: %s: %w", c.Name(), err)
 	}
 
 	reader, err := NewColumnReader(c)
@@ -464,6 +465,9 @@ func ReadColumn(r io.ReaderAt, size int64, chunk *ColumnChunk, c Column) (*array
 		}
 		if err != nil {
 			return nil, err
+		}
+		if p, err = codec.Page(p); err != nil {
+			return nil, fmt.Errorf("parquet: %s: %w", c.Name(), err)
 		}
 		if err := reader.Page(p); err != nil {
 			return nil, err

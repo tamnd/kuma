@@ -473,3 +473,83 @@ func FuzzDeltaBytes(f *testing.F) {
 		}
 	})
 }
+
+// FuzzDecompress undoes arbitrary bytes as the body of a compressed page.
+//
+// A compressed page is two claims about the same bytes: the header says what
+// the body comes to and how much of the front of it is levels, and the body
+// says the same thing again in whatever the codec writes it as. The two are
+// written by different parts of a writer and there is nothing stopping a file
+// from carrying a pair that disagree, which is what this generates.
+//
+// What is asked for is that a page which is undone comes back exactly as long
+// as its header said, and that the levels in front of it are the bytes the file
+// had rather than anything the codec produced. Anything else has to be refused,
+// and neither codec may run off the end of a buffer to do it.
+func FuzzDecompress(f *testing.F) {
+	for _, name := range []string{"codecs.parquet", "codecs2.parquet"} {
+		b, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			f.Fatalf("read: %v", err)
+		}
+		m, err := parquet.ReadMetadata(bytes.NewReader(b), int64(len(b)))
+		if err != nil {
+			f.Fatalf("%s: %v", name, err)
+		}
+		for _, g := range m.RowGroups {
+			for i := range g.Columns {
+				pages, err := parquet.ReadPages(bytes.NewReader(b), int64(len(b)), &g.Columns[i])
+				if err != nil {
+					f.Fatalf("%s: %v", name, err)
+				}
+				for {
+					p, err := pages.Next()
+					if err != nil {
+						break
+					}
+					f.Add(p.Data, uint16(p.UncompressedSize),
+						uint16(p.RepetitionLength+p.DefinitionLength))
+				}
+			}
+		}
+	}
+
+	f.Add([]byte(nil), uint16(0), uint16(0))
+	f.Add([]byte{0x04, 0x0c, 'a', 'b', 'c'}, uint16(3), uint16(0))
+	f.Add(bytes.Repeat([]byte{0xff}, 32), uint16(64), uint16(4))
+
+	f.Fuzz(func(t *testing.T, body []byte, size, levels uint16) {
+		// The second version of the data page is the one that keeps its levels
+		// out of the codec, so it is the one worth generating. Both codecs get
+		// the same bytes, since a body that is a gzip member is not a snappy
+		// block and each of them has to say so rather than read the other's.
+		for _, codec := range []parquet.Codec{parquet.Snappy, parquet.Gzip} {
+			d, err := parquet.NewDecompressor(codec)
+			if err != nil {
+				t.Fatalf("NewDecompressor(%s): %v", codec, err)
+			}
+
+			p := parquet.Page{
+				PageHeader: parquet.PageHeader{
+					Kind:             parquet.DataPageV2,
+					CompressedSize:   int32(len(body)),
+					UncompressedSize: int32(size),
+					DefinitionLength: int32(levels),
+					Compressed:       true,
+				},
+				Data: body,
+			}
+
+			out, err := d.Page(p)
+			if err != nil {
+				continue
+			}
+			if len(out.Data) != int(size) {
+				t.Fatalf("%s: a page of %d bytes that says it comes to %d", codec, len(out.Data), size)
+			}
+			if got, want := out.Data[:levels], body[:levels]; !bytes.Equal(got, want) {
+				t.Fatalf("%s: the levels came back as %x, want %x", codec, got, want)
+			}
+		}
+	})
+}

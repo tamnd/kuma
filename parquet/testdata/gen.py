@@ -423,6 +423,60 @@ def strings():
     )
 
 
+def codecs():
+    """The same rows written with a different codec per column, twice over.
+
+    Compression is per column chunk rather than per file, which is easy to say
+    and easy to write a reader that quietly assumes otherwise, so every column
+    here is compressed differently and one of them is not compressed at all.
+    The brotli one is there to be refused by name: this package does not have
+    that codec and a file holding one still has to be readable up to it.
+
+    Two files because the two versions of the data page put their levels in
+    different places. The first version compresses the levels along with the
+    values, so the whole body goes through the codec. The second leaves the
+    levels alone in front of the compressed values, which means the page comes
+    back as two pieces that have to be put together, and that is worth a file of
+    its own.
+
+    The page size is small so that a column ends up in several pages, since a
+    codec is undone once per page and a chunk of one page proves less.
+    """
+    rows = 1000
+    words = ["alpha", "beta", "gamma", "delta"]
+    table = pa.table(
+        {
+            "plain": pa.array([f"row-{i}" for i in range(rows)], pa.string()),
+            "zip": pa.array([i * 3 for i in range(rows)], pa.int64()),
+            "snap": pa.array([f"customer/2026/08/{i:06d}" for i in range(rows)], pa.string()),
+            "word": pa.array([words[i % len(words)] for i in range(rows)], pa.string()),
+            "maybe": pa.array([None if i % 5 == 0 else i for i in range(rows)], pa.int32()),
+            "br": pa.array([float(i) / 3 for i in range(rows)], pa.float64()),
+        }
+    )
+    compression = {
+        "plain": "none",
+        "zip": "gzip",
+        "snap": "snappy",
+        "word": "snappy",
+        "maybe": "gzip",
+        "br": "brotli",
+    }
+    for name, version in [("codecs.parquet", "1.0"), ("codecs2.parquet", "2.0")]:
+        pq.write_table(
+            table,
+            name,
+            compression=compression,
+            version="2.6",
+            data_page_version=version,
+            data_page_size=1024,
+            write_batch_size=100,
+            use_dictionary=["word"],
+            write_statistics=False,
+            store_schema=False,
+        )
+
+
 def legacy():
     """Timestamps as int96, which is how parquet wrote them before it had a type.
 
@@ -474,10 +528,12 @@ if __name__ == "__main__":
     fallback()
     delta()
     strings()
+    codecs()
     legacy()
     empty()
     print(
         "wrote alltypes.parquet, plain.parquet, chunks.parquet, nested.parquet, "
         "pages.parquet, dictionary.parquet, fallback.parquet, delta.parquet, "
-        "strings.parquet, legacy.parquet and empty.parquet"
+        "strings.parquet, codecs.parquet, codecs2.parquet, legacy.parquet and "
+        "empty.parquet"
     )
