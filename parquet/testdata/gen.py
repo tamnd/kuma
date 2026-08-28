@@ -366,6 +366,63 @@ def delta():
     )
 
 
+def strings():
+    """Byte arrays written as differences rather than as values.
+
+    There are two of these encodings and this file has both. The first writes
+    the lengths of the values as differences and then all the bytes end to end,
+    which saves the four bytes of length that sit in front of every value of a
+    plain page. The second writes how much of each value the one before it
+    already said, then the rest of it, which is what turns a sorted column of
+    paths or keys into a few bytes a row.
+
+    The columns are the shapes the two have to read. A run of keys with a long
+    shared prefix is what the second one is for, and a column of one repeated
+    value is the far end of it, where the prefix is the whole value and the rest
+    of it is nothing at all. The blobs go the other way and share nothing, and
+    have empty values scattered through them, which are the values a length of
+    nought has to produce rather than a null. The fixed width column is here
+    because the format allows the second encoding for it and not the first, so
+    it is the one column where the two are told apart by the schema.
+
+    The page size is small so that a column ends up in several pages, since both
+    encodings start again from nothing in each of them.
+    """
+    rows = 1000
+    table = pa.table(
+        {
+            "key": pa.array([f"customer/2026/08/{i:06d}" for i in range(rows)]),
+            "word": pa.array([("a" * (i % 17)) + str(i % 97) for i in range(rows)]),
+            "blob": pa.array(
+                [b"" if i % 13 == 0 else bytes([i % 256]) * (i % 11) for i in range(rows)],
+                pa.binary(),
+            ),
+            "maybe": pa.array([None if i % 7 == 0 else f"row-{i}" for i in range(rows)]),
+            "same": pa.array(["the same string every time"] * rows),
+            "fixed": pa.array([f"{i:08d}".encode() for i in range(rows)], pa.binary(8)),
+        }
+    )
+    pq.write_table(
+        table,
+        "strings.parquet",
+        compression="none",
+        version="2.6",
+        use_dictionary=False,
+        column_encoding={
+            "key": "DELTA_BYTE_ARRAY",
+            "word": "DELTA_LENGTH_BYTE_ARRAY",
+            "blob": "DELTA_LENGTH_BYTE_ARRAY",
+            "maybe": "DELTA_BYTE_ARRAY",
+            "same": "DELTA_BYTE_ARRAY",
+            "fixed": "DELTA_BYTE_ARRAY",
+        },
+        data_page_size=1024,
+        write_batch_size=100,
+        write_statistics=False,
+        store_schema=False,
+    )
+
+
 def legacy():
     """Timestamps as int96, which is how parquet wrote them before it had a type.
 
@@ -416,10 +473,11 @@ if __name__ == "__main__":
     dictionary()
     fallback()
     delta()
+    strings()
     legacy()
     empty()
     print(
         "wrote alltypes.parquet, plain.parquet, chunks.parquet, nested.parquet, "
         "pages.parquet, dictionary.parquet, fallback.parquet, delta.parquet, "
-        "legacy.parquet and empty.parquet"
+        "strings.parquet, legacy.parquet and empty.parquet"
     )

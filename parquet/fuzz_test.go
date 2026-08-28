@@ -421,3 +421,55 @@ func FuzzDelta(f *testing.F) {
 		}
 	})
 }
+
+// FuzzDeltaBytes reads arbitrary bytes as a page of each of the two encodings
+// that write byte arrays as differences.
+//
+// What is asked for is that a page which is read hands back values that are
+// inside the bytes it was given, and that the two decoders agree about which
+// bytes those are. The shared prefix encoding is the lengths encoding with a
+// block in front of it, so a page of noughts and a page of the other encoding
+// hold the same values, and anything that reads one of them differently is
+// reading it wrong.
+func FuzzDeltaBytes(f *testing.F) {
+	f.Add(lengthsOf("one", "two", "three"))
+	f.Add(prefixedOf("a/b/one", "a/b/two"))
+	f.Add(prefixedOf(counted(300)...))
+	f.Add([]byte(nil))
+	f.Add([]byte{0x80, 0x01, 0x04, 0x02, 0x00})
+	f.Add(bytes.Repeat([]byte{0xff}, 32))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var lengths parquet.DeltaLengthDecoder
+		var prefixed parquet.DeltaByteArrayDecoder
+		if err := lengths.Reset(data); err != nil {
+			return
+		}
+
+		// A page says how many values it holds and a few bytes can honestly say
+		// there are two billion of them, so this reads a bounded number.
+		values := make([][]byte, 97)
+		read := 0
+		for read < 1<<14 {
+			n, err := lengths.Read(values)
+			for _, v := range values[:n] {
+				if len(v) > 0 && !bytes.Contains(data, v) {
+					t.Fatalf("a value of %d bytes that the page has not got", len(v))
+				}
+			}
+			read += n
+			if err != nil {
+				break
+			}
+		}
+
+		// The same values again with a block of noughts in front, which is what
+		// a writer that shares nothing between neighbours produces.
+		if err := prefixed.Reset(append(deltaOf(128, 4, make([]int64, read)...), data...)); err != nil {
+			t.Fatalf("a page of %d values that shares nothing: %v", read, err)
+		}
+		if got := prefixed.Len(); got != read {
+			t.Fatalf("%d values as lengths and %d as shared prefixes", read, got)
+		}
+	})
+}
