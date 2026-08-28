@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"slices"
@@ -82,14 +83,24 @@ func Read(r io.ReaderAt, size int64, opts *Options) (*array.Table, error) {
 	return f.table(opts.Dictionary)
 }
 
-// ReadFile reads the file at path. It is [Read] over an open file.
+// ReadFile reads the file at path. It is [Read] over an open file, with the
+// name of the file in any error the read returns.
 func ReadFile(path string, opts *Options) (*array.Table, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	return readOpen(f, opts)
+	t, err := readOpen(f, opts)
+
+	// A close after a read has nothing left to finish and next to nothing to
+	// report, but the read error is the interesting one when there is one.
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return t, nil
 }
 
 // readOpen is ReadFile once the file is open, which is where the size is asked
