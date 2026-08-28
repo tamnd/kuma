@@ -282,6 +282,24 @@ func (w *fbBuilder) spans(vals []span) fbOffset {
 	return w.endVector(len(vals))
 }
 
+// blocks writes a vector of the structs a file indexes its messages with. A
+// Block is an int64, an int32 and an int64, so the four bytes of padding the
+// second int64 needs go down between them.
+//
+// One prep is enough for all three, since the first of them lands on eight and
+// the twenty four bytes after it are one run.
+func (w *fbBuilder) blocks(vals []block) fbOffset {
+	w.startVector(fbBlockSize, len(vals), 8)
+	for i := len(vals) - 1; i >= 0; i-- {
+		w.prep(8, 0)
+		w.putUint64(uint64(vals[i].body))
+		w.putUint32(0)
+		w.putUint32(uint32(vals[i].meta))
+		w.putUint64(uint64(vals[i].offset))
+	}
+	return w.endVector(len(vals))
+}
+
 // int64s writes a vector of int64, which is what the variadic buffer counts of
 // a record batch are.
 func (w *fbBuilder) int64s(vals []int64) fbOffset {

@@ -264,6 +264,101 @@ func FuzzBatch(f *testing.F) {
 	})
 }
 
+// FuzzFile reads arbitrary bytes as a file and checks that whatever comes out of
+// one is a file that goes back in.
+//
+// The footer is the part being fuzzed. Every block in it is three numbers saying
+// where to read from and how much, which is the one place in this format where a
+// reader is told to go somewhere rather than handed the bytes, so the property
+// worth stating is that no arrangement of those numbers gets a read past the end
+// of the file or an allocation of what a block claims rather than what is there.
+func FuzzFile(f *testing.F) {
+	for _, s := range fuzzBatchSchemas {
+		var buf bytes.Buffer
+		w, err := ipc.NewFileWriter(&buf, s)
+		if err != nil {
+			f.Fatalf("NewFileWriter: %v", err)
+		}
+		if err := w.Write(fuzzBatchOf(f, s)); err != nil {
+			f.Fatalf("Write: %v", err)
+		}
+		if err := w.Close(); err != nil {
+			f.Fatalf("Close: %v", err)
+		}
+		f.Add(buf.Bytes())
+	}
+	f.Add([]byte(nil))
+	f.Add([]byte("ARROW1\x00\x00ARROW1"))
+
+	f.Fuzz(func(t *testing.T, file []byte) {
+		r, err := ipc.NewFileReader(bytes.NewReader(file), int64(len(file)))
+		if err != nil {
+			return
+		}
+
+		batches, ok := fuzzFileBatches(r)
+		if !ok {
+			return
+		}
+
+		var buf bytes.Buffer
+		w, err := ipc.NewFileWriter(&buf, r.Schema())
+		if err != nil {
+			t.Fatalf("a schema this package read is one it cannot write: %v", err)
+		}
+		for i, b := range batches {
+			if err = w.Write(b); err != nil {
+				t.Fatalf("batch %d read out of a file is one Write refuses: %v", i, err)
+			}
+		}
+		if err = w.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+
+		written := buf.Bytes()
+		again, err := ipc.NewFileReader(bytes.NewReader(written), int64(len(written)))
+		if err != nil {
+			t.Fatalf("NewFileReader of a file this package wrote: %v", err)
+		}
+		if again.NumBatches() != len(batches) {
+			t.Fatalf("the file came back with %d batches, want %d", again.NumBatches(), len(batches))
+		}
+		for i, want := range batches {
+			b, err := again.Batch(i)
+			if err != nil {
+				t.Fatalf("Batch(%d) of a file this package wrote: %v", i, err)
+			}
+			if b.Length != want.Length {
+				t.Fatalf("batch %d came back with %d rows, want %d", i, b.Length, want.Length)
+			}
+			for k, col := range want.Columns {
+				equalArrays(t, b.Columns[k], col)
+			}
+		}
+	})
+}
+
+// fuzzFileBatches reads every batch out of a file and says whether all of them
+// came out. A file the fuzzer built is nearly always one that stops partway, and
+// there is nothing to check about a batch that never arrived.
+func fuzzFileBatches(r *ipc.FileReader) ([]ipc.Batch, bool) {
+	batches := make([]ipc.Batch, 0, min(r.NumBatches(), 64))
+	for i := range r.NumBatches() {
+		b, err := r.Batch(i)
+		if err != nil {
+			return nil, false
+		}
+		// The same batch of nothing FuzzBatch stops at. A null column carries no
+		// bytes, so a row count of its own is free to write and expensive to take
+		// seriously.
+		if b.Length > 1<<20 {
+			return nil, false
+		}
+		batches = append(batches, b)
+	}
+	return batches, true
+}
+
 // The schemas a fuzzed batch is read against. A batch on the wire says nothing
 // about what it holds, so there has to be a schema to read it with, and these
 // are the shapes worth having one for: the fixed width column, the text column

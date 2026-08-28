@@ -230,31 +230,12 @@ func EncodeSchema(s dtype.Schema) ([]byte, error) {
 // it.
 func encodeSchemaMessage(s dtype.Schema) ([]byte, error) {
 	sw := schemaWriter{types: make(map[string]typeRef)}
-
-	fields := make([]fbOffset, len(s.Fields))
-	for i, f := range s.Fields {
-		off, err := sw.field(f)
-		if err != nil {
-			return nil, err
-		}
-		fields[i] = off
+	schema, err := sw.schema(s)
+	if err != nil {
+		return nil, err
 	}
-	metadata := encodeKeyValues(&sw.w, s.Metadata)
 
-	// The vectors go down before the table that points at them, since nothing
-	// can be pointed at before it exists.
 	w := &sw.w
-	fieldsVec := w.offsets(fields)
-	metadataVec := fbOffset(0)
-	if len(metadata) > 0 {
-		metadataVec = w.offsets(metadata)
-	}
-
-	w.startTable()
-	w.slotOffset(fbSchemaFields, fieldsVec)
-	w.slotOffset(fbSchemaMetadata, metadataVec)
-	schema := w.endTable()
-
 	w.startTable()
 	w.slotInt(fbMessageVersion, fbVersionV5, 0)
 	w.slotUint8(fbMessageHeaderType, fbHeaderSchema)
@@ -279,6 +260,35 @@ type schemaWriter struct {
 type typeRef struct {
 	kind int
 	off  fbOffset
+}
+
+// schema writes the Schema table itself and returns where it starts. A schema
+// message holds one of these and so does the footer of a file, and the table is
+// the same table either way.
+func (sw *schemaWriter) schema(s dtype.Schema) (fbOffset, error) {
+	fields := make([]fbOffset, len(s.Fields))
+	for i, f := range s.Fields {
+		off, err := sw.field(f)
+		if err != nil {
+			return 0, err
+		}
+		fields[i] = off
+	}
+	metadata := encodeKeyValues(&sw.w, s.Metadata)
+
+	// The vectors go down before the table that points at them, since nothing
+	// can be pointed at before it exists.
+	w := &sw.w
+	fieldsVec := w.offsets(fields)
+	metadataVec := fbOffset(0)
+	if len(metadata) > 0 {
+		metadataVec = w.offsets(metadata)
+	}
+
+	w.startTable()
+	w.slotOffset(fbSchemaFields, fieldsVec)
+	w.slotOffset(fbSchemaMetadata, metadataVec)
+	return w.endTable(), nil
 }
 
 // DecodeSchema reads an encapsulated Arrow IPC schema message.
