@@ -95,8 +95,18 @@ func (d *RLEDecoder) Reset(data []byte, width int) error {
 	if width < 0 || width > maxWidth {
 		return fmt.Errorf("parquet: %w: values of %d bits", ErrFormat, width)
 	}
-	*d = RLEDecoder{buf: data, width: uint(width), mask: 1<<uint(width) - 1}
+	d.reset(data, uint(width))
 	return nil
+}
+
+// reset points the decoder at other bytes at a width already known to be one it
+// can read.
+//
+// A column reads every one of its pages at the same width, since the width is
+// how deep the column is, so it checks that once and comes in here for each of
+// the thousand pages after it.
+func (d *RLEDecoder) reset(data []byte, width uint) {
+	*d = RLEDecoder{buf: data, width: width, mask: 1<<width - 1}
 }
 
 // Read decodes values into dst and returns how many it wrote. It returns io.EOF
@@ -289,11 +299,17 @@ func (d *BitPackedDecoder) Reset(data []byte, width int) error {
 		return fmt.Errorf("parquet: %w: values of %d bits", ErrFormat, width)
 	}
 
-	*d = BitPackedDecoder{buf: data, width: uint(width)}
-	if width > 0 {
-		d.end = len(data) * 8 / width * width
-	}
+	d.reset(data, uint(width))
 	return nil
+}
+
+// reset points the decoder at other bytes at a width already known to be one it
+// can read, the way RLEDecoder.reset does.
+func (d *BitPackedDecoder) reset(data []byte, width uint) {
+	*d = BitPackedDecoder{buf: data, width: width}
+	if width > 0 {
+		d.end = len(data) * 8 / int(width) * int(width)
+	}
 }
 
 // Read decodes values into dst and returns how many it wrote. It returns io.EOF

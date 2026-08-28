@@ -31,6 +31,14 @@
 // PlainDecoder reads the values themselves, written as they are, which is what
 // every other encoding in the format is a way of not doing and what every one
 // of them ends up at.
+//
+// ColumnReader is where the two halves meet. A page keeps its levels and its
+// values apart and only the rows that have a value are written down, so putting
+// a column back together means walking the two together and dropping the values
+// in around the nulls. ReadColumn does that for a whole column chunk and hands
+// back an array. What it reads so far is a flat column of plain pages in a chunk
+// that was not compressed, and anything else is refused by name rather than
+// guessed at.
 package parquet
 
 import "errors"
