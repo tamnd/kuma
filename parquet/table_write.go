@@ -357,9 +357,6 @@ func (tw *tableWriter) chunk(i int, col *array.Chunked) (ColumnChunk, error) {
 		if !dtype.Equal(a.DType(), c.Type) {
 			a = decode(a, c.Type)
 		}
-		if v.track != nil {
-			v.track(a, 0, a.Len())
-		}
 
 		for at := 0; at < a.Len(); {
 			rows := v.rows(a, at, tw.opts.PageSize)
@@ -481,11 +478,10 @@ type pageWriter struct {
 	// encode writes rows [i, j) of a, leaving out the missing ones.
 	encode func(e *PlainEncoder, a *array.Array, i, j int)
 
-	// tracker is the smallest and largest value of the chunk being written,
-	// which goes in the footer for a reader to skip the chunk on. Its two
-	// functions are nil for a column of nothing, which has no values to be the
-	// smallest and largest of.
-	tracker
+	// take is the smallest and largest value of the chunk being written, which
+	// goes in the footer for a reader to skip the chunk on. It is nil for a
+	// column of nothing, which has no values to be the smallest and largest of.
+	take tracker
 
 	// bits is how many bits one value takes, which is what the rows of a page
 	// are worked out from. It is zero for a byte array, whose values have no
@@ -587,11 +583,13 @@ func valueWriter(t dtype.DataType) (*pageWriter, error) {
 // the case that costs nothing when nothing is missing.
 func direct[T array.Numeric](put func(*PlainEncoder, []T), bound func(T) []byte) *pageWriter {
 	var buf []T
-	return &pageWriter{tracker: numberBounds(bound), encode: func(e *PlainEncoder, a *array.Array, i, j int) {
+	var b bounds[T]
+	return &pageWriter{take: b.taker(bound), encode: func(e *PlainEncoder, a *array.Array, i, j int) {
 		vals := a.Values[T]()
 		if a.NullCount() == 0 {
 			// The whole run in one call and no copy, which is the path a column
 			// of numbers out of a file or a kernel takes.
+			b.fold(vals[i:j])
 			put(e, vals[i:j])
 			return
 		}
@@ -602,6 +600,7 @@ func direct[T array.Numeric](put func(*PlainEncoder, []T), bound func(T) []byte)
 				buf = append(buf, vals[k])
 			}
 		}
+		b.fold(buf)
 		put(e, buf)
 	}}
 }
@@ -613,11 +612,13 @@ func direct[T array.Numeric](put func(*PlainEncoder, []T), bound func(T) []byte)
 // the annotation on the column says to undo and what the reader does undo.
 func widened[T array.Numeric, W array.Numeric](put func(*PlainEncoder, []W), bound func(T) []byte) *pageWriter {
 	var buf []W
-	return &pageWriter{tracker: numberBounds(bound), encode: func(e *PlainEncoder, a *array.Array, i, j int) {
+	var b bounds[T]
+	return &pageWriter{take: b.taker(bound), encode: func(e *PlainEncoder, a *array.Array, i, j int) {
 		vals := a.Values[T]()
 		buf = slices.Grow(buf[:0], j-i)
 		for k := i; k < j; k++ {
 			if a.IsValid(k) {
+				b.add(vals[k])
 				buf = append(buf, W(vals[k]))
 			}
 		}
@@ -629,10 +630,12 @@ func widened[T array.Numeric, W array.Numeric](put func(*PlainEncoder, []W), bou
 // plain encoder packs from.
 func boolWriter() *pageWriter {
 	var buf []bool
-	return &pageWriter{tracker: boolBounds(), encode: func(e *PlainEncoder, a *array.Array, i, j int) {
+	var b boolBounds
+	return &pageWriter{take: b.taker(), encode: func(e *PlainEncoder, a *array.Array, i, j int) {
 		buf = slices.Grow(buf[:0], j-i)
 		for k := i; k < j; k++ {
 			if a.IsValid(k) {
+				b.add(a.Bool(k))
 				buf = append(buf, a.Bool(k))
 			}
 		}
@@ -647,11 +650,14 @@ func boolWriter() *pageWriter {
 // what this costs is a slice header a value.
 func blobWriter(put func(*PlainEncoder, [][]byte)) *pageWriter {
 	var buf [][]byte
-	return &pageWriter{tracker: bytesBounds(), encode: func(e *PlainEncoder, a *array.Array, i, j int) {
+	var b blobBounds
+	return &pageWriter{take: b.taker(), encode: func(e *PlainEncoder, a *array.Array, i, j int) {
 		buf = slices.Grow(buf[:0], j-i)
 		for k := i; k < j; k++ {
 			if a.IsValid(k) {
-				buf = append(buf, a.Bytes(k))
+				v := a.Bytes(k)
+				b.add(v)
+				buf = append(buf, v)
 			}
 		}
 		put(e, buf)
