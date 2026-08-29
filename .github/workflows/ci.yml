@@ -131,7 +131,11 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # Checkout on Windows rewrites the line endings, so gofmt there reports
+      # every file in the module and means nothing by it. Formatting is the
+      # same everywhere and one runner is enough to say so.
       - name: gofmt
+        if: matrix.os == 'ubuntu-latest'
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
