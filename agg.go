@@ -5,6 +5,7 @@ import (
 
 	"github.com/tamnd/kuma/array"
 	"github.com/tamnd/kuma/kernel"
+	"github.com/tamnd/kuma/plan"
 )
 
 // Aggregation is one thing to work out about each group: which column to read,
@@ -34,57 +35,27 @@ type Aggregation struct {
 	how  Interpolation
 }
 
-// aggOp is which aggregation an [Aggregation] is.
-type aggOp uint8
+// aggOp is which aggregation an [Aggregation] is. It is [plan.AggFunc] under
+// another name, because the list of aggregations belongs with the plan that has
+// to be able to reason about them, and one list is better than two that have to
+// be kept in step.
+type aggOp = plan.AggFunc
 
 const (
-	opSum aggOp = iota
-	opMean
-	opMin
-	opMax
-	opCount
-	opSize
-	opFirst
-	opLast
-	opVar
-	opStd
-	opMedian
-	opQuantile
-	opNUnique
+	opSum      = plan.AggSum
+	opMean     = plan.AggMean
+	opMin      = plan.AggMin
+	opMax      = plan.AggMax
+	opCount    = plan.AggCount
+	opSize     = plan.AggSize
+	opFirst    = plan.AggFirst
+	opLast     = plan.AggLast
+	opVar      = plan.AggVar
+	opStd      = plan.AggStd
+	opMedian   = plan.AggMedian
+	opQuantile = plan.AggQuantile
+	opNUnique  = plan.AggNUnique
 )
-
-// name returns what the operation is called, for an error message and for the
-// default name of a Size.
-func (o aggOp) name() string {
-	switch o {
-	case opSum:
-		return "Sum"
-	case opMean:
-		return "Mean"
-	case opMin:
-		return "Min"
-	case opMax:
-		return "Max"
-	case opCount:
-		return "Count"
-	case opSize:
-		return "Size"
-	case opFirst:
-		return "First"
-	case opLast:
-		return "Last"
-	case opVar:
-		return "Var"
-	case opStd:
-		return "Std"
-	case opMedian:
-		return "Median"
-	case opQuantile:
-		return "Quantile"
-	default:
-		return "NUnique"
-	}
-}
 
 // Sum returns the total of the named column in each group.
 //
@@ -210,7 +181,7 @@ func (a Aggregation) Name() string {
 // String returns the aggregation as it would be written, which is what an error
 // message about it should say.
 func (a Aggregation) String() string {
-	s := a.op.name() + "(" + a.col
+	s := a.op.String() + "(" + a.col
 	switch a.op {
 	case opVar, opStd:
 		s = fmt.Sprintf("%s, %d", s, a.ddof)
@@ -234,7 +205,7 @@ func (a Aggregation) run[S any](g *GroupedFrame[S]) (Column, error) {
 
 	k, ok := g.frame.index[a.col]
 	if !ok {
-		return Column{}, noColumn(a.op.name(), a.col, g.frame.Names())
+		return Column{}, noColumn(a.op.String(), a.col, g.frame.Names())
 	}
 	c := g.frame.cols[k].data
 
