@@ -158,8 +158,44 @@ func comparisonFor(k Order) (comparison, error) {
 		// The decimals are stored little endian, so comparing their bytes would
 		// order them by their last digit, and the nested types have no single
 		// order to give. Both want writing rather than guessing at.
-		return nil, fmt.Errorf("kernel: there is no order for a %s column yet", k.Column.DType())
+		return nil, noOrder(k.Column.DType())
 	}
+}
+
+// HasOrder reports whether a column of this type is one there is an order for,
+// which is what a sort and a smallest value both need and what the decimals and
+// the nested types do not have yet.
+//
+// A dictionary encoded column has the order of the values behind its indices,
+// so what decides is what it holds rather than how it is stored.
+//
+// It is exported for the same reason [CompareType] is. A plan has to know
+// whether a query can sort by a column before there is a column to ask. The
+// list is [comparisonFor]'s own list written a second time, held to it by a
+// test, for the reason [SumType] gives.
+func HasOrder(dt dtype.DataType) bool {
+	if d, ok := dt.(dtype.Dictionary); ok {
+		dt = d.Value
+	}
+
+	switch dt.Kind() {
+	case dtype.NullKind, dtype.BoolKind,
+		dtype.Int8Kind, dtype.Int16Kind, dtype.Int32Kind, dtype.Int64Kind,
+		dtype.Uint8Kind, dtype.Uint16Kind, dtype.Uint32Kind, dtype.Uint64Kind,
+		dtype.Float32Kind, dtype.Float64Kind,
+		dtype.Date32Kind, dtype.Date64Kind, dtype.Time32Kind, dtype.Time64Kind,
+		dtype.TimestampKind, dtype.DurationKind,
+		dtype.StringKind, dtype.BinaryKind, dtype.FixedSizeBinaryKind:
+		return true
+	default:
+		return false
+	}
+}
+
+// noOrder is the error for a column there is no order for, reported by the sort
+// and by the type rule alike.
+func noOrder(dt dtype.DataType) error {
+	return fmt.Errorf("kernel: there is no order for a %s column yet", dt)
 }
 
 // compareNumbers is the fixed width case, where the values are numbers or are

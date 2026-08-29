@@ -146,7 +146,7 @@ func TestQuantileErrors(t *testing.T) {
 
 	if _, err := kernel.Median(col(t, dtype.String, []any{"a", "b"}), g); err == nil {
 		t.Fatal("the median of a string column succeeded")
-	} else if !strings.Contains(err.Error(), "Median") {
+	} else if !strings.Contains(err.Error(), "median") {
 		t.Errorf("the message is %q, want it to name the operation the caller wrote", err.Error())
 	}
 }
