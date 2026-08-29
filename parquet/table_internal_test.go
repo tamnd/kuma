@@ -218,7 +218,7 @@ func wantPanic(t *testing.T) {
 // same column share it, so a filter of any size adds at most one read per column
 // it names.
 func TestReadAlso(t *testing.T) {
-	r := openReader(t, "stats.parquet")
+	r := openStats(t)
 	if err := r.Project("word"); err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestReadAlso(t *testing.T) {
 // TestReadAlsoNothing checks that a read with no filter is projected the way the
 // caller left it, which is what says an unfiltered read costs what it did.
 func TestReadAlsoNothing(t *testing.T) {
-	r := openReader(t, "stats.parquet")
+	r := openStats(t)
 	if err := r.Project("word", "n"); err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func TestReadAlsoNothing(t *testing.T) {
 // through a page. What matters is that it is an error and not a table missing
 // the rows of that group.
 func TestFilterFileError(t *testing.T) {
-	r := openReader(t, "stats.parquet")
+	r := openStats(t)
 	r.meta.RowGroups[0].Columns[0].Meta.Stats.NullCount = 99
 
 	opts := &Options{Filter: []Predicate{Where("n", kernel.OpEq, int64(1))}}
@@ -284,7 +284,7 @@ func TestFilterFileError(t *testing.T) {
 // rows with that step skipped. It is here because the alternative to returning
 // the error is not returning it.
 func TestPickUnchecked(t *testing.T) {
-	r := openReader(t, "stats.parquet")
+	r := openStats(t)
 	bad := []test{{pred: WhereString("n", kernel.OpEq, "eight"), column: 0, slot: 0}}
 
 	_, err := r.chunksOf([]int{0}, bad, 1)
