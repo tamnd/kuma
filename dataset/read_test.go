@@ -507,7 +507,7 @@ func TestCause(t *testing.T) {
 	}
 
 	plain := errors.New("something else")
-	if got := cause(plain); got != plain {
+	if got := cause(plain); !errors.Is(got, plain) {
 		t.Errorf("got %v, want the error it was given", got)
 	}
 }

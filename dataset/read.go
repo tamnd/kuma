@@ -70,7 +70,7 @@ func (r *reader) file(f File) error {
 	if err != nil {
 		return &FileError{Path: f.Path, Err: err}
 	}
-	if err = r.match(f, t); err != nil {
+	if err := r.match(f, t); err != nil {
 		return err
 	}
 
@@ -180,7 +180,7 @@ func repeat(dt dtype.DataType, v Value, n int) (*array.Array, error) {
 		b.AppendNulls(n)
 		return b.Finish(), nil
 	}
-	if err = fill(b, dt, v.Text, n); err != nil {
+	if err := fill(b, dt, v.Text, n); err != nil {
 		return nil, err
 	}
 	return b.Finish(), nil

@@ -2,6 +2,7 @@ package dataset
 
 import (
 	"fmt"
+	"strconv"
 	"testing"
 	"testing/fstest"
 
@@ -48,7 +49,7 @@ func BenchmarkParse(b *testing.B) {
 func BenchmarkInfer(b *testing.B) {
 	vals := make([]Value, 365)
 	for i := range vals {
-		vals[i] = Value{Text: fmt.Sprint(i)}
+		vals[i] = Value{Text: strconv.Itoa(i)}
 	}
 
 	b.ReportAllocs()
