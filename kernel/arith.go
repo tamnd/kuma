@@ -67,22 +67,14 @@ func Arith(a, b *array.Chunked, op ArithOp) (*array.Chunked, error) {
 	if a == nil || b == nil {
 		panic("kernel: arithmetic on a nil column")
 	}
-	if int(op) >= len(arithNames) {
-		panic(fmt.Sprintf("kernel: arithmetic with an unknown operator %d", uint8(op)))
-	}
-	n, fixedA, fixedB := binaryLen("arithmetic", a, b)
-
-	dt, err := dtype.Coerce(a.DType(), b.DType())
-	if err != nil {
-		return nil, fmt.Errorf("kernel: cannot combine %s with %s: %w", a.DType(), b.DType(), err)
-	}
-	if dt.Kind() == dtype.NullKind {
-		return nulls(dt, n), nil
-	}
-
-	apply, err := arithmetic(dt, op)
+	dt, apply, err := arithType(a.DType(), b.DType(), op)
 	if err != nil {
 		return nil, err
+	}
+	n, fixedA, fixedB := binaryLen("arithmetic", a, b)
+	if apply == nil {
+		// Both sides are columns of nothing, so every row is nothing.
+		return nulls(dt, n), nil
 	}
 
 	out := builder(dt)
@@ -101,6 +93,41 @@ func Arith(a, b *array.Chunked, op ArithOp) (*array.Chunked, error) {
 		}
 	}
 	return one(dt, out.Finish()), nil
+}
+
+// ArithType returns the type that arithmetic over two column types gives, and
+// an error saying why not when there is none.
+//
+// It is the answer [Arith] would give, worked out from the types alone with no
+// data behind them, which is what lets a query be turned away while it is being
+// built rather than partway through the second file. Arith goes through the
+// same rule, so the two cannot come to disagree.
+func ArithType(a, b dtype.DataType, op ArithOp) (dtype.DataType, error) {
+	dt, _, err := arithType(a, b, op)
+	return dt, err
+}
+
+// arithType is [ArithType] together with the operation it found, since Arith
+// wants both and looking them up in two places would be two rules to keep in
+// step. The operation is nil when there is nothing to work out, which is when
+// both sides are columns of nothing.
+func arithType(a, b dtype.DataType, op ArithOp) (dtype.DataType, operate, error) {
+	if int(op) >= len(arithNames) {
+		panic(fmt.Sprintf("kernel: arithmetic with an unknown operator %d", uint8(op)))
+	}
+	dt, err := dtype.Coerce(a, b)
+	if err != nil {
+		return nil, nil, fmt.Errorf("kernel: cannot combine %s with %s: %w", a, b, err)
+	}
+	if dt.Kind() == dtype.NullKind {
+		return dt, nil, nil
+	}
+
+	apply, err := arithmetic(dt, op)
+	if err != nil {
+		return nil, nil, err
+	}
+	return dt, apply, nil
 }
 
 // ErrDivideByZero is what dividing by zero in an integer column gives.

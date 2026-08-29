@@ -108,18 +108,29 @@ func Not(c *array.Chunked) (*array.Chunked, error) {
 	return one(dtype.Bool, out.Finish()), nil
 }
 
-// condition returns an error unless c is a column the logic can read.
+// IsCondition reports whether a column of this type is one the logic can read.
 //
 // That is a boolean column, or a column of nothing, whose values are all
 // missing and so are all the answer nobody has. Letting the second one through
 // costs a line and saves a caller special casing the column an empty file gave
 // them.
-func condition(c *array.Chunked, name string) error {
-	switch c.DType().Kind() {
+//
+// It is exported for the same reason [CompareType] is. A plan has to know
+// whether an expression can be filtered on before there is a column to ask.
+func IsCondition(dt dtype.DataType) bool {
+	switch dt.Kind() {
 	case dtype.BoolKind, dtype.NullKind:
-		return nil
+		return true
 	default:
+		return false
+	}
+}
+
+// condition returns an error unless c is a column the logic can read.
+func condition(c *array.Chunked, name string) error {
+	if !IsCondition(c.DType()) {
 		return fmt.Errorf("kernel: cannot take the %s of a %s column, which is not a condition",
 			name, c.DType())
 	}
+	return nil
 }

@@ -70,6 +70,8 @@ github.com/tamnd/kuma
     intern.go                   the table that makes two equal expressions one
     plan.go                     node types
     agg.go                      the aggregations, and what each one reads
+    type.go                     what an expression is checked to be, before it runs
+    error.go                    what a plan says when the check turns it away
     optimize.go                 the passes from document 02
     explain.go                  the documented output format
     serialize.go                the protobuf plan format for document 07
