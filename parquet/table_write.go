@@ -51,13 +51,12 @@ import (
 const (
 	defaultRowGroupSize = 1 << 20
 	defaultPageSize     = 1 << 20
-
-	// writtenBy is what goes in the footer when the caller does not say. It is
-	// free text that nothing reads to decide anything, and it is worth setting
-	// because it is the first thing anyone looks at when a file turns out to be
-	// wrong.
-	writtenBy = "kuma"
 )
+
+// writtenBy is what goes in the footer when the caller does not say. It is free
+// text that nothing reads to decide anything, and it is worth setting because it
+// is the first thing anyone looks at when a file turns out to be wrong.
+const writtenBy = "kuma"
 
 // WriteOptions says how the file is laid out. The zero value, which is what a
 // nil pointer means as well, writes the layout described on each field.
@@ -252,15 +251,13 @@ func (tw *tableWriter) check() error {
 
 // write puts the file down: the magic, the row groups, and the footer.
 func (tw *tableWriter) write() (int64, error) {
-	n, err := tw.w.Write([]byte(magic))
-	tw.n += int64(n)
-	if err != nil {
-		return tw.n, fmt.Errorf("parquet: writing the magic: %w", err)
+	if err := tw.magic(); err != nil {
+		return tw.n, err
 	}
 
 	rows := tw.table.NumRows()
 	for lo := 0; lo < rows; lo += tw.opts.RowGroupSize {
-		if err = tw.group(lo, min(lo+tw.opts.RowGroupSize, rows)); err != nil {
+		if err := tw.group(lo, min(lo+tw.opts.RowGroupSize, rows)); err != nil {
 			return tw.n, err
 		}
 	}
@@ -269,9 +266,20 @@ func (tw *tableWriter) write() (int64, error) {
 	// front of it a file. A table of no rows still gets one, since a file with a
 	// schema and no rows is a file and a caller who wrote an empty table wants
 	// to read an empty table back.
-	n64, err := WriteMetadata(tw.w, &tw.meta)
-	tw.n += n64
+	n, err := WriteMetadata(tw.w, &tw.meta)
+	tw.n += n
 	return tw.n, err
+}
+
+// magic writes the four bytes at the front, which say what the file is and are
+// the only thing in it that is not a length or a value.
+func (tw *tableWriter) magic() error {
+	n, err := tw.w.Write([]byte(magic))
+	tw.n += int64(n)
+	if err != nil {
+		return fmt.Errorf("parquet: writing the magic: %w", err)
+	}
+	return nil
 }
 
 // group writes the rows in [lo, hi) as one row group, a column at a time.

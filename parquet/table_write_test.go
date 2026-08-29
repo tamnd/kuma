@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -38,10 +39,10 @@ func tableOf(tb testing.TB, fields []dtype.Field, fill ...func(*array.Builder)) 
 
 // written is a table written and read back, which is what nearly every test
 // here is asking about.
-func written(tb testing.TB, t *array.Table, opts *parquet.WriteOptions) *array.Table {
+func written(tb testing.TB, t *array.Table) *array.Table {
 	tb.Helper()
 
-	got, _ := writtenBytes(tb, t, opts)
+	got, _ := writtenBytes(tb, t, nil)
 	return got
 }
 
@@ -93,23 +94,23 @@ func cell(a *array.Array, i int) string {
 
 	switch a.DType().Kind() {
 	case dtype.BoolKind:
-		return fmt.Sprint(a.Bool(i))
+		return strconv.FormatBool(a.Bool(i))
 	case dtype.Int8Kind:
-		return fmt.Sprint(a.Value[int8](i))
+		return strconv.Itoa(int(a.Value[int8](i)))
 	case dtype.Int16Kind:
-		return fmt.Sprint(a.Value[int16](i))
+		return strconv.Itoa(int(a.Value[int16](i)))
 	case dtype.Int32Kind, dtype.Date32Kind, dtype.Time32Kind:
-		return fmt.Sprint(a.Value[int32](i))
+		return strconv.Itoa(int(a.Value[int32](i)))
 	case dtype.Int64Kind, dtype.Time64Kind, dtype.TimestampKind:
-		return fmt.Sprint(a.Value[int64](i))
+		return strconv.FormatInt(a.Value[int64](i), 10)
 	case dtype.Uint8Kind:
-		return fmt.Sprint(a.Value[uint8](i))
+		return strconv.Itoa(int(a.Value[uint8](i)))
 	case dtype.Uint16Kind:
-		return fmt.Sprint(a.Value[uint16](i))
+		return strconv.Itoa(int(a.Value[uint16](i)))
 	case dtype.Uint32Kind:
-		return fmt.Sprint(a.Value[uint32](i))
+		return strconv.FormatUint(uint64(a.Value[uint32](i)), 10)
 	case dtype.Uint64Kind:
-		return fmt.Sprint(a.Value[uint64](i))
+		return strconv.FormatUint(a.Value[uint64](i), 10)
 	case dtype.Float32Kind:
 		return fmt.Sprint(a.Value[float32](i))
 	case dtype.Float64Kind:
@@ -216,7 +217,7 @@ func everyType(tb testing.TB) *array.Table {
 // looking fine until it is the largest one.
 func TestWriteRoundTrip(t *testing.T) {
 	want := everyType(t)
-	same(t, written(t, want, nil), want)
+	same(t, written(t, want), want)
 }
 
 // TestWriteEmpty writes a table with no rows in it.
@@ -272,7 +273,7 @@ func TestWriteNulls(t *testing.T) {
 		func(b *array.Builder) { b.AppendNulls(5) },
 	)
 
-	same(t, written(t, want, nil), want)
+	same(t, written(t, want), want)
 }
 
 // TestWriteRowGroups writes a table in more than one row group.
@@ -497,7 +498,7 @@ func TestWriteCollapsed(t *testing.T) {
 		dtype.Field{Name: "name", Type: dtype.LargeString, Nullable: true},
 		dtype.Field{Name: "blob", Type: dtype.LargeBinary},
 		dtype.Field{Name: "code", Type: dtype.Dictionary{Index: dtype.Int32, Value: dtype.String}, Nullable: true},
-	), nil)
+	))
 
 	for i, want := range []dtype.DataType{dtype.String, dtype.Binary, dtype.String} {
 		if !dtype.Equal(got.Schema.Fields[i].Type, want) {
@@ -520,7 +521,7 @@ func TestWriteDictionary(t *testing.T) {
 		t.Fatal("the file came back with nothing dictionary encoded in it")
 	}
 
-	got := written(t, want, nil)
+	got := written(t, want)
 	if !dtype.Equal(got.Schema.Fields[0].Type, dtype.String) {
 		t.Errorf("the codes came back as %s, want a string", got.Schema.Fields[0].Type)
 	}
