@@ -30,11 +30,15 @@ import (
 // same number arrived at twice and the second way is the one that goes wrong.
 //
 // The file this writes is the plain one: every value written as it is, no
-// compression, no dictionary, no statistics and no page index. That is a file
-// any reader opens and it is the floor the rest is built on, since a dictionary
-// page holds plain values and a chunk that gives up on its dictionary falls back
-// to exactly what this writes. What it costs is size, and a caller who wants the
-// file smaller wants the parts that are not written yet.
+// compression, no dictionary and no page index. That is a file any reader opens
+// and it is the floor the rest is built on, since a dictionary page holds plain
+// values and a chunk that gives up on its dictionary falls back to exactly what
+// this writes. What it costs is size, and a caller who wants the file smaller
+// wants the parts that are not written yet.
+//
+// The statistics are written, since they cost a comparison a value and they are
+// what a reader skips row groups on. What goes down and why is in stats_write.go
+// next to the code that collects it.
 //
 // Only flat columns go out. A list or a group needs repetition levels, and the
 // reader next door does not read them either, so a writer that produced one
@@ -213,6 +217,15 @@ func newTableWriter(w io.Writer, t *array.Table, opts *WriteOptions) (*tableWrit
 	tw.meta.Version = 1
 	tw.meta.NumRows = int64(t.NumRows())
 	tw.meta.CreatedBy = tw.opts.CreatedBy
+
+	// Every column is compared the way the format says its type compares. A file
+	// that leaves this out is one whose bounds mean whatever its writer thought
+	// they meant, which is why a reader is right to ignore them, and it is one
+	// line to say so.
+	tw.meta.Orders = make([]ColumnOrder, len(tw.columns))
+	for i := range tw.meta.Orders {
+		tw.meta.Orders[i] = TypeDefinedOrder
+	}
 	return tw, nil
 }
 
@@ -322,6 +335,7 @@ func (tw *tableWriter) chunk(i int, col *array.Chunked) (ColumnChunk, error) {
 		encodings = []Encoding{Plain, RLE}
 	}
 
+	v := tw.values[i]
 	meta := ColumnMeta{
 		Type:           c.Element.Type,
 		Encodings:      encodings,
@@ -329,6 +343,11 @@ func (tw *tableWriter) chunk(i int, col *array.Chunked) (ColumnChunk, error) {
 		Codec:          Uncompressed,
 		NumValues:      int64(col.Len()),
 		DataPageOffset: tw.n,
+
+		// How many values are missing is worth saying on its own, since a chunk
+		// with none missing is one a filter never has to think about nulls in
+		// and a chunk with nothing else is one it can skip outright.
+		Stats: Statistics{NullCount: int64(col.NullCount()), HasNullCount: true},
 	}
 
 	for _, a := range col.Chunks() {
@@ -338,10 +357,13 @@ func (tw *tableWriter) chunk(i int, col *array.Chunked) (ColumnChunk, error) {
 		if !dtype.Equal(a.DType(), c.Type) {
 			a = decode(a, c.Type)
 		}
+		if v.track != nil {
+			v.track(a, 0, a.Len())
+		}
 
 		for at := 0; at < a.Len(); {
-			rows := tw.values[i].rows(a, at, tw.opts.PageSize)
-			n, err := tw.page(c, tw.values[i], a, at, at+rows)
+			rows := v.rows(a, at, tw.opts.PageSize)
+			n, err := tw.page(c, v, a, at, at+rows)
 			if err != nil {
 				return ColumnChunk{}, err
 			}
@@ -352,6 +374,17 @@ func (tw *tableWriter) chunk(i int, col *array.Chunked) (ColumnChunk, error) {
 			meta.TotalUncompressedSize += n
 			meta.TotalCompressedSize += n
 			at += rows
+		}
+	}
+
+	// The bounds are taken after the pages rather than before, because a chunk
+	// that failed part way through is a file that will not be finished and its
+	// bounds belong to nothing. Taking them here also leaves the tracker empty
+	// for the next row group.
+	if v.take != nil {
+		if lo, hi, ok := v.take(); ok {
+			meta.Stats.MinValue, meta.Stats.MaxValue = lo, hi
+			meta.Stats.MinExact, meta.Stats.MaxExact = true, true
 		}
 	}
 	return ColumnChunk{Meta: meta}, nil
@@ -448,6 +481,12 @@ type pageWriter struct {
 	// encode writes rows [i, j) of a, leaving out the missing ones.
 	encode func(e *PlainEncoder, a *array.Array, i, j int)
 
+	// tracker is the smallest and largest value of the chunk being written,
+	// which goes in the footer for a reader to skip the chunk on. Its two
+	// functions are nil for a column of nothing, which has no values to be the
+	// smallest and largest of.
+	tracker
+
 	// bits is how many bits one value takes, which is what the rows of a page
 	// are worked out from. It is zero for a byte array, whose values have no
 	// width until they are looked at.
@@ -510,26 +549,26 @@ func valueWriter(t dtype.DataType) (*pageWriter, error) {
 		return boolWriter(), nil
 
 	case dtype.Int8Kind:
-		return widened[int8]((*PlainEncoder).Int32), nil
+		return widened[int8]((*PlainEncoder).Int32, int32Bound), nil
 	case dtype.Int16Kind:
-		return widened[int16]((*PlainEncoder).Int32), nil
+		return widened[int16]((*PlainEncoder).Int32, int32Bound), nil
 	case dtype.Uint8Kind:
-		return widened[uint8]((*PlainEncoder).Int32), nil
+		return widened[uint8]((*PlainEncoder).Int32, int32Bound), nil
 	case dtype.Uint16Kind:
-		return widened[uint16]((*PlainEncoder).Int32), nil
+		return widened[uint16]((*PlainEncoder).Int32, int32Bound), nil
 	case dtype.Uint32Kind:
-		return widened[uint32]((*PlainEncoder).Int32), nil
+		return widened[uint32]((*PlainEncoder).Int32, int32Bound), nil
 	case dtype.Uint64Kind:
-		return widened[uint64]((*PlainEncoder).Int64), nil
+		return widened[uint64]((*PlainEncoder).Int64, int64Bound), nil
 
 	case dtype.Int32Kind, dtype.Date32Kind, dtype.Time32Kind:
-		return direct[int32]((*PlainEncoder).Int32), nil
+		return direct[int32]((*PlainEncoder).Int32, int32Bound), nil
 	case dtype.Int64Kind, dtype.Time64Kind, dtype.TimestampKind:
-		return direct[int64]((*PlainEncoder).Int64), nil
+		return direct[int64]((*PlainEncoder).Int64, int64Bound), nil
 	case dtype.Float32Kind:
-		return direct[float32]((*PlainEncoder).Float), nil
+		return direct[float32]((*PlainEncoder).Float, floatBound), nil
 	case dtype.Float64Kind:
-		return direct[float64]((*PlainEncoder).Double), nil
+		return direct[float64]((*PlainEncoder).Double, doubleBound), nil
 
 	case dtype.StringKind, dtype.LargeStringKind, dtype.BinaryKind, dtype.LargeBinaryKind:
 		return blobWriter((*PlainEncoder).ByteArray), nil
@@ -546,9 +585,9 @@ func valueWriter(t dtype.DataType) (*pageWriter, error) {
 
 // direct writes a column already at the width parquet stores it at, which is
 // the case that costs nothing when nothing is missing.
-func direct[T array.Numeric](put func(*PlainEncoder, []T)) *pageWriter {
+func direct[T array.Numeric](put func(*PlainEncoder, []T), bound func(T) []byte) *pageWriter {
 	var buf []T
-	return &pageWriter{encode: func(e *PlainEncoder, a *array.Array, i, j int) {
+	return &pageWriter{tracker: numberBounds(bound), encode: func(e *PlainEncoder, a *array.Array, i, j int) {
 		vals := a.Values[T]()
 		if a.NullCount() == 0 {
 			// The whole run in one call and no copy, which is the path a column
@@ -572,9 +611,9 @@ func direct[T array.Numeric](put func(*PlainEncoder, []T)) *pageWriter {
 //
 // An unsigned value becomes the signed one with the same bits, which is what
 // the annotation on the column says to undo and what the reader does undo.
-func widened[T array.Numeric, W array.Numeric](put func(*PlainEncoder, []W)) *pageWriter {
+func widened[T array.Numeric, W array.Numeric](put func(*PlainEncoder, []W), bound func(T) []byte) *pageWriter {
 	var buf []W
-	return &pageWriter{encode: func(e *PlainEncoder, a *array.Array, i, j int) {
+	return &pageWriter{tracker: numberBounds(bound), encode: func(e *PlainEncoder, a *array.Array, i, j int) {
 		vals := a.Values[T]()
 		buf = slices.Grow(buf[:0], j-i)
 		for k := i; k < j; k++ {
@@ -590,7 +629,7 @@ func widened[T array.Numeric, W array.Numeric](put func(*PlainEncoder, []W)) *pa
 // plain encoder packs from.
 func boolWriter() *pageWriter {
 	var buf []bool
-	return &pageWriter{encode: func(e *PlainEncoder, a *array.Array, i, j int) {
+	return &pageWriter{tracker: boolBounds(), encode: func(e *PlainEncoder, a *array.Array, i, j int) {
 		buf = slices.Grow(buf[:0], j-i)
 		for k := i; k < j; k++ {
 			if a.IsValid(k) {
@@ -608,7 +647,7 @@ func boolWriter() *pageWriter {
 // what this costs is a slice header a value.
 func blobWriter(put func(*PlainEncoder, [][]byte)) *pageWriter {
 	var buf [][]byte
-	return &pageWriter{encode: func(e *PlainEncoder, a *array.Array, i, j int) {
+	return &pageWriter{tracker: bytesBounds(), encode: func(e *PlainEncoder, a *array.Array, i, j int) {
 		buf = slices.Grow(buf[:0], j-i)
 		for k := i; k < j; k++ {
 			if a.IsValid(k) {
