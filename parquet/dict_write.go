@@ -27,6 +27,12 @@ import (
 // instead. The walk costs a hash of every value and it is the price of the
 // decision being right rather than nearly right.
 //
+// The walk keeps the index of every row as it goes, which is what the pages
+// behind the dictionary page are made of. It is worth doing that here rather
+// than looking each value up again a page at a time, because the two are the
+// same lookup and the first one has the answer already: a column of a million
+// strings hashed a million strings twice before this kept them.
+//
 // Two types have no dictionary. A boolean has two values and a page holds one in
 // a bit, so a dictionary of them is larger than the values. A float is left out
 // for a different reason: a dictionary is a map and equality there is not
@@ -55,16 +61,17 @@ const (
 // implementations are the two answers: a number, which is a key on its own, and
 // a run of bytes, which is a key by its contents.
 type dictionary interface {
-	// scan folds rows [i, j) of a in and says whether the dictionary is still
-	// worth having. A dictionary that says no is not asked anything else, and
-	// the chunk it was being built for is written plainly.
-	scan(a *array.Array, i, j int) bool
-
-	// indices appends the index of every value of rows [i, j) that is there,
-	// which is what the data pages of a dictionary encoded chunk hold. The
-	// missing rows are in the levels and nowhere else, the same as the values
-	// of a plain page.
-	indices(a *array.Array, i, j int, out []int32) []int32
+	// scan folds a in, appending to out the index of every row of it, and says
+	// whether the dictionary is still worth having. A dictionary that says no
+	// is not asked anything else, and the chunk it was being built for is
+	// written plainly.
+	//
+	// The indices come back from the scan rather than being looked up again
+	// later because the scan has just had every value in its hand and knows
+	// where each one went. A missing row gets an index of nought, which is a
+	// number the page it lands in never reads: what is missing is in the levels
+	// and nowhere else, the same as in a plain page.
+	scan(a *array.Array, out []int32) ([]int32, bool)
 
 	// write puts the values down the way a plain page puts them, which is what
 	// a dictionary page is.
@@ -96,46 +103,40 @@ type numberDict[T array.Numeric, W array.Numeric] struct {
 	add func(T)
 }
 
-// scan folds rows [i, j) in.
-func (d *numberDict[T, W]) scan(a *array.Array, i, j int) bool {
+// scan folds a in and appends the index of every row of it.
+func (d *numberDict[T, W]) scan(a *array.Array, out []int32) ([]int32, bool) {
 	if d.at == nil {
 		d.at = make(map[T]int32)
 	}
 
+	out = slices.Grow(out, a.Len())
 	vals := a.Values[T]()
-	for k := i; k < j; k++ {
+	for k := range a.Len() {
 		if !a.IsValid(k) {
+			out = append(out, 0)
 			continue
 		}
 
 		v := vals[k]
-		if _, ok := d.at[v]; ok {
-			continue
-		}
-		if len(d.vals) >= maxDictValues {
-			return false
-		}
+		at, ok := d.at[v]
+		if !ok {
+			if len(d.vals) >= maxDictValues {
+				return out, false
+			}
 
-		// A value the dictionary has not got is a value nothing else has seen
-		// either, so this is also where the bounds of the chunk are told about
-		// it. That is the whole of what a dictionary saves the bounds: the
-		// distinct values of a column are compared rather than all of them.
-		d.at[v] = int32(len(d.vals))
-		d.vals = append(d.vals, v)
-		d.add(v)
-	}
-	return true
-}
-
-// indices appends the index of every value of rows [i, j) that is there.
-func (d *numberDict[T, W]) indices(a *array.Array, i, j int, out []int32) []int32 {
-	vals := a.Values[T]()
-	for k := i; k < j; k++ {
-		if a.IsValid(k) {
-			out = append(out, d.at[vals[k]])
+			// A value the dictionary has not got is a value nothing else has
+			// seen either, so this is also where the bounds of the chunk are
+			// told about it. That is the whole of what a dictionary saves the
+			// bounds: the distinct values of a column are compared rather than
+			// all of them.
+			at = int32(len(d.vals))
+			d.at[v] = at
+			d.vals = append(d.vals, v)
+			d.add(v)
 		}
+		out = append(out, at)
 	}
-	return out
+	return out, true
 }
 
 // write puts the values down as a dictionary page.
@@ -175,41 +176,35 @@ type blobDict struct {
 	add func([]byte)
 }
 
-// scan folds rows [i, j) in.
-func (d *blobDict) scan(a *array.Array, i, j int) bool {
+// scan folds a in and appends the index of every row of it.
+func (d *blobDict) scan(a *array.Array, out []int32) ([]int32, bool) {
 	if d.at == nil {
 		d.at = make(map[string]int32)
 	}
 
-	for k := i; k < j; k++ {
+	out = slices.Grow(out, a.Len())
+	for k := range a.Len() {
 		if !a.IsValid(k) {
+			out = append(out, 0)
 			continue
 		}
 
 		v := a.Bytes(k)
-		if _, ok := d.at[string(v)]; ok {
-			continue
-		}
-		if len(d.vals) >= maxDictValues || d.bytes+len(v) > maxDictBytes {
-			return false
-		}
+		at, ok := d.at[string(v)]
+		if !ok {
+			if len(d.vals) >= maxDictValues || d.bytes+len(v) > maxDictBytes {
+				return out, false
+			}
 
-		d.at[string(v)] = int32(len(d.vals))
-		d.vals = append(d.vals, v)
-		d.bytes += len(v)
-		d.add(v)
-	}
-	return true
-}
-
-// indices appends the index of every value of rows [i, j) that is there.
-func (d *blobDict) indices(a *array.Array, i, j int, out []int32) []int32 {
-	for k := i; k < j; k++ {
-		if a.IsValid(k) {
-			out = append(out, d.at[string(a.Bytes(k))])
+			at = int32(len(d.vals))
+			d.at[string(v)] = at
+			d.vals = append(d.vals, v)
+			d.bytes += len(v)
+			d.add(v)
 		}
+		out = append(out, at)
 	}
-	return out
+	return out, true
 }
 
 // write puts the values down as a dictionary page.
