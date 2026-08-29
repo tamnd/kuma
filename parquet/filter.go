@@ -231,7 +231,13 @@ func (r *FileReader) RowGroups(filter ...Predicate) ([]int, error) {
 	if err != nil {
 		return nil, err
 	}
+	return r.rowGroups(tests)
+}
 
+// rowGroups is RowGroups once the filter has been looked over, which is where a
+// read that goes on to filter the rows starts, having wanted the tests for that
+// anyway.
+func (r *FileReader) rowGroups(tests []test) ([]int, error) {
 	out := make([]int, 0, len(r.meta.RowGroups))
 	for i := range r.meta.RowGroups {
 		keep, err := r.keep(i, tests)
@@ -251,8 +257,12 @@ type test struct {
 	pred Predicate
 
 	// column is the place of the column in the file, which is where its chunk
-	// sits in every row group.
+	// sits in every row group, and slot is the place of the same column in a
+	// batch, which is where the rows to compare are. The second is only filled
+	// in by a read that goes on to filter the rows, since the column has to be
+	// projected before there is a place in a batch to name.
 	column int
+	slot   int
 
 	// hash is the value hashed the way a writer building a bloom filter would
 	// have hashed it, and hashed says there is such a hash. There is not for a

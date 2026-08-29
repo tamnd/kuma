@@ -54,6 +54,33 @@ type Options struct {
 	// join and a filter all read through the encoding, and a column of country
 	// codes kept encoded is the size of a column of small integers.
 	Dictionary bool
+
+	// Filter says which rows to keep, as predicates a row has to pass every one
+	// of. Nil reads every row.
+	//
+	// This is the other half of not reading a file and on a file written in any
+	// sort of order it saves more than the projection does. A row group whose
+	// statistics say it holds no matching row is never opened, so a scan of a
+	// year of orders looking for one day reads one row group rather than three
+	// hundred and sixty five, and [FileReader.RowGroups] is that part on its
+	// own.
+	//
+	// The rows of the groups that are read are compared as well, so what comes
+	// back is the rows that pass and not the row groups that might hold them. A
+	// row whose value is missing does not pass, since nothing compares to a
+	// value that is not there, and neither does a row of a group with no
+	// statistics that turned out not to match.
+	//
+	// A predicate may name a column Columns does not. Filtering on a column and
+	// reading it are different questions, and filtering on a timestamp that is
+	// not wanted in the result is the ordinary case, so such a column is read to
+	// compare the rows against and left out of the table.
+	//
+	//	t, err := parquet.Read(r, size, &parquet.Options{
+	//		Columns: []string{"id", "price"},
+	//		Filter:  []parquet.Predicate{parquet.Where("day", kernel.OpEq, int64(19000))},
+	//	})
+	Filter []Predicate
 }
 
 // Read reads a whole parquet file.
@@ -66,7 +93,10 @@ type Options struct {
 //
 // Each column comes back in as many chunks as there were row groups holding
 // rows, which is the chunking the file was written with and the chunking every
-// kernel here is happy to read. A row group of no rows contributes nothing.
+// kernel here is happy to read. A row group of no rows contributes nothing, and
+// neither does one whose rows [Options.Filter] all rejected, so a filtered read
+// of a file of a hundred row groups comes back in as many chunks as held a
+// matching row.
 func Read(r io.ReaderAt, size int64, opts *Options) (*array.Table, error) {
 	f, err := NewFileReader(r, size)
 	if err != nil {
@@ -80,7 +110,7 @@ func Read(r io.ReaderAt, size int64, opts *Options) (*array.Table, error) {
 			return nil, err
 		}
 	}
-	return f.table(opts.Dictionary)
+	return f.table(opts)
 }
 
 // ReadFile reads the file at path. It is [Read] over an open file, with the
@@ -114,36 +144,144 @@ func readOpen(f *os.File, opts *Options) (*array.Table, error) {
 	return Read(f, info.Size(), opts)
 }
 
-// table reads every row group and puts the chunks of each column together.
-func (r *FileReader) table(keep bool) (*array.Table, error) {
-	fields := slices.Clone(r.schema.Fields)
-	chunks := make([][]*array.Array, len(fields))
-	for i := range r.NumRowGroups() {
-		b, err := r.RowGroup(i)
-		if err != nil {
-			return nil, err
-		}
-
-		// A row group of no rows holds a chunk of nothing per column, and what
-		// it would say about the type of that column is nothing either, so it
-		// is dropped here rather than argued with below.
-		if b.Length == 0 {
-			continue
-		}
-		for j, a := range b.Columns {
-			chunks[j] = append(chunks[j], a)
-		}
+// table reads the row groups the filter cannot rule out, keeps the rows of them
+// that pass it, and puts the chunks of each column together.
+func (r *FileReader) table(opts *Options) (*array.Table, error) {
+	tests, err := r.tests(opts.Filter)
+	if err != nil {
+		return nil, err
+	}
+	groups, err := r.rowGroups(tests)
+	if err != nil {
+		return nil, err
 	}
 
-	cols := make([]*array.Chunked, len(fields))
+	// The filter may want a column the caller does not, and that column has to
+	// be read to compare the rows against, so it goes on the end of the
+	// projection and the table is cut back to what was asked for. want is where
+	// that cut falls.
+	want := len(r.take)
+	r.readAlso(tests)
+
+	chunks, err := r.chunksOf(groups, tests, want)
+	if err != nil {
+		return nil, err
+	}
+
+	fields := slices.Clone(r.schema.Fields[:want])
+	cols := make([]*array.Chunked, want)
 	for j := range fields {
-		cols[j] = column(fields[j], chunks[j], keep)
+		cols[j] = column(fields[j], chunks[j], opts.Dictionary)
 		fields[j].Type = cols[j].DType()
 	}
 	return &array.Table{
 		Schema:  dtype.Schema{Fields: fields, Metadata: r.schema.Metadata},
 		Columns: cols,
 	}, nil
+}
+
+// readAlso adds whatever columns the filter needs to the projection and says
+// where each test will find its column in a batch.
+//
+// Filtering on a column and reading it are different questions, so a predicate
+// may name a column the projection does not and that column still has to be read
+// to compare the rows against. A predicate on a column that is already projected
+// is compared against the column that is already being read rather than reading
+// it a second time, and so are two predicates on the same column.
+func (r *FileReader) readAlso(tests []test) {
+	if len(tests) == 0 {
+		return
+	}
+
+	take := slices.Clone(r.take)
+	for i := range tests {
+		k := slices.Index(take, tests[i].column)
+		if k < 0 {
+			k = len(take)
+			take = append(take, tests[i].column)
+		}
+		tests[i].slot = k
+	}
+	r.project(take)
+}
+
+// chunksOf reads the given row groups and returns the chunks of the first want
+// columns, with the rows the tests reject left out.
+func (r *FileReader) chunksOf(groups []int, tests []test, want int) ([][]*array.Array, error) {
+	chunks := make([][]*array.Array, want)
+	for _, i := range groups {
+		b, err := r.RowGroup(i)
+		if err != nil {
+			return nil, err
+		}
+		if len(tests) > 0 {
+			if b, err = pick(b, tests, want); err != nil {
+				return nil, err
+			}
+		}
+
+		// A row group of no rows holds a chunk of nothing per column, and what
+		// it would say about the type of that column is nothing either, so it
+		// is dropped here rather than argued with below. So is one the filter
+		// emptied, which is the ordinary way for a group the statistics kept to
+		// turn out to hold nothing.
+		if b.Length == 0 {
+			continue
+		}
+		for j := range want {
+			chunks[j] = append(chunks[j], b.Columns[j])
+		}
+	}
+	return chunks, nil
+}
+
+// pick returns the first want columns of a batch holding the rows that pass
+// every test, which is at least one.
+//
+// The mask is worked out once and turned into positions once, which is what
+// [kernel.Indices] is for, and only the columns going into the table are
+// gathered: the ones the filter wanted have been read by then.
+func pick(b Batch, tests []test, want int) (Batch, error) {
+	var mask *array.Chunked
+	for i := range tests {
+		t := &tests[i]
+		a := b.Columns[t.slot]
+
+		m, err := kernel.Compare(chunked(a.DType(), a), chunked(t.pred.Value.DType(), t.pred.Value), t.pred.Op)
+		if err != nil {
+			return Batch{}, fmt.Errorf("parquet: filtering on %s: %w", t.pred.Column, err)
+		}
+		if mask == nil {
+			mask = m
+			continue
+		}
+		mask = and(mask, m)
+	}
+
+	// Every row passed, which is what a filter on a column the file is sorted
+	// by does to most of the groups it keeps, so the arrays the row group was
+	// read into are the answer and nothing is gathered.
+	idx := kernel.Indices(mask)
+	if len(idx) == b.Length {
+		return Batch{Length: b.Length, Columns: b.Columns[:want]}, nil
+	}
+
+	out := Batch{Length: len(idx), Columns: make([]*array.Array, want)}
+	for j := range want {
+		a := b.Columns[j]
+		out.Columns[j] = kernel.Take(chunked(a.DType(), a), idx).Chunk(0)
+	}
+	return out, nil
+}
+
+// and joins two masks, where both of them came out of [kernel.Compare] and so
+// are the conditions it wants.
+func and(a, b *array.Chunked) *array.Chunked {
+	c, err := kernel.And(a, b)
+	if err != nil {
+		panic("parquet: " + err.Error())
+	}
+	return c
 }
 
 // column puts the chunks of one column together as one type.

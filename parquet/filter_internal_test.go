@@ -19,12 +19,13 @@ func leaf(physical Type, meant dtype.DataType) Column {
 	return Column{Path: []string{"c"}, Element: SchemaElement{Type: physical}, Type: meant}
 }
 
-// openReader opens one of the files in testdata, which the tests outside the
-// package have a helper of their own for.
-func openReader(t *testing.T, name string) *FileReader {
+// openStats opens the file in testdata that carries statistics, which is the
+// one the tests in here filter on. The tests outside the package read the rest
+// of them and have a helper of their own for it.
+func openStats(t *testing.T) *FileReader {
 	t.Helper()
 
-	b, err := os.ReadFile(filepath.Join("testdata", name))
+	b, err := os.ReadFile(filepath.Join("testdata", "stats.parquet"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +222,7 @@ func TestBloomHashNone(t *testing.T) {
 // and a caller walking the groups itself arrives the other way round, and this
 // is the path that error takes back out.
 func TestKeepUnchecked(t *testing.T) {
-	r := openReader(t, "stats.parquet")
+	r := openStats(t)
 	bad := []test{{pred: Predicate{Column: "n", Op: kernel.OpEq}, column: 0}}
 
 	_, err := r.keep(0, bad)
