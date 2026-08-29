@@ -309,3 +309,53 @@ func render(pkgName, typeName string, fields []field) ([]byte, error) {
 	}
 	return src, nil
 }
+
+// renderStruct writes the struct for the columns of a data file.
+//
+// There is no generated header on this one and it is not rewritten by a later
+// run, because it is a starting point rather than an output. Renaming a field,
+// dropping a column the program does not want and adding a method are all
+// things to do to it, and the go:generate line at the top is what keeps the
+// handles in step afterwards.
+func renderStruct(pkgName, typeName, source string, fields []structField) ([]byte, error) {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "package %s\n\n", pkgName)
+	if needsTime(fields) {
+		sb.WriteString("import \"time\"\n\n")
+	}
+
+	fmt.Fprintf(&sb, "// %s is a row of %s.\n", typeName, source)
+	sb.WriteString("//\n")
+	sb.WriteString("// The fields came from the columns of that file and the types are the ones a\n")
+	sb.WriteString("// bind reads out of them. Edit it: drop the columns this program does not\n")
+	sb.WriteString("// want, rename a field, and run go generate to write the handles again.\n")
+
+	fmt.Fprintf(&sb, "//\n//go:generate kumagen -type %s\n", typeName)
+	fmt.Fprintf(&sb, "type %s struct {\n", typeName)
+	for _, f := range fields {
+		fmt.Fprintf(&sb, "%s %s", f.name, f.typ)
+		if f.tag {
+			fmt.Fprintf(&sb, " `kuma:%q`", f.column)
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString("}\n")
+
+	src, err := format.Source([]byte(sb.String()))
+	if err != nil {
+		return nil, fmt.Errorf("kumagen wrote a file that does not parse, "+
+			"which is a bug in kumagen: %w", err)
+	}
+	return src, nil
+}
+
+// needsTime reports whether any field is a time.Time, which is the only reason
+// the struct file imports anything.
+func needsTime(fields []structField) bool {
+	for _, f := range fields {
+		if f.typ == "time.Time" {
+			return true
+		}
+	}
+	return false
+}

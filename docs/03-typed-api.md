@@ -130,15 +130,23 @@ The name in the Go struct tag is checked against the file schema when you scan. 
 
 The name in your query is checked by the compiler, because it is a field selector on a generated struct rather than a string.
 
-The struct itself can be checked against a real file at generate time, which closes the loop. `kumagen` can read the schema out of a Parquet file, a CSV sample, an Arrow IPC file, or a SQL table, and write the Go struct for you:
+The struct itself comes out of a real file when the data came first, which closes the loop. `kumagen -from` reads the schema and writes the Go struct for you:
 
 ```
-kumagen -parquet trades/2026-08-01.parquet -type Trade -o trade_kuma.go
-kumagen -csv sample.csv -type Trade -o trade_kuma.go
-kumagen -sql "postgres://..." -table trades -type Trade -o trade_kuma.go
+kumagen -from trades/2026-08-01.parquet -type Trade
+kumagen -from sample.csv -type Trade
+kumagen -from batch.arrow -type Trade
 ```
+
+One flag rather than one per format, because the extension already says what the file is. A `.parquet` or a `.arrow` file keeps its schema in a footer, so only the end of the file is read whatever its size. A `.csv`, `.tsv` or `.ndjson` file has no schema in it at all, so the first thousand lines are read and the types are worked out from those, which `-lines` changes.
+
+The types are the ones `Bind` reads out of those columns and no others, so an int32 column is an int32 field, and a column whose name is not the snake case of its field is named in a `kuma` tag. What comes out is `trade.go` with a `go:generate` line above the struct, so the handles follow from a `go generate`.
+
+That file is a starting point rather than an output. Drop the columns the program has no use for, rename what reads badly, add methods. Nothing rewrites it, and a second `kumagen -from` says the file is already there rather than throwing the edits away, unless `-f` says to.
 
 Now the Go struct is derived from the data rather than typed out by hand, and the only way to get a name wrong is for the data itself to change. Running `kumagen` in CI against a reference file turns a schema change upstream into a failing build, which is roughly a thousand times better than finding out in production.
+
+Reading a schema out of a SQL table is not written yet.
 
 ## The generator
 

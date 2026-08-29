@@ -117,7 +117,7 @@ func TestRunErrors(t *testing.T) {
 		},
 		{
 			name: "a flag that is not a flag",
-			args: []string{"-package", "trades"},
+			args: []string{"-columns", "trades"},
 			says: "not defined",
 		},
 		{
