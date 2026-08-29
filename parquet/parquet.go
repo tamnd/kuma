@@ -46,6 +46,15 @@
 // years and a timestamp in twelve bytes with no zone and no unit is a mistake
 // the format has replaced twice over.
 //
+// RLEEncoder is the levels and the dictionary indices written back out, and
+// picking the runs is the whole of what it does: the same values are a legal
+// file written as one run or as fifty, so what makes an encoder of this worth
+// anything is that it writes the small one. A value that repeats eight times or
+// more becomes a repeat and everything else is packed in groups of eight, which
+// is what makes the levels of a column with no nulls three bytes however many
+// rows it has. There is nothing that writes the encoding this one replaced,
+// since that would be writing for a reader that stopped existing years ago.
+//
 // ColumnReader is where the two halves meet. A page keeps its levels and its
 // values apart and only the rows that have a value are written down, so putting
 // a column back together means walking the two together and dropping the values
