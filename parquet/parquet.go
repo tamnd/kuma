@@ -55,6 +55,17 @@
 // rows it has. There is nothing that writes the encoding this one replaced,
 // since that would be writing for a reader that stopped existing years ago.
 //
+// WriteMetadata is the footer, which is what turns encoded pages into a file.
+// It writes the Thrift structure ReadMetadata reads, then how long it is, then
+// the magic, which is the last of every parquet file. The field numbers are the
+// whole of what makes that work: a footer written with the right numbers is read
+// by anything and one written with the wrong numbers is read by nothing, so the
+// reading and the writing of every structure are kept next to each other and
+// every footer in testdata is round tripped through both. What a writer decides
+// and a reader never does is which fields to leave out, since nearly everything
+// in the format is optional and a field that is absent reads back as the absent
+// value of its type.
+//
 // ColumnReader is where the two halves meet. A page keeps its levels and its
 // values apart and only the rows that have a value are written down, so putting
 // a column back together means walking the two together and dropping the values
