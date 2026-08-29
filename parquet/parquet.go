@@ -100,9 +100,20 @@
 // length in front of a page for a reader to check it against. So there is one
 // counter of bytes written and every offset in the footer is a copy of it,
 // rather than the same number arrived at a second way by adding up sizes. What
-// comes out is the plain file, with no compression, no dictionary pages and no
-// statistics in it, which is the largest file anything will open and the floor
-// the rest is built on. WriteFile is the same over a named file.
+// comes out is a plain file, with no compression and no dictionary pages in it,
+// which is the largest file anything will open and the floor the rest is built
+// on. WriteFile is the same over a named file.
+//
+// What it does write is the statistics, and they are what turns a file into one
+// a scan can skip most of. Every column chunk goes down with the smallest and
+// largest value in it and a count of how many of its values are missing, and the
+// footer says that every column compares the way the format defines for its
+// type, since a file that leaves that out is one whose bounds a reader is right
+// to ignore on half the types in it. The bounds are values out of the chunk
+// rather than truncations of them, and a NaN is left out of them, a chunk
+// bounded by one being a chunk that nothing can be filtered out of. So a file
+// this writes is one the row group skipping below works on, and a filter for a
+// value that lives in one row group of fifty reads the footer and one group.
 //
 // ColumnReader is where the two halves meet. A page keeps its levels and its
 // values apart and only the rows that have a value are written down, so putting
