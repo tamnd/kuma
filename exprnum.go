@@ -3,6 +3,7 @@ package kuma
 import (
 	"github.com/tamnd/kuma/dtype"
 	"github.com/tamnd/kuma/kernel"
+	"github.com/tamnd/kuma/plan"
 )
 
 // F64Value is a float64 valued piece of an expression, which is an [F64Col] or
@@ -55,11 +56,11 @@ type I64Expr[S any] struct{ i64ops[S] }
 // NewF64Col returns a handle on the float64 column called name in a frame with
 // schema S. It is what kumagen writes and what a hand written schema variable
 // calls.
-func NewF64Col[S any](name string) F64Col[S] { return F64Col[S]{f64ops[S]{colNode(name)}} }
+func NewF64Col[S any](name string) F64Col[S] { return F64Col[S]{f64ops[S]{plan.Col(name)}} }
 
 // NewI64Col returns a handle on the int64 column called name in a frame with
 // schema S.
-func NewI64Col[S any](name string) I64Col[S] { return I64Col[S]{i64ops[S]{colNode(name)}} }
+func NewI64Col[S any](name string) I64Col[S] { return I64Col[S]{i64ops[S]{plan.Col(name)}} }
 
 // F64 returns a handle on a float64 column of a frame with no schema behind it,
 // which is the light version of [NewF64Col].
@@ -77,21 +78,21 @@ func F64(name string) F64Col[Dynamic] { return NewF64Col[Dynamic](name) }
 func I64(name string) I64Col[Dynamic] { return NewI64Col[Dynamic](name) }
 
 // Name returns the column the handle names.
-func (c F64Col[S]) Name() string { return c.n.name }
+func (c F64Col[S]) Name() string { return c.n.Name() }
 
 // Name returns the column the handle names.
-func (c I64Col[S]) Name() string { return c.n.name }
+func (c I64Col[S]) Name() string { return c.n.Name() }
 
 // Series returns the column as a Series[float64], reporting an error if the
 // frame has no such column or holds something else there.
 func (c F64Col[S]) Series(f *Frame[S]) (Series[float64], error) {
-	return f.Series[float64](c.n.name)
+	return f.Series[float64](c.n.Name())
 }
 
 // Series returns the column as a Series[int64], reporting an error if the frame
 // has no such column or holds something else there.
 func (c I64Col[S]) Series(f *Frame[S]) (Series[int64], error) {
-	return f.Series[int64](c.n.name)
+	return f.Series[int64](c.n.Name())
 }
 
 // f64ops is the method set of everything float64 valued.
@@ -102,32 +103,32 @@ func (c I64Col[S]) Series(f *Frame[S]) (Series[int64], error) {
 // than by having them written twice, which is a smaller thing than it looks:
 // two copies of twenty methods would be two chances for the two of them to
 // disagree.
-type f64ops[S any] struct{ n *node }
+type f64ops[S any] struct{ n *plan.Expr }
 
-func (o f64ops[S]) expr() *node   { return o.n }
-func (o f64ops[S]) float64Value() {}
+func (o f64ops[S]) expr() *plan.Expr { return o.n }
+func (o f64ops[S]) float64Value()    {}
 
 // String returns the expression as it would be written.
 func (o f64ops[S]) String() string { return o.n.String() }
 
 // Eq returns whether the value equals v. A missing value equals nothing, not
 // even another missing value, so it gives a missing answer.
-func (o f64ops[S]) Eq(v float64) BoolExpr[S] { return o.cmp(kernel.OpEq, litNode(v)) }
+func (o f64ops[S]) Eq(v float64) BoolExpr[S] { return o.cmp(kernel.OpEq, plan.Lit(v)) }
 
 // Ne returns whether the value differs from v.
-func (o f64ops[S]) Ne(v float64) BoolExpr[S] { return o.cmp(kernel.OpNe, litNode(v)) }
+func (o f64ops[S]) Ne(v float64) BoolExpr[S] { return o.cmp(kernel.OpNe, plan.Lit(v)) }
 
 // Lt returns whether the value is less than v.
-func (o f64ops[S]) Lt(v float64) BoolExpr[S] { return o.cmp(kernel.OpLt, litNode(v)) }
+func (o f64ops[S]) Lt(v float64) BoolExpr[S] { return o.cmp(kernel.OpLt, plan.Lit(v)) }
 
 // Le returns whether the value is less than or equal to v.
-func (o f64ops[S]) Le(v float64) BoolExpr[S] { return o.cmp(kernel.OpLe, litNode(v)) }
+func (o f64ops[S]) Le(v float64) BoolExpr[S] { return o.cmp(kernel.OpLe, plan.Lit(v)) }
 
 // Gt returns whether the value is greater than v.
-func (o f64ops[S]) Gt(v float64) BoolExpr[S] { return o.cmp(kernel.OpGt, litNode(v)) }
+func (o f64ops[S]) Gt(v float64) BoolExpr[S] { return o.cmp(kernel.OpGt, plan.Lit(v)) }
 
 // Ge returns whether the value is greater than or equal to v.
-func (o f64ops[S]) Ge(v float64) BoolExpr[S] { return o.cmp(kernel.OpGe, litNode(v)) }
+func (o f64ops[S]) Ge(v float64) BoolExpr[S] { return o.cmp(kernel.OpGe, plan.Lit(v)) }
 
 // EqExpr returns whether the value equals the value of x in the same row.
 func (o f64ops[S]) EqExpr(x F64Value[S]) BoolExpr[S] { return o.cmp(kernel.OpEq, x.expr()) }
@@ -149,20 +150,20 @@ func (o f64ops[S]) GtExpr(x F64Value[S]) BoolExpr[S] { return o.cmp(kernel.OpGt,
 func (o f64ops[S]) GeExpr(x F64Value[S]) BoolExpr[S] { return o.cmp(kernel.OpGe, x.expr()) }
 
 // Add returns the value plus v.
-func (o f64ops[S]) Add(v float64) F64Expr[S] { return o.arith(kernel.OpAdd, litNode(v)) }
+func (o f64ops[S]) Add(v float64) F64Expr[S] { return o.arith(kernel.OpAdd, plan.Lit(v)) }
 
 // Sub returns the value minus v.
-func (o f64ops[S]) Sub(v float64) F64Expr[S] { return o.arith(kernel.OpSub, litNode(v)) }
+func (o f64ops[S]) Sub(v float64) F64Expr[S] { return o.arith(kernel.OpSub, plan.Lit(v)) }
 
 // Mul returns the value times v.
-func (o f64ops[S]) Mul(v float64) F64Expr[S] { return o.arith(kernel.OpMul, litNode(v)) }
+func (o f64ops[S]) Mul(v float64) F64Expr[S] { return o.arith(kernel.OpMul, plan.Lit(v)) }
 
 // Div returns the value divided by v. Dividing by zero gives an infinity or a
 // NaN, which is what a float64 division does.
-func (o f64ops[S]) Div(v float64) F64Expr[S] { return o.arith(kernel.OpDiv, litNode(v)) }
+func (o f64ops[S]) Div(v float64) F64Expr[S] { return o.arith(kernel.OpDiv, plan.Lit(v)) }
 
 // Mod returns the remainder of the value divided by v, which is math.Mod.
-func (o f64ops[S]) Mod(v float64) F64Expr[S] { return o.arith(kernel.OpMod, litNode(v)) }
+func (o f64ops[S]) Mod(v float64) F64Expr[S] { return o.arith(kernel.OpMod, plan.Lit(v)) }
 
 // AddExpr returns the value plus the value of x in the same row.
 func (o f64ops[S]) AddExpr(x F64Value[S]) F64Expr[S] { return o.arith(kernel.OpAdd, x.expr()) }
@@ -185,20 +186,20 @@ func (o f64ops[S]) ModExpr(x F64Value[S]) F64Expr[S] { return o.arith(kernel.OpM
 // The fraction is thrown away, the way a Go conversion does it, so 3.9 becomes
 // 3. A value too large for an int64, and NaN or an infinity, fit nowhere and
 // are an error naming the row. [kernel.Cast] has the rest of the rule.
-func (o f64ops[S]) AsI64() I64Expr[S] { return i64Of[S](castNode(dtype.Int64, o.n)) }
+func (o f64ops[S]) AsI64() I64Expr[S] { return i64Of[S](plan.Cast(dtype.Int64, o.n)) }
 
 // IsNull returns whether the value is missing.
-func (o f64ops[S]) IsNull() BoolExpr[S] { return boolOf[S](unaryNode(kindIsNull, o.n)) }
+func (o f64ops[S]) IsNull() BoolExpr[S] { return boolOf[S](plan.IsNull(o.n)) }
 
 // IsNotNull returns whether the value is there.
-func (o f64ops[S]) IsNotNull() BoolExpr[S] { return boolOf[S](unaryNode(kindIsNotNull, o.n)) }
+func (o f64ops[S]) IsNotNull() BoolExpr[S] { return boolOf[S](plan.IsNotNull(o.n)) }
 
-func (o f64ops[S]) cmp(op kernel.CompareOp, r *node) BoolExpr[S] {
-	return boolOf[S](cmpNode(op, o.n, r))
+func (o f64ops[S]) cmp(op kernel.CompareOp, r *plan.Expr) BoolExpr[S] {
+	return boolOf[S](plan.Compare(op, o.n, r))
 }
 
-func (o f64ops[S]) arith(op kernel.ArithOp, r *node) F64Expr[S] {
-	return f64Of[S](ariNode(op, o.n, r))
+func (o f64ops[S]) arith(op kernel.ArithOp, r *plan.Expr) F64Expr[S] {
+	return f64Of[S](plan.Arith(op, o.n, r))
 }
 
 // i64ops is the method set of everything int64 valued, which is [f64ops] over
@@ -207,31 +208,31 @@ func (o f64ops[S]) arith(op kernel.ArithOp, r *node) F64Expr[S] {
 // Integer arithmetic here is Go's: it wraps rather than widening, division
 // truncates toward zero so that 7 / 2 is 3, and dividing by zero is an error
 // naming the row rather than an infinity. [kernel.Arith] says why.
-type i64ops[S any] struct{ n *node }
+type i64ops[S any] struct{ n *plan.Expr }
 
-func (o i64ops[S]) expr() *node { return o.n }
-func (o i64ops[S]) int64Value() {}
+func (o i64ops[S]) expr() *plan.Expr { return o.n }
+func (o i64ops[S]) int64Value()      {}
 
 // String returns the expression as it would be written.
 func (o i64ops[S]) String() string { return o.n.String() }
 
 // Eq returns whether the value equals v.
-func (o i64ops[S]) Eq(v int64) BoolExpr[S] { return o.cmp(kernel.OpEq, litNode(v)) }
+func (o i64ops[S]) Eq(v int64) BoolExpr[S] { return o.cmp(kernel.OpEq, plan.Lit(v)) }
 
 // Ne returns whether the value differs from v.
-func (o i64ops[S]) Ne(v int64) BoolExpr[S] { return o.cmp(kernel.OpNe, litNode(v)) }
+func (o i64ops[S]) Ne(v int64) BoolExpr[S] { return o.cmp(kernel.OpNe, plan.Lit(v)) }
 
 // Lt returns whether the value is less than v.
-func (o i64ops[S]) Lt(v int64) BoolExpr[S] { return o.cmp(kernel.OpLt, litNode(v)) }
+func (o i64ops[S]) Lt(v int64) BoolExpr[S] { return o.cmp(kernel.OpLt, plan.Lit(v)) }
 
 // Le returns whether the value is less than or equal to v.
-func (o i64ops[S]) Le(v int64) BoolExpr[S] { return o.cmp(kernel.OpLe, litNode(v)) }
+func (o i64ops[S]) Le(v int64) BoolExpr[S] { return o.cmp(kernel.OpLe, plan.Lit(v)) }
 
 // Gt returns whether the value is greater than v.
-func (o i64ops[S]) Gt(v int64) BoolExpr[S] { return o.cmp(kernel.OpGt, litNode(v)) }
+func (o i64ops[S]) Gt(v int64) BoolExpr[S] { return o.cmp(kernel.OpGt, plan.Lit(v)) }
 
 // Ge returns whether the value is greater than or equal to v.
-func (o i64ops[S]) Ge(v int64) BoolExpr[S] { return o.cmp(kernel.OpGe, litNode(v)) }
+func (o i64ops[S]) Ge(v int64) BoolExpr[S] { return o.cmp(kernel.OpGe, plan.Lit(v)) }
 
 // EqExpr returns whether the value equals the value of x in the same row.
 func (o i64ops[S]) EqExpr(x I64Value[S]) BoolExpr[S] { return o.cmp(kernel.OpEq, x.expr()) }
@@ -253,20 +254,20 @@ func (o i64ops[S]) GtExpr(x I64Value[S]) BoolExpr[S] { return o.cmp(kernel.OpGt,
 func (o i64ops[S]) GeExpr(x I64Value[S]) BoolExpr[S] { return o.cmp(kernel.OpGe, x.expr()) }
 
 // Add returns the value plus v, wrapping the way Go wraps.
-func (o i64ops[S]) Add(v int64) I64Expr[S] { return o.arith(kernel.OpAdd, litNode(v)) }
+func (o i64ops[S]) Add(v int64) I64Expr[S] { return o.arith(kernel.OpAdd, plan.Lit(v)) }
 
 // Sub returns the value minus v.
-func (o i64ops[S]) Sub(v int64) I64Expr[S] { return o.arith(kernel.OpSub, litNode(v)) }
+func (o i64ops[S]) Sub(v int64) I64Expr[S] { return o.arith(kernel.OpSub, plan.Lit(v)) }
 
 // Mul returns the value times v.
-func (o i64ops[S]) Mul(v int64) I64Expr[S] { return o.arith(kernel.OpMul, litNode(v)) }
+func (o i64ops[S]) Mul(v int64) I64Expr[S] { return o.arith(kernel.OpMul, plan.Lit(v)) }
 
 // Div returns the value divided by v, truncated toward zero. Dividing by zero
 // is an error naming the row.
-func (o i64ops[S]) Div(v int64) I64Expr[S] { return o.arith(kernel.OpDiv, litNode(v)) }
+func (o i64ops[S]) Div(v int64) I64Expr[S] { return o.arith(kernel.OpDiv, plan.Lit(v)) }
 
 // Mod returns the remainder of the value divided by v.
-func (o i64ops[S]) Mod(v int64) I64Expr[S] { return o.arith(kernel.OpMod, litNode(v)) }
+func (o i64ops[S]) Mod(v int64) I64Expr[S] { return o.arith(kernel.OpMod, plan.Lit(v)) }
 
 // AddExpr returns the value plus the value of x in the same row.
 func (o i64ops[S]) AddExpr(x I64Value[S]) I64Expr[S] { return o.arith(kernel.OpAdd, x.expr()) }
@@ -287,22 +288,22 @@ func (o i64ops[S]) ModExpr(x I64Value[S]) I64Expr[S] { return o.arith(kernel.OpM
 // AsF64 returns the value as a float64, which is how an int64 column is used
 // with a float64 one. Every int64 value has a float64 nearest to it and the two
 // are the same number up to 2^53, above which the conversion rounds.
-func (o i64ops[S]) AsF64() F64Expr[S] { return f64Of[S](castNode(dtype.Float64, o.n)) }
+func (o i64ops[S]) AsF64() F64Expr[S] { return f64Of[S](plan.Cast(dtype.Float64, o.n)) }
 
 // IsNull returns whether the value is missing.
-func (o i64ops[S]) IsNull() BoolExpr[S] { return boolOf[S](unaryNode(kindIsNull, o.n)) }
+func (o i64ops[S]) IsNull() BoolExpr[S] { return boolOf[S](plan.IsNull(o.n)) }
 
 // IsNotNull returns whether the value is there.
-func (o i64ops[S]) IsNotNull() BoolExpr[S] { return boolOf[S](unaryNode(kindIsNotNull, o.n)) }
+func (o i64ops[S]) IsNotNull() BoolExpr[S] { return boolOf[S](plan.IsNotNull(o.n)) }
 
-func (o i64ops[S]) cmp(op kernel.CompareOp, r *node) BoolExpr[S] {
-	return boolOf[S](cmpNode(op, o.n, r))
+func (o i64ops[S]) cmp(op kernel.CompareOp, r *plan.Expr) BoolExpr[S] {
+	return boolOf[S](plan.Compare(op, o.n, r))
 }
 
-func (o i64ops[S]) arith(op kernel.ArithOp, r *node) I64Expr[S] {
-	return i64Of[S](ariNode(op, o.n, r))
+func (o i64ops[S]) arith(op kernel.ArithOp, r *plan.Expr) I64Expr[S] {
+	return i64Of[S](plan.Arith(op, o.n, r))
 }
 
-func f64Of[S any](n *node) F64Expr[S] { return F64Expr[S]{f64ops[S]{n}} }
+func f64Of[S any](n *plan.Expr) F64Expr[S] { return F64Expr[S]{f64ops[S]{n}} }
 
-func i64Of[S any](n *node) I64Expr[S] { return I64Expr[S]{i64ops[S]{n}} }
+func i64Of[S any](n *plan.Expr) I64Expr[S] { return I64Expr[S]{i64ops[S]{n}} }

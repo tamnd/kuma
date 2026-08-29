@@ -76,10 +76,10 @@ Null
 An expression is a wrapper around an immutable node pointer.
 
 ```go
-type Expr struct{ n *node }
+type F64Col[S any] struct{ n *plan.Expr }
 ```
 
-It is a concrete struct rather than an interface, and it has to be, because generic methods are only allowed on concrete types. That single constraint from Go 1.27 shapes this entire layer.
+The node lives in `plan` rather than in the root package because the optimizer has to rewrite expressions and the optimizer lives there. What the root package adds is the schema. A handle is a concrete struct rather than an interface, and it has to be, because generic methods are only allowed on concrete types. That single constraint from Go 1.27 shapes this entire layer.
 
 The node kinds are `Column`, `Literal`, `Unary`, `Binary`, `Function`, `Cast`, `Ternary`, `Agg`, `Window`, `Sort`, `Alias`, `Wildcard`, `Exclude` and `DTypeSelector`.
 
