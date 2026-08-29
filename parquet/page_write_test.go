@@ -367,6 +367,31 @@ func TestWritePageError(t *testing.T) {
 	if _, err := parquet.WritePage(refuser{}, &h, body); !errors.Is(err, os.ErrClosed) {
 		t.Errorf("WritePage to a closed writer = %v, want the writer's own error", err)
 	}
+
+	// The header and the body are two writes, so the second of them is a way to
+	// fail that the first one hides. What comes back is how much did go out,
+	// which is the header, because a caller that has to work out where it got to
+	// has nothing else to go on.
+	w := &oneWrite{}
+	n, err := parquet.WritePage(w, &h, body)
+	if !errors.Is(err, os.ErrClosed) {
+		t.Errorf("WritePage whose body would not go out = %v, want the writer's own error", err)
+	}
+	if n != int64(w.n) || n == 0 {
+		t.Errorf("WritePage wrote %d bytes and says %d", w.n, n)
+	}
+}
+
+// oneWrite takes the first thing it is written and refuses everything after it,
+// which is a page whose header went out and whose body did not.
+type oneWrite struct{ n int }
+
+func (o *oneWrite) Write(p []byte) (int, error) {
+	if o.n > 0 {
+		return 0, os.ErrClosed
+	}
+	o.n = len(p)
+	return o.n, nil
 }
 
 // BenchmarkWritePage writes the pages of one chunk of a real file, which is what

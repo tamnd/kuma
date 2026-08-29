@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/bits"
 	"os"
+	"slices"
 
 	"github.com/tamnd/kuma/array"
 	"github.com/tamnd/kuma/dtype"
@@ -392,7 +393,7 @@ func (tw *tableWriter) page(c *Column, v *pageWriter, a *array.Array, i, j int) 
 // runs are what makes this nearly free: a column with nothing missing is one
 // repeat and comes to three bytes however many rows it has.
 func (tw *tableWriter) definitions(c *Column, a *array.Array, i, j int) []byte {
-	tw.defs = tw.defs[:0]
+	tw.defs = slices.Grow(tw.defs[:0], j-i)
 	for k := i; k < j; k++ {
 		level := int32(c.MaxDefinition)
 		if a.IsNull(k) {
@@ -548,7 +549,7 @@ func direct[T array.Numeric](put func(*PlainEncoder, []T)) *pageWriter {
 			return
 		}
 
-		buf = buf[:0]
+		buf = slices.Grow(buf[:0], j-i)
 		for k := i; k < j; k++ {
 			if a.IsValid(k) {
 				buf = append(buf, vals[k])
@@ -567,7 +568,7 @@ func widened[T array.Numeric, W array.Numeric](put func(*PlainEncoder, []W)) *pa
 	var buf []W
 	return &pageWriter{encode: func(e *PlainEncoder, a *array.Array, i, j int) {
 		vals := a.Values[T]()
-		buf = buf[:0]
+		buf = slices.Grow(buf[:0], j-i)
 		for k := i; k < j; k++ {
 			if a.IsValid(k) {
 				buf = append(buf, W(vals[k]))
@@ -582,7 +583,7 @@ func widened[T array.Numeric, W array.Numeric](put func(*PlainEncoder, []W)) *pa
 func boolWriter() *pageWriter {
 	var buf []bool
 	return &pageWriter{encode: func(e *PlainEncoder, a *array.Array, i, j int) {
-		buf = buf[:0]
+		buf = slices.Grow(buf[:0], j-i)
 		for k := i; k < j; k++ {
 			if a.IsValid(k) {
 				buf = append(buf, a.Bool(k))
@@ -600,7 +601,7 @@ func boolWriter() *pageWriter {
 func blobWriter(put func(*PlainEncoder, [][]byte)) *pageWriter {
 	var buf [][]byte
 	return &pageWriter{encode: func(e *PlainEncoder, a *array.Array, i, j int) {
-		buf = buf[:0]
+		buf = slices.Grow(buf[:0], j-i)
 		for k := i; k < j; k++ {
 			if a.IsValid(k) {
 				buf = append(buf, a.Bytes(k))
