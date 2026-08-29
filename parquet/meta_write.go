@@ -16,6 +16,14 @@ package parquet
 // is that a field is written when the file it came from had it and left out when
 // it did not.
 //
+// The few fields the format calls required are outside that rule and go out
+// whatever they hold. This package would never notice one missing, since its
+// reader fills a struct in and an absent field reads back as nought, but the
+// other implementations are built on generated thrift readers that refuse the
+// whole footer over one, and the file then opens nowhere with an error about the
+// protocol rather than about the field. The list of them is in the test that
+// walks a footer and checks it.
+//
 // Saying that in code is where the care goes, because for most of these fields
 // absent and empty are two different things. A statistic of nil is a writer that
 // said nothing and one of empty bytes is a writer that said the smallest value
@@ -192,9 +200,15 @@ func (c *ColumnChunk) write(w *writer) {
 	if c.FilePath != "" {
 		w.textField(1, c.FilePath)
 	}
-	if c.FileOffset != 0 {
-		w.int64Field(2, c.FileOffset)
-	}
+
+	// The file offset goes out whatever it holds, because it is a required
+	// field, and a required field a footer leaves out is a footer the thrift
+	// readers in the other implementations refuse before they have looked at
+	// anything in it. The format has since deprecated this one and told writers
+	// to leave it at nought and readers to ignore it, two writers having written
+	// it to mean two different things, so what goes out here is nought and what
+	// comes back is kept only to be written out again.
+	w.int64Field(2, c.FileOffset)
 	c.Meta.write(w, 3)
 	if c.OffsetIndexOffset != 0 {
 		w.int64Field(4, c.OffsetIndexOffset)
