@@ -47,6 +47,14 @@
 // [NUnique]. An aggregation over a whole column is an aggregation over
 // [OneGroup], so there is one of each rather than two.
 //
+// Beside the kernels that can turn a column away are the rules that say the
+// same thing about a type on its own: [ArithType], [CompareType],
+// [IsCondition], [HasOrder], [SumType], [MeanType], [MinMaxType], [VarType],
+// [StdType], [MedianType], [QuantileType] and [NUniqueType]. They are here so
+// that a query can be checked before it is run, against nothing but the types
+// of the columns, and each of them is either the rule its kernel uses or a copy
+// held to it by a test.
+//
 // [Join], which works out which rows of two tables go together, in all seven of
 // the ways SQL can. Like a sort it returns positions rather than a table, so
 // building the result is Take's job and a caller who only wants to know what

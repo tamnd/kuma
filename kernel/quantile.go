@@ -64,7 +64,14 @@ func (i Interpolation) String() string {
 // default and means an even number of values averages the two in the middle.
 func Median(c *array.Chunked, g *Groups) (*array.Chunked, error) {
 	checkAgg("Median", c, g)
-	return quantile("Median", c, g, 0.5, Linear)
+	return quantile("median", c, g, 0.5, Linear)
+}
+
+// MedianType returns the type a [Median] comes out as over a column of type dt,
+// which is always a float64, and an error for a column there is no median of.
+// It is exported for the reason [SumType] gives.
+func MedianType(dt dtype.DataType) (dtype.DataType, error) {
+	return floatAggType("median", dt)
 }
 
 // Quantile returns the value at position q of each group, as a float64, where q
@@ -83,7 +90,16 @@ func Median(c *array.Chunked, g *Groups) (*array.Chunked, error) {
 // five, or if the column is not numeric.
 func Quantile(c *array.Chunked, g *Groups, q float64, how Interpolation) (*array.Chunked, error) {
 	checkAgg("Quantile", c, g)
-	return quantile("Quantile", c, g, q, how)
+	return quantile("quantile", c, g, q, how)
+}
+
+// QuantileType returns the type a [Quantile] comes out as over a column of type
+// dt, which is always a float64, and an error for a column there is no quantile
+// of. It says nothing about q, which is a number the caller passes and not a
+// type, and which [Quantile] checks when it is given one. It is exported for
+// the reason [SumType] gives.
+func QuantileType(dt dtype.DataType) (dtype.DataType, error) {
+	return floatAggType("quantile", dt)
 }
 
 // quantile is the body of both, with name naming whichever the caller asked for

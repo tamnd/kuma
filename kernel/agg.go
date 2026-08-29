@@ -82,7 +82,34 @@ func Sum(c *array.Chunked, g *Groups) (*array.Chunked, error) {
 		// is the one temporal type this is meaningful for.
 		return numbers(dt, sumInto[int64, int64](c, g, n), nil), nil
 	default:
-		return nil, fmt.Errorf("kernel: there is no sum of a %s column", dt)
+		return nil, noAgg("sum", dt)
+	}
+}
+
+// SumType returns the type a [Sum] comes out as over a column of type dt, and
+// an error for a column there is no sum of.
+//
+// It is exported for the same reason [ArithType] is. A plan has to say what
+// each of its columns holds before there is a column to ask, so every rule that
+// decides a type has to be readable from the types alone.
+//
+// The list is [Sum]'s own list written a second time, because the switch that
+// picks the type is also the switch that picks the code, and Go has no way to
+// read one off the other. What holds the two together is a test that runs every
+// aggregation over a column of every type and checks that what came out is what
+// was promised.
+func SumType(dt dtype.DataType) (dtype.DataType, error) {
+	switch dt.Kind() {
+	case dtype.BoolKind, dtype.Int8Kind, dtype.Int16Kind, dtype.Int32Kind, dtype.Int64Kind:
+		return dtype.Int64, nil
+	case dtype.Uint8Kind, dtype.Uint16Kind, dtype.Uint32Kind, dtype.Uint64Kind:
+		return dtype.Uint64, nil
+	case dtype.Float32Kind, dtype.Float64Kind:
+		return dtype.Float64, nil
+	case dtype.DurationKind:
+		return dt, nil
+	default:
+		return nil, noAgg("sum", dt)
 	}
 }
 
@@ -101,12 +128,12 @@ func Sum(c *array.Chunked, g *Groups) (*array.Chunked, error) {
 func Mean(c *array.Chunked, g *Groups) (*array.Chunked, error) {
 	checkAgg("Mean", c, g)
 
-	if k := c.DType().Kind(); k == dtype.DurationKind {
-		return nil, fmt.Errorf("kernel: there is no mean of a %s column yet", c.DType())
+	if _, err := MeanType(c.DType()); err != nil {
+		return nil, err
 	}
 	total, err := Sum(c, g)
 	if err != nil {
-		return nil, fmt.Errorf("kernel: there is no mean of a %s column", c.DType())
+		return nil, err
 	}
 
 	n := g.NumGroups()
@@ -127,6 +154,18 @@ func Mean(c *array.Chunked, g *Groups) (*array.Chunked, error) {
 		}
 	}
 	return numbers(dtype.Float64, out, valid), nil
+}
+
+// MeanType returns the type a [Mean] comes out as over a column of type dt,
+// which is always a float64, and an error for a column there is no mean of. It
+// is exported for the reason [SumType] gives.
+func MeanType(dt dtype.DataType) (dtype.DataType, error) {
+	if dt.Kind() == dtype.DurationKind {
+		// The average of two spans is a span rather than a float64, so this is
+		// an operation that is missing rather than one with no meaning.
+		return nil, fmt.Errorf("kernel: there is no mean of a %s column yet", dt)
+	}
+	return floatAggType("mean", dt)
 }
 
 // Count returns how many values each group has, not counting the missing ones.
@@ -169,6 +208,17 @@ func Max(c *array.Chunked, g *Groups) (*array.Chunked, error) {
 	// Nulls first this time, for the same reason: a null has to be the thing
 	// that loses, and here that means being at the small end.
 	return extreme(c, g, Order{Column: c, NullsFirst: true}, 1)
+}
+
+// MinMaxType returns the type a [Min] or a [Max] comes out as over a column of
+// type dt, which is the column's own type since the answer is one of the values
+// that was there, and an error for a column there is no order for. It is
+// exported for the reason [SumType] gives.
+func MinMaxType(dt dtype.DataType) (dtype.DataType, error) {
+	if !HasOrder(dt) {
+		return nil, noOrder(dt)
+	}
+	return dt, nil
 }
 
 // extreme gathers the row of each group that wins under cmp, where winning
@@ -348,14 +398,28 @@ func checkAgg(name string, c *array.Chunked, g *Groups) {
 // that is not a number or a boolean.
 func Var(c *array.Chunked, g *Groups, ddof int) (*array.Chunked, error) {
 	checkAgg("Var", c, g)
-	return variance("Var", c, g, ddof, false)
+	return variance("variance", c, g, ddof, false)
+}
+
+// VarType returns the type a [Var] comes out as over a column of type dt, which
+// is always a float64, and an error for a column there is no variance of. It is
+// exported for the reason [SumType] gives.
+func VarType(dt dtype.DataType) (dtype.DataType, error) {
+	return floatAggType("variance", dt)
 }
 
 // Std returns the standard deviation of each group, which is the square root of
 // [Var] and takes the same ddof.
 func Std(c *array.Chunked, g *Groups, ddof int) (*array.Chunked, error) {
 	checkAgg("Std", c, g)
-	return variance("Std", c, g, ddof, true)
+	return variance("standard deviation", c, g, ddof, true)
+}
+
+// StdType returns the type a [Std] comes out as over a column of type dt, which
+// is a float64 wherever [VarType] is one. It is exported for the reason
+// [SumType] gives.
+func StdType(dt dtype.DataType) (dtype.DataType, error) {
+	return floatAggType("standard deviation", dt)
 }
 
 // variance is the body of both, taking the square root at the end when asked.
@@ -440,6 +504,42 @@ func NUnique(c *array.Chunked, g *Groups) (*array.Chunked, error) {
 	return numbers(dtype.Int64, out, nil), nil
 }
 
+// NUniqueType returns the type an [NUnique] comes out as over a column of type
+// dt, which is always a count, and an error for a column there is no key
+// encoding for. It is exported for the reason [SumType] gives.
+//
+// This one is the rule itself rather than a copy of it, since deciding what a
+// value encodes as is a job that starts with the type.
+func NUniqueType(dt dtype.DataType) (dtype.DataType, error) {
+	if _, err := binderFor(dt); err != nil {
+		return nil, err
+	}
+	return dtype.Int64, nil
+}
+
+// floatAggType is the type of the aggregations that do their work in float64,
+// which is a float64 for every column [eachFloat] can read and an error for the
+// rest. What is a column there is no such aggregation of is one list rather
+// than four, since the four read the values the same way.
+func floatAggType(what string, dt dtype.DataType) (dtype.DataType, error) {
+	switch dt.Kind() {
+	case dtype.BoolKind,
+		dtype.Int8Kind, dtype.Int16Kind, dtype.Int32Kind, dtype.Int64Kind,
+		dtype.Uint8Kind, dtype.Uint16Kind, dtype.Uint32Kind, dtype.Uint64Kind,
+		dtype.Float32Kind, dtype.Float64Kind:
+		return dtype.Float64, nil
+	default:
+		return nil, noAgg(what, dt)
+	}
+}
+
+// noAgg is the error for an aggregation over a column it has no meaning for.
+// Both the kernel and the type rule report it, so that a mistake caught while a
+// plan is being checked reads the same as the same mistake caught while it runs.
+func noAgg(what string, dt dtype.DataType) error {
+	return fmt.Errorf("kernel: there is no %s of a %s column", what, dt)
+}
+
 // eachFloat calls f with the group and the value of every row of c that is
 // there, reading whatever the column holds as a float64.
 //
@@ -478,7 +578,7 @@ func eachFloat(name string, c *array.Chunked, g *Groups, f func(id int, v float6
 	case dtype.Float64Kind:
 		eachNumber[float64](c, g, f)
 	default:
-		return fmt.Errorf("kernel: there is no %s of a %s column", name, c.DType())
+		return noAgg(name, c.DType())
 	}
 	return nil
 }
