@@ -21,6 +21,15 @@ import (
 //
 //	f, err := kuma.ReadParquet(r, size, &parquet.Options{Columns: []string{"id", "price"}})
 //
+// [parquet.Options.Filter] is the same idea for rows and on a file written in
+// any sort of order it saves more. A writer says in the footer what each row
+// group holds, so a frame of one day of a year of orders reads one row group and
+// leaves the other three hundred and sixty four alone.
+//
+//	f, err := kuma.ReadParquet(r, size, &parquet.Options{
+//		Filter: []parquet.Predicate{parquet.Where("day", kernel.OpEq, int64(19000))},
+//	})
+//
 // A column comes back as the type the file's schema names, whatever the file
 // did to store it. Most writers put a dictionary in front of nearly every
 // column, and [parquet.Options.Dictionary] is how to keep that encoding for the

@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/tamnd/kuma/array"
 	"github.com/tamnd/kuma/dtype"
+	"github.com/tamnd/kuma/kernel"
 )
 
 // stringChunk builds a plain chunk of strings.
@@ -206,4 +208,101 @@ func wantPanic(t *testing.T) {
 	if s, ok := e.(string); !ok || !strings.HasPrefix(s, "parquet: ") {
 		t.Errorf("panicked with %v, want a parquet message", e)
 	}
+}
+
+// TestReadAlso checks the projection a filter needs on top of the caller's.
+//
+// A predicate on a column the caller did not ask for adds it to the end, where
+// it is read and then left out of the table. A predicate on a column that is
+// already being read is compared against that one, and two predicates on the
+// same column share it, so a filter of any size adds at most one read per column
+// it names.
+func TestReadAlso(t *testing.T) {
+	r := openReader(t, "stats.parquet")
+	if err := r.Project("word"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The file holds n, word, size, ratio, absent and flag in that order, so
+	// two predicates on n and one on word is two that have to be added and one
+	// that is already there.
+	tests := []test{{column: 0}, {column: 0}, {column: 1}}
+	r.readAlso(tests)
+
+	if want := []int{1, 0}; !slices.Equal(r.take, want) {
+		t.Errorf("the projection reads columns %v, want %v", r.take, want)
+	}
+	for i, want := range []int{1, 1, 0} {
+		if got := tests[i].slot; got != want {
+			t.Errorf("predicate %d compares slot %d, want %d", i, got, want)
+		}
+	}
+	if got, want := len(r.schema.Fields), 2; got != want {
+		t.Errorf("a batch holds %d columns, want %d", got, want)
+	}
+}
+
+// TestReadAlsoNothing checks that a read with no filter is projected the way the
+// caller left it, which is what says an unfiltered read costs what it did.
+func TestReadAlsoNothing(t *testing.T) {
+	r := openReader(t, "stats.parquet")
+	if err := r.Project("word", "n"); err != nil {
+		t.Fatal(err)
+	}
+
+	before := slices.Clone(r.take)
+	r.readAlso(nil)
+
+	if !slices.Equal(r.take, before) {
+		t.Errorf("the projection became %v, want %v", r.take, before)
+	}
+}
+
+// TestFilterFileError checks that a footer that contradicts itself stops a
+// filtered read before any of the file is opened.
+//
+// The row groups are chosen from the statistics, so a chunk claiming more
+// missing values than it holds rows is found there rather than on the way
+// through a page. What matters is that it is an error and not a table missing
+// the rows of that group.
+func TestFilterFileError(t *testing.T) {
+	r := openReader(t, "stats.parquet")
+	r.meta.RowGroups[0].Columns[0].Meta.Stats.NullCount = 99
+
+	opts := &Options{Filter: []Predicate{Where("n", kernel.OpEq, int64(1))}}
+	if _, err := r.table(opts); !errors.Is(err, ErrFormat) {
+		t.Errorf("got %v, want it to be an %v", err, ErrFormat)
+	}
+}
+
+// TestPickUnchecked checks that a comparison that cannot be made is an error out
+// of the read rather than a panic partway through it.
+//
+// Nothing arrives here in this state. A filter is looked over before any of the
+// file is read, exactly so that a query written against the wrong type is
+// refused before it costs anything, and this is the same predicate reaching the
+// rows with that step skipped. It is here because the alternative to returning
+// the error is not returning it.
+func TestPickUnchecked(t *testing.T) {
+	r := openReader(t, "stats.parquet")
+	bad := []test{{pred: WhereString("n", kernel.OpEq, "eight"), column: 0, slot: 0}}
+
+	_, err := r.chunksOf([]int{0}, bad, 1)
+	if err == nil {
+		t.Fatal("comparing a column of numbers against a word worked")
+	}
+	if !strings.Contains(err.Error(), "filtering on n") {
+		t.Errorf("got %q, want it to name the column", err)
+	}
+}
+
+// TestAndImpossible checks the mask joiner refuses what is not a mask.
+//
+// Both sides come out of kernel.Compare, which returns conditions and nothing
+// else, so this cannot happen from a read. What it is worth is a stack rather
+// than a wrong answer if the two ever stop agreeing.
+func TestAndImpossible(t *testing.T) {
+	defer wantPanic(t)
+	c := chunked(dtype.String, stringChunk(t, "GB"))
+	and(c, c)
 }

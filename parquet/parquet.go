@@ -90,9 +90,16 @@
 // may hold a matching row. Every group it leaves out is one whose statistics say
 // it holds none, worked out from the footer and, where the writer wrote one,
 // from a bloom filter. A group it returns may hold a matching row rather than
-// does, so a caller still filters the rows it reads, and a file whose writer
-// wrote no statistics reads the way it did before. Nothing there can change an
-// answer, only how much of the file it took.
+// does, and a file whose writer wrote no statistics gives back every group, so
+// what comes out of it is where to look rather than what is there.
+//
+// Options.Filter is both halves together and is what a caller reading a file
+// wants. It skips the row groups the statistics rule out and compares the rows
+// of the ones it reads, so what comes back is the rows that pass. The columns a
+// predicate names do not have to be columns the caller asked for, since
+// filtering on a timestamp nobody wants in the result is the ordinary case, and
+// a file with no statistics gives the same rows for the cost it always took.
+// Nothing there can change an answer, only how much of the file it took.
 //
 // Decompressor is what undoes the compression of a page on the way through.
 // Nearly every parquet file in the world is compressed and the codec is a

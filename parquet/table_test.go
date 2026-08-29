@@ -2,6 +2,8 @@ package parquet_test
 
 import (
 	"bytes"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/tamnd/kuma/array"
 	"github.com/tamnd/kuma/dtype"
+	"github.com/tamnd/kuma/kernel"
 	"github.com/tamnd/kuma/parquet"
 )
 
@@ -334,4 +337,315 @@ func BenchmarkRead(b *testing.B) {
 			}
 		}
 	})
+
+	// The file writes no statistics, so nothing here is skipped and what this
+	// measures is the filtering itself: a thousand rows compared and the half of
+	// them that pass gathered out of the column.
+	b.Run("filter", func(b *testing.B) {
+		opts := &parquet.Options{
+			Columns: []string{"size"},
+			Filter:  []parquet.Predicate{parquet.Where("size", kernel.OpGt, int64(150))},
+		}
+		for b.Loop() {
+			if _, err := parquet.Read(r, int64(len(buf)), opts); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+// TestReadFilter reads the rows a filter keeps rather than the row groups that
+// might hold them.
+//
+// The file holds twelve rows in three row groups with n running from nought to
+// eleven, so a filter for eight and over leaves two of the groups unread and the
+// third comes back whole. One chunk rather than three is what says the other two
+// were never opened.
+func TestReadFilter(t *testing.T) {
+	tab := readTable(t, "stats.parquet", &parquet.Options{
+		Columns: []string{"n", "word"},
+		Filter:  []parquet.Predicate{parquet.Where("n", kernel.OpGe, int64(8))},
+	})
+
+	if got, want := numbers[int64](tab.Columns[0]), []int64{8, 9, 10, 11}; !slices.Equal(got, want) {
+		t.Errorf("read %v, want %v", got, want)
+	}
+	if got, want := text(tab.Columns[1]), []string{"zulu", "yankee", "victor", "sierra"}; !slices.Equal(got, want) {
+		t.Errorf("read %v, want %v", got, want)
+	}
+	if got := tab.Columns[0].NumChunks(); got != 1 {
+		t.Errorf("the rows came back in %d chunks, want the one row group that was read", got)
+	}
+}
+
+// TestReadFilterRows cuts rows out of the middle of the row groups it reads.
+//
+// Two predicates are an and, and these two want a range that starts inside the
+// first group and ends inside the last, so every group is read and none of them
+// comes back whole. That is the case a row group filter cannot do on its own and
+// the reason this is not just a list of row groups.
+func TestReadFilterRows(t *testing.T) {
+	tab := readTable(t, "stats.parquet", &parquet.Options{
+		Columns: []string{"n"},
+		Filter: []parquet.Predicate{
+			parquet.Where("n", kernel.OpGe, int64(3)),
+			parquet.Where("n", kernel.OpLe, int64(9)),
+		},
+	})
+
+	if got, want := numbers[int64](tab.Columns[0]), []int64{3, 4, 5, 6, 7, 8, 9}; !slices.Equal(got, want) {
+		t.Errorf("read %v, want %v", got, want)
+	}
+	if got := tab.Columns[0].NumChunks(); got != 3 {
+		t.Errorf("the rows came back in %d chunks, want one per row group", got)
+	}
+}
+
+// TestReadFilterUnprojected filters on a column the caller did not ask for.
+//
+// Filtering on a column and reading it are different questions, and filtering a
+// year of orders on a timestamp that is not wanted in the result is the ordinary
+// case. The column is read to compare the rows against and is not in the table.
+func TestReadFilterUnprojected(t *testing.T) {
+	tab := readTable(t, "stats.parquet", &parquet.Options{
+		Columns: []string{"word"},
+		Filter: []parquet.Predicate{
+			parquet.Where("n", kernel.OpGe, int64(3)),
+			parquet.Where("n", kernel.OpLe, int64(9)),
+		},
+	})
+
+	if got, want := tab.NumCols(), 1; got != want {
+		t.Fatalf("the table holds %d columns, want %d", got, want)
+	}
+	if got, want := tab.Schema.Fields[0].Name, "word"; got != want {
+		t.Errorf("the column is %s, want %s", got, want)
+	}
+
+	want := []string{"echo", "mike", "november", "oscar", "papa", "zulu", "yankee"}
+	if got := text(tab.Columns[0]); !slices.Equal(got, want) {
+		t.Errorf("read %v, want %v", got, want)
+	}
+}
+
+// TestReadFilterNull checks that a row whose value is missing does not pass.
+//
+// Nothing compares to a value that is not there, so a missing value is not a
+// value that failed the test, it is a row nobody can say belongs in the result.
+// That is what SQL does and what kernel.Filter does with the mask.
+//
+// The file writes no statistics at all, so nothing is skipped and every row of
+// it is compared, which is the path a filter takes on a file whose writer was in
+// a hurry.
+func TestReadFilterNull(t *testing.T) {
+	opts := &parquet.Options{Columns: []string{"size"}}
+	all := readTable(t, "dictionary.parquet", opts).Columns[0]
+
+	want := 0
+	for i := range all.Len() {
+		if !all.IsNull(i) && all.Value[int64](i) > 150 {
+			want++
+		}
+	}
+	if want == 0 || want == all.Len() {
+		t.Fatalf("%d rows of %d pass, which tests nothing", want, all.Len())
+	}
+
+	opts.Filter = []parquet.Predicate{parquet.Where("size", kernel.OpGt, int64(150))}
+	got := readTable(t, "dictionary.parquet", opts).Columns[0]
+
+	if got.Len() != want {
+		t.Errorf("read %d rows, want %d", got.Len(), want)
+	}
+	if got.NullCount() != 0 {
+		t.Errorf("%d of the rows are missing a value, want none of them", got.NullCount())
+	}
+}
+
+// TestReadFilterNaN keeps a NaN out of a not equal.
+//
+// A NaN is unequal to everything, so it passes, and a writer leaves it out of
+// the bounds it writes, so the row group holding it is read rather than skipped.
+// Getting the second of those wrong would drop the row and look like the file
+// was short.
+func TestReadFilterNaN(t *testing.T) {
+	tab := readTable(t, "stats.parquet", &parquet.Options{
+		Columns: []string{"n", "ratio"},
+		Filter:  []parquet.Predicate{parquet.Where("ratio", kernel.OpNe, 2.0)},
+	})
+
+	// The twelve rows hold 2.0 twice, at n of six and eleven, and a NaN at n of
+	// five.
+	if got, want := numbers[int64](tab.Columns[0]), []int64{0, 1, 2, 3, 4, 5, 7, 8, 9, 10}; !slices.Equal(got, want) {
+		t.Errorf("read rows %v, want %v", got, want)
+	}
+	if got := numbers[float64](tab.Columns[1])[5]; !math.IsNaN(got) {
+		t.Errorf("the sixth row read %v, want the NaN", got)
+	}
+}
+
+// TestReadFilterNone reads a filter nothing passes.
+//
+// What comes back is a table of no rows rather than an error or a table of no
+// columns, since the columns are what the file says they are whether or not any
+// row survived and a caller appending this to another table wants to be able to.
+func TestReadFilterNone(t *testing.T) {
+	tab := readTable(t, "stats.parquet", &parquet.Options{
+		Columns: []string{"n", "word"},
+		Filter:  []parquet.Predicate{parquet.Where("n", kernel.OpGt, int64(99))},
+	})
+
+	if got, want := tab.NumRows(), 0; got != want {
+		t.Errorf("the table holds %d rows, want %d", got, want)
+	}
+	want := []dtype.DataType{dtype.Int64, dtype.String}
+	for i, c := range tab.Columns {
+		if got := c.DType(); !dtype.Equal(got, want[i]) {
+			t.Errorf("column %d is a %s column, want %s", i, got, want[i])
+		}
+		if got := c.NumChunks(); got != 0 {
+			t.Errorf("column %d came back in %d chunks, want none", i, got)
+		}
+	}
+}
+
+// TestReadFilterDictionary filters a column the file wrote as indices into a
+// dictionary, with the encoding kept and with it dropped.
+//
+// A comparison reads through the encoding and a gather keeps it, so the two
+// answers are the same rows and the kept one is still encoded afterwards. That
+// is the whole reason to keep it: a filter on a column of country codes is
+// answered on the indices and the strings are never touched.
+func TestReadFilterDictionary(t *testing.T) {
+	opts := &parquet.Options{
+		Columns: []string{"code", "n"},
+		Filter:  []parquet.Predicate{parquet.WhereString("code", kernel.OpEq, "GB")},
+	}
+	plain := readTable(t, "chunks.parquet", opts)
+
+	if got, want := text(plain.Columns[0]), []string{"GB", "GB"}; !slices.Equal(got, want) {
+		t.Fatalf("read %v, want %v", got, want)
+	}
+	if got, want := numbers[int64](plain.Columns[1]), []int64{0, 5}; !slices.Equal(got, want) {
+		t.Errorf("read rows %v, want %v", got, want)
+	}
+
+	opts.Dictionary = true
+	kept := readTable(t, "chunks.parquet", opts)
+
+	if got, want := text(kept.Columns[0]), text(plain.Columns[0]); !slices.Equal(got, want) {
+		t.Errorf("keeping the encoding read %v, want %v", got, want)
+	}
+	if _, ok := kept.Columns[0].DType().(dtype.Dictionary); !ok {
+		t.Errorf("the codes came back as %s, want the encoding kept", kept.Columns[0].DType())
+	}
+}
+
+// TestReadFilterBloom reads a file whose writer wrote bloom filters, which is
+// what answers for a value the bounds keep every group for.
+//
+// The identifiers go up in sevens, so 1004 is inside the range of the first
+// group and is not in the file. The bounds keep the group, the filter throws it
+// out, and no page of the file is read.
+func TestReadFilterBloom(t *testing.T) {
+	opts := &parquet.Options{
+		Columns: []string{"name"},
+		Filter:  []parquet.Predicate{parquet.Where("id", kernel.OpEq, int64(1004))},
+	}
+	if got := readTable(t, "bloom.parquet", opts).NumRows(); got != 0 {
+		t.Errorf("a value that is not in the file read %d rows", got)
+	}
+
+	opts.Filter = []parquet.Predicate{parquet.Where("id", kernel.OpEq, int64(1007))}
+	tab := readTable(t, "bloom.parquet", opts)
+
+	if got, want := text(tab.Columns[0]), []string{"user-0007"}; !slices.Equal(got, want) {
+		t.Errorf("read %v, want %v", got, want)
+	}
+}
+
+// TestReadFilterBytesRead checks a filter reads less of the file.
+//
+// This is the point of the whole thing and it is worth counting rather than
+// trusting. A read that skipped nothing would give the same rows at the cost of
+// the whole file, which is the answer a caller cannot tell apart from the fast
+// one by looking at the table.
+func TestReadFilterBytesRead(t *testing.T) {
+	buf, err := os.ReadFile(filepath.Join("testdata", "stats.parquet"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	opts := &parquet.Options{Columns: []string{"n", "word"}}
+	whole := &countingReader{src: bytes.NewReader(buf)}
+	if _, err := parquet.Read(whole, int64(len(buf)), opts); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	opts.Filter = []parquet.Predicate{parquet.Where("n", kernel.OpGe, int64(8))}
+	part := &countingReader{src: bytes.NewReader(buf)}
+	if _, err := parquet.Read(part, int64(len(buf)), opts); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	if part.n >= whole.n {
+		t.Errorf("filtering read %d bytes and reading it all read %d, want less", part.n, whole.n)
+	}
+}
+
+// countingReader adds up what has been read through it.
+type countingReader struct {
+	src io.ReaderAt
+	n   int64
+}
+
+// ReadAt reads from the file underneath and counts what it asked for.
+func (c *countingReader) ReadAt(p []byte, off int64) (int, error) {
+	c.n += int64(len(p))
+	return c.src.ReadAt(p, off)
+}
+
+// TestReadFilterErrors covers the ways a filter is refused.
+//
+// All of them are refused before any of the file is read, since a filter that
+// was quietly dropped would read the whole file and look like it worked.
+func TestReadFilterErrors(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		pred parquet.Predicate
+		want string
+	}{
+		{
+			"a column the file does not have",
+			parquet.Where("nope", kernel.OpEq, int64(1)),
+			`"nope"`,
+		},
+		{
+			"a value of a type the column cannot be compared with",
+			parquet.WhereString("n", kernel.OpEq, "eight"),
+			"cannot compare n",
+		},
+		{
+			"a predicate with no value at all",
+			parquet.Predicate{Column: "n", Op: kernel.OpEq},
+			"compares against no value",
+		},
+		{
+			"a value that is not there, which no row passes",
+			parquet.Predicate{Column: "n", Op: kernel.OpEq, Value: array.NewNull(1)},
+			"is not there",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := parquet.ReadFile(filepath.Join("testdata", "stats.parquet"), &parquet.Options{
+				Filter: []parquet.Predicate{c.pred},
+			})
+			if err == nil {
+				t.Fatal("that filter worked")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("got %q, want it to mention %s", err, c.want)
+			}
+		})
+	}
 }

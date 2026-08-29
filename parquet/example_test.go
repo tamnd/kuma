@@ -70,6 +70,31 @@ func ExampleReadFile_dictionary() {
 	// dictionary<int32, string>
 }
 
+// Reading the rows that pass a filter, which skips the row groups the footer
+// rules out and compares the rows of the ones it reads.
+func ExampleReadFile_filter() {
+	// The file holds twelve rows in three row groups with n running from nought
+	// to eleven, so only the last group can hold a row of eight or more and the
+	// other two are never opened. The filter names a column the caller did not
+	// ask for, which is the ordinary case, so n is read to compare the rows
+	// against and left out of the table.
+	t, err := parquet.ReadFile("testdata/stats.parquet", &parquet.Options{
+		Columns: []string{"word"},
+		Filter: []parquet.Predicate{
+			parquet.Where("n", kernel.OpGe, int64(8)),
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(t.NumRows(), "rows of", t.Schema)
+	fmt.Println(text(t.Columns[0]))
+	// Output:
+	// 4 rows of schema<word: string not null>
+	// [zulu yankee victor sierra]
+}
+
 // Reading the row groups a filter cannot rule out and leaving the rest of the
 // file alone.
 func ExampleFileReader_RowGroups() {
