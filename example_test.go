@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -1045,4 +1046,50 @@ func ExampleFrame_WriteCSV() {
 	// AAPL,100
 	// MSFT,200
 	// GOOG,300
+}
+
+func ExampleReadDataset() {
+	// A dataset is a tree of files whose directories are named key=value, which
+	// is the layout Hive wrote and every engine since has read. The directory
+	// names are data, so the year and the month below are columns of the frame
+	// and are in none of the files.
+	root, err := os.MkdirTemp("", "orders")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer os.RemoveAll(root)
+
+	for dir, rows := range map[string]string{
+		"year=2024/month=01": `{"sym":"AAPL","qty":100}` + "\n",
+		"year=2024/month=02": `{"sym":"MSFT","qty":50}` + "\n",
+		"year=2025/month=01": `{"sym":"GOOG","qty":25}` + "\n",
+	} {
+		if err = os.MkdirAll(filepath.Join(root, dir), 0o750); err != nil {
+			fmt.Println(err)
+			return
+		}
+		p := filepath.Join(root, dir, "part-0.ndjson")
+		if err = os.WriteFile(p, []byte(rows), 0o600); err != nil {
+			fmt.Println(err)
+			return
+		}
+	}
+
+	f, err := kuma.ReadDataset(root, nil)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println(f.Names())
+	if err = f.WriteCSV(os.Stdout, nil); err != nil {
+		fmt.Println(err)
+	}
+	// Output:
+	// [sym qty year month]
+	// sym,qty,year,month
+	// AAPL,100,2024,01
+	// MSFT,50,2024,02
+	// GOOG,25,2025,01
 }
