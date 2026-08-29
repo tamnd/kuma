@@ -97,7 +97,7 @@ func (w *writer) int64Field(id int16, v int64) {
 }
 
 // int16Field writes a short field.
-func (w *writer) int16Field(id int16, v int16) {
+func (w *writer) int16Field(id, v int16) {
 	w.header(id, thriftInt16)
 	w.varint(int64(v))
 }

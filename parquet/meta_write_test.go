@@ -320,7 +320,7 @@ func TestWriteMetadataEmpty(t *testing.T) {
 //
 // The order is what says whether the bounds on a chunk mean anything, so a file
 // that loses it is a file whose statistics have to be ignored. An order this
-// package did not recognise goes out as a union with nothing set, which is the
+// package did not recognize goes out as a union with nothing set, which is the
 // only honest thing to write for something the reader could not keep.
 func TestWriteMetadataOrders(t *testing.T) {
 	want := &parquet.Metadata{
