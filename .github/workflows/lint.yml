@@ -33,6 +33,26 @@ jobs:
           version: v2.13.1
           args: --timeout=5m
 
+  # The bridge is a module of its own, so it is linted on its own. It reads the
+  # same .golangci.yml, since golangci-lint looks up the tree for one, and it is
+  # held to the same rules as the rest of the repository.
+  golangci-arrowgo:
+    name: golangci-lint (arrowgo)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: arrowgo/go.mod
+          check-latest: true
+
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.1
+          args: --timeout=5m
+          working-directory: arrowgo
+
   govulncheck:
     name: govulncheck
     runs-on: ubuntu-latest
@@ -42,6 +62,27 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          check-latest: true
+
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  # The bridge is the one place in the repository with a dependency, so it is
+  # the one place where this check has anything to find.
+  govulncheck-arrowgo:
+    name: govulncheck (arrowgo)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: arrowgo
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: arrowgo/go.mod
           check-latest: true
 
       - name: Run govulncheck

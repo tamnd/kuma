@@ -69,11 +69,24 @@ The full design is eleven documents in [docs](docs/). The short version:
 
 **Bindings.** A C ABI, a Python package and a TypeScript package for Node, Bun and Deno. Data crosses the boundary as Arrow and queries cross as a serialized plan, so a query over a hundred million rows makes about four foreign calls.
 
+## Interop
+
+`kuma/ipc` reads and writes the Arrow IPC file and stream formats and implements the Arrow C Data Interface in both directions, which is how a column reaches pyarrow, Polars or DuckDB without being copied. It is part of this module and it needs nothing outside the standard library.
+
+If you are already using `apache/arrow-go`, [`kuma/arrowgo`](arrowgo) converts between its types and kuma's directly. It is a module of its own, so `go get github.com/tamnd/kuma/arrowgo` brings arrow-go in and `go get github.com/tamnd/kuma` does not.
+
+```go
+table, err := arrowgo.ImportRecordBatch(rec)   // shares the buffers, copies nothing
+rec, err := arrowgo.ExportRecordBatch(table)   // and back again
+```
+
 ## Requirements
 
 Go 1.27 or newer. This is not negotiable and it is not conservatism about new releases. The typed API is built on generic methods, which arrived in 1.27, and it cannot be expressed at all in 1.26.
 
 `GOEXPERIMENT=simd` enables the vectorized kernels. Without it you get the scalar path, which is correct and tested and simply slower. Both are supported configurations and both run in CI.
+
+Nothing else. The module depends on the standard library and nothing more, and the one package that needs a dependency is the arrow-go bridge above, which is a module of its own so that it stays out of your build unless you ask for it.
 
 ## Documentation
 
