@@ -55,6 +55,18 @@
 // rows it has. There is nothing that writes the encoding this one replaced,
 // since that would be writing for a reader that stopped existing years ago.
 //
+// WritePage is the walk in ReadPages turned around, and it is the one place in
+// the writer where a mistake does not look like a mistake. A page has no length
+// in front of its header, so a reader finds the second page by reading the first
+// header and adding up, which means a compressed size that is one byte out does
+// not produce a page that is slightly wrong but a chunk where every page after
+// it is nonsense that a reader has no way to tell from a file that was never
+// parquet. So the header is checked against the body it was handed rather than
+// taken, by the same rule a header read out of a file is checked by, and a page
+// this writes is a page this package would accept. The checksum is the one field
+// a caller does not fill in, since a caller that computes its own is a caller
+// that can get it wrong.
+//
 // WriteMetadata is the footer, which is what turns encoded pages into a file.
 // It writes the Thrift structure ReadMetadata reads, then how long it is, then
 // the magic, which is the last of every parquet file. The field numbers are the
