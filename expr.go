@@ -1,6 +1,7 @@
 package kuma
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -54,6 +55,10 @@ const (
 // expression is built once and walked once, the tree is a few nodes deep, and
 // the shape of it is fixed by this package, so the tag is cheaper to build and
 // easier to read than a family of types would be.
+//
+// A node is never written to after the constructor that made it has returned,
+// and two nodes that say the same thing are one node. See exprintern.go for
+// what that buys and what it costs.
 type node struct {
 	kind nodeKind
 	name string           // the column, when kind is kindColumn
@@ -64,28 +69,56 @@ type node struct {
 	l, r *node            // the operands, none for a leaf
 }
 
-func colNode(name string) *node { return &node{kind: kindColumn, name: name} }
+// The constructors. Every one of them goes through [intern], which is what makes
+// two equal expressions one expression. They describe the step rather than
+// building it, so that writing one the program has written before costs a
+// lookup and no allocation at all.
 
-func litNode(v any) *node { return &node{kind: kindLiteral, lit: v} }
+func colNode(name string) *node {
+	return intern(nodeKey{kind: kindColumn, name: name}, nil, nil)
+}
+
+func litNode(v any) *node {
+	if b, ok := v.([]byte); ok {
+		// The one literal that refers to memory the caller still holds. It is
+		// copied so that an expression cannot change under whoever built it,
+		// which is what everything else here assumes, and so that what is in
+		// the table stays equal to the key it went in under.
+		v = bytes.Clone(b)
+	}
+
+	lit, ok := litKey(v)
+	if !ok {
+		// A value that cannot be looked up again once it is stored. Leaving it
+		// out of the table costs nothing but the sharing, and putting it in
+		// would mean an entry that can never be found and never be removed.
+		return build(nodeKey{kind: kindLiteral}, nil, v)
+	}
+	return intern(nodeKey{kind: kindLiteral, lit: lit}, nil, v)
+}
 
 func cmpNode(op kernel.CompareOp, l, r *node) *node {
-	return &node{kind: kindCompare, cmp: op, l: l, r: r}
+	return intern(nodeKey{kind: kindCompare, cmp: op, l: l, r: r}, nil, nil)
 }
 
 func ariNode(op kernel.ArithOp, l, r *node) *node {
-	return &node{kind: kindArith, ari: op, l: l, r: r}
+	return intern(nodeKey{kind: kindArith, ari: op, l: l, r: r}, nil, nil)
 }
 
 func logicNode(kind nodeKind, l, r *node) *node {
-	return &node{kind: kind, l: l, r: r}
+	return intern(nodeKey{kind: kind, l: l, r: r}, nil, nil)
 }
 
 func unaryNode(kind nodeKind, l *node) *node {
-	return &node{kind: kind, l: l}
+	return intern(nodeKey{kind: kind, l: l}, nil, nil)
 }
 
 func castNode(dt dtype.DataType, l *node) *node {
-	return &node{kind: kindCast, dt: dt, l: l}
+	// A type goes into the key by the name it prints rather than by its value.
+	// The dtype package promises that two types print the same name if and
+	// only if they are equal, and a struct type holds a slice of fields, which
+	// a map key cannot.
+	return intern(nodeKey{kind: kindCast, dt: dt.String(), l: l}, dt, nil)
 }
 
 // String returns the expression as it would be written, which is what an error

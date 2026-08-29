@@ -83,7 +83,7 @@ It is a concrete struct rather than an interface, and it has to be, because gene
 
 The node kinds are `Column`, `Literal`, `Unary`, `Binary`, `Function`, `Cast`, `Ternary`, `Agg`, `Window`, `Sort`, `Alias`, `Wildcard`, `Exclude` and `DTypeSelector`.
 
-Nodes are immutable and structurally shared. `e.Add(x)` allocates exactly one node and reuses both operands, which makes common subexpression elimination a pointer identity check rather than a tree walk.
+Nodes are immutable and shared further than one level. A step is looked up in a table of every node that anything still holds, so two expressions that say the same thing are the same node however they were written and whoever wrote them, and common subexpression elimination is a pointer comparison rather than a tree walk. The table holds each node weakly, so an expression built for one query and then dropped is collected like any other garbage instead of being kept alive by the table that made it. Two things are deliberately left out of it: a NaN literal, because NaN is not equal to itself and an entry under such a key can never be found or removed again, and a literal of a type no column can hold, because hashing one would panic where the caller deserves an error.
 
 Errors are carried inside the node. A malformed expression poisons everything built on top of it and surfaces exactly once, at `Collect`. This is what pays for the single error return in the chaining API from document 04. Expression building is the one genuinely allocation heavy path in the library, and Go 1.27's cheaper small object allocation helps more here than anywhere else.
 
