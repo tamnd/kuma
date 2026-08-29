@@ -302,6 +302,75 @@ func TestWriteMetadataRareFields(t *testing.T) {
 	}
 }
 
+// TestWriteMetadataChunkSizes writes the two things a chunk says about its pages
+// and its decoded size, which are the fields the reader used to skip.
+//
+// The cases are about the difference between a field that was never written and
+// one that was written empty. A histogram of nothing is a writer saying the
+// column has no repeated values, and no histogram at all is a writer saying
+// nothing, and pyarrow writes the first on every flat column. So a footer that
+// came back with one turned into the other is a footer that lost something, even
+// though nothing reads either of them yet.
+func TestWriteMetadataChunkSizes(t *testing.T) {
+	cases := []struct {
+		name  string
+		pages []parquet.PageEncodingStats
+		sizes parquet.SizeStatistics
+	}{
+		{name: "a chunk that says nothing"},
+		{
+			name:  "a dictionary that held all the way",
+			pages: []parquet.PageEncodingStats{{Kind: parquet.DictionaryPage, Encoding: parquet.Plain, Count: 1}, {Kind: parquet.DataPageV2, Encoding: parquet.RLEDictionary, Count: 7}},
+		},
+		{
+			name:  "a dictionary that fell back part way",
+			pages: []parquet.PageEncodingStats{{Kind: parquet.DictionaryPage, Encoding: parquet.Plain, Count: 1}, {Kind: parquet.DataPage, Encoding: parquet.RLEDictionary, Count: 3}, {Kind: parquet.DataPage, Encoding: parquet.Plain, Count: 4}},
+		},
+		{name: "no pages counted but a list saying so", pages: []parquet.PageEncodingStats{}},
+		{
+			name:  "a flat column, which is what pyarrow writes",
+			sizes: parquet.SizeStatistics{UnencodedBytes: 4096, HasUnencodedBytes: true, RepetitionHistogram: []int64{}, DefinitionHistogram: []int64{12, 988}},
+		},
+		{
+			name:  "a repeated column",
+			sizes: parquet.SizeStatistics{RepetitionHistogram: []int64{500, 1500}, DefinitionHistogram: []int64{20, 80, 1900}},
+		},
+		{
+			name:  "a column of empty strings, which costs nothing to hold",
+			sizes: parquet.SizeStatistics{HasUnencodedBytes: true},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			want := &parquet.Metadata{
+				Nodes: []parquet.SchemaElement{
+					{Name: "root", Type: parquet.NoType, Repetition: parquet.NoRepetition,
+						Converted: parquet.NoConverted, NumChildren: 1},
+					{Name: "word", Type: parquet.ByteArray, Repetition: parquet.Optional,
+						Converted: parquet.NoConverted},
+				},
+				NumRows: 1000,
+				RowGroups: []parquet.RowGroup{{
+					NumRows: 1000,
+					Columns: []parquet.ColumnChunk{{Meta: parquet.ColumnMeta{
+						Type:      parquet.ByteArray,
+						Encodings: []parquet.Encoding{parquet.Plain},
+						Path:      []string{"word"},
+						PageStats: c.pages,
+						Sizes:     c.sizes,
+					}}},
+				}},
+			}
+
+			got := footer(t, want)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("the footer came back different\n got %+v\nwant %+v", got, want)
+			}
+		})
+	}
+}
+
 // TestWriteMetadataEmpty writes a footer with nothing in it, which is what a
 // file of no rows and no columns has. It is a legal parquet file and the reader
 // reads one already, so the writer has to be able to produce one.

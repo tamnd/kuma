@@ -480,6 +480,7 @@ func TestSkipRefused(t *testing.T) {
 		{"an int8 with no byte behind it", thriftInt8, nil},
 		{"a double with seven bytes behind it", thriftDouble, make([]byte, 7)},
 		{"a string longer than what is left", thriftBinary, (&builder{}).uvarint(1 << 30).b},
+		{"a list with no header at all", thriftList, nil},
 		{"a list that stops partway", thriftList, (&builder{}).list(3, thriftBinary).binary("a").b},
 		{"a map whose size stops partway", thriftMap, []byte{0x80}},
 		{"a map with no types behind its size", thriftMap, (&builder{}).uvarint(2).b},

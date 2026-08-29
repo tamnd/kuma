@@ -13,12 +13,18 @@ package parquet
 // out. Nearly everything in the format is optional, and an optional field that
 // is absent reads back as the absent value of its type, so a footer that writes
 // every field it has is a larger footer that says the same thing. The rule here
-// is that a field is written when it holds something and left out when it does
-// not, with two places where that is a real distinction rather than a saving: a
-// statistic of nil is a writer that said nothing and one of empty bytes is a
-// writer that said the smallest value is the empty string, and a null count
-// carries a flag next to it because a file that says nothing and a file that
-// says nought are different files.
+// is that a field is written when the file it came from had it and left out when
+// it did not.
+//
+// Saying that in code is where the care goes, because for most of these fields
+// absent and empty are two different things. A statistic of nil is a writer that
+// said nothing and one of empty bytes is a writer that said the smallest value
+// is the empty string. A null count carries a flag beside it because a file that
+// says nothing and a file that says nought are different files. And a list that
+// is nil was never written while one that is empty was written empty, which is
+// not hypothetical: pyarrow writes an empty repetition histogram on every flat
+// column, so a writer testing these with len rather than nil fails to give back
+// the footer it was handed.
 
 // write writes the footer.
 func (m *Metadata) write(w *writer) {
@@ -26,13 +32,13 @@ func (m *Metadata) write(w *writer) {
 	writeStructs(w, 2, m.Nodes, (*SchemaElement).write)
 	w.int64Field(3, m.NumRows)
 	writeStructs(w, 4, m.RowGroups, (*RowGroup).write)
-	if len(m.KeyValue) > 0 {
+	if m.KeyValue != nil {
 		writeStructs(w, 5, m.KeyValue, (*KeyValue).write)
 	}
 	if m.CreatedBy != "" {
 		w.textField(6, m.CreatedBy)
 	}
-	if len(m.Orders) > 0 {
+	if m.Orders != nil {
 		writeStructs(w, 7, m.Orders, (*ColumnOrder).write)
 	}
 }
@@ -223,11 +229,43 @@ func (m *ColumnMeta) write(w *writer, id int16) {
 			w.int64Field(11, m.DictionaryPageOffset)
 		}
 		m.Stats.write(w, 12)
+		if m.PageStats != nil {
+			writeStructs(w, 13, m.PageStats, (*PageEncodingStats).write)
+		}
 		if m.BloomFilterOffset != 0 {
 			w.int64Field(14, m.BloomFilterOffset)
 		}
 		if m.BloomFilterLength != 0 {
 			w.int32Field(15, m.BloomFilterLength)
+		}
+		m.Sizes.write(w, 16)
+	})
+}
+
+// write writes one page count. All three fields are required, so all three go
+// out whatever they hold.
+func (p *PageEncodingStats) write(w *writer) {
+	w.int32Field(1, int32(p.Kind))
+	w.int32Field(2, int32(p.Encoding))
+	w.int32Field(3, p.Count)
+}
+
+// write writes the sizes as field id, or writes nothing for a chunk whose writer
+// said nothing about them.
+func (s *SizeStatistics) write(w *writer, id int16) {
+	if !s.written() {
+		return
+	}
+
+	w.structure(id, func() {
+		if s.HasUnencodedBytes {
+			w.int64Field(1, s.UnencodedBytes)
+		}
+		if s.RepetitionHistogram != nil {
+			writeLongs(w, 2, s.RepetitionHistogram)
+		}
+		if s.DefinitionHistogram != nil {
+			writeLongs(w, 3, s.DefinitionHistogram)
 		}
 	})
 }
