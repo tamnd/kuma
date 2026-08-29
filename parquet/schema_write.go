@@ -244,24 +244,24 @@ func element(name string, r Repetition) SchemaElement {
 func leafElement(name, path string, r Repetition, t dtype.DataType) (SchemaElement, error) {
 	e := element(name, r)
 
+	var err error
 	switch t := t.(type) {
 	case dtype.FixedSizeBinary:
-		return e, e.fixed(t, path)
+		err = e.fixed(t, path)
 	case dtype.Time32:
-		return e, e.time32(t, path)
+		err = e.time32(t, path)
 	case dtype.Time64:
 		e.time64(t)
-		return e, nil
 	case dtype.Timestamp:
-		return e, e.timestamp(t, path)
+		err = e.timestamp(t, path)
 	case dtype.Decimal128:
 		e.decimal(t.Precision, t.Scale)
-		return e, nil
 	case dtype.Decimal256:
 		e.decimal(t.Precision, t.Scale)
-		return e, nil
+	default:
+		err = e.simple(t, path)
 	}
-	return e, e.simple(t, path)
+	return e, err
 }
 
 // simple fills in a node for a type that has no parameters, which is every type

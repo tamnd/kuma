@@ -438,7 +438,7 @@ func TestSetSchemaMetadata(t *testing.T) {
 // error naming the column instead. The last few check that the refusal comes
 // back out of a group rather than being lost on the way.
 func TestSetSchemaRefused(t *testing.T) {
-	deep := dtype.DataType(dtype.Int32)
+	var deep dtype.DataType = dtype.Int32
 	for range 40 {
 		deep = dtype.List{Elem: deep}
 	}
