@@ -78,6 +78,19 @@
 // in the format is optional and a field that is absent reads back as the absent
 // value of its type.
 //
+// Metadata.SetSchema is Metadata.Schema the other way round, and it is the
+// first thing a writer does, because the leaves of a schema in the order they
+// come out of it are the order every row group has to hold its chunks in and a
+// file whose schema and chunks disagree reads as somebody else's columns rather
+// than as a broken file. A group in parquet is not a node with children but a
+// node followed by them, so writing a tree is appending the nodes in the order a
+// reader takes them off. What kuma can say and the format cannot is refused
+// rather than approximated, since a duration written as a plain int64 is a
+// column that reads back as something else and a file that quietly lost a type
+// is worse than one that was never written. What kuma has two of and parquet has
+// one of is written as the one and comes back as it, which is what happens to
+// large strings, large lists, fixed size lists and dictionaries.
+//
 // ColumnReader is where the two halves meet. A page keeps its levels and its
 // values apart and only the rows that have a value are written down, so putting
 // a column back together means walking the two together and dropping the values
