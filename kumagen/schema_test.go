@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -264,11 +265,6 @@ func TestRunFromErrors(t *testing.T) {
 			want: `no schema can be read out of a ".orc" file`,
 		},
 		{
-			name: "a file that is not there",
-			args: []string{"-from", filepath.Join(t.TempDir(), "gone.csv"), "-type", "T"},
-			want: "no such file",
-		},
-		{
 			name: "a file that is not what it says it is",
 			args: []string{"-from", dataFile(t, "trades.parquet", "not a parquet file"), "-type", "T"},
 			want: "trades.parquet",
@@ -341,6 +337,21 @@ func TestRunFromErrors(t *testing.T) {
 				t.Errorf("run says %q, and it should mention %q", err, c.want)
 			}
 		})
+	}
+}
+
+// TestRunFromAFileThatIsNotThere is its own test rather than a row of the table
+// above, because what a missing file is called is up to the operating system
+// and only the wrapped error is the same everywhere.
+func TestRunFromAFileThatIsNotThere(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gone.csv")
+
+	err := run([]string{"-from", path, "-type", "T", "-o", "-"}, &bytes.Buffer{})
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("run says %v, and a file that is not there is a not exist error", err)
+	}
+	if err != nil && !strings.Contains(err.Error(), "gone.csv") {
+		t.Errorf("run says %q, and it should name the file it was given", err)
 	}
 }
 
@@ -573,7 +584,7 @@ func arrowFile(t *testing.T, name string) string {
 
 	table := tradesTable(t)
 	batch := ipc.Batch{
-		Length:  int(table.NumRows()),
+		Length:  table.NumRows(),
 		Columns: make([]*array.Array, len(table.Columns)),
 	}
 	for i, c := range table.Columns {

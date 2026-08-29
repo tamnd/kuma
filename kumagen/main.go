@@ -276,11 +276,15 @@ func writeSource(out io.Writer, path string, src []byte, force bool) error {
 		}
 		return err
 	}
-	if _, err := f.Write(src); err != nil {
-		f.Close()
-		return err
+	_, err = f.Write(src)
+
+	// The write is the error worth reporting, and a close that fails after one
+	// that did not is a file that may not be on the disk yet, so it is the
+	// error when there is no other.
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
-	return f.Close()
+	return err
 }
 
 // packageOf works out the package clause for a file written into dir.

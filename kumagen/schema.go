@@ -34,8 +34,19 @@ func readSchema(path string, lines int) (dtype.Schema, error) {
 	if err != nil {
 		return dtype.Schema{}, err
 	}
-	defer f.Close()
+	s, err := schemaOf(f, path, lines)
 
+	// A close after a read has nothing left to finish and next to nothing to
+	// report, but the read error is the interesting one when there is one.
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return s, err
+}
+
+// schemaOf is [readSchema] with the file already open, which is where the
+// format is chosen.
+func schemaOf(f *os.File, path string, lines int) (dtype.Schema, error) {
 	switch ext := strings.ToLower(filepath.Ext(path)); ext {
 	case ".parquet":
 		return footerSchema(f, parquetSchema)
