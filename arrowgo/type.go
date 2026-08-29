@@ -1,6 +1,7 @@
 package arrowgo
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -24,7 +25,7 @@ import (
 // one says which column stopped it.
 func ImportType(t arrow.DataType) (dtype.DataType, error) {
 	if t == nil {
-		return nil, fmt.Errorf("arrowgo: nil arrow type")
+		return nil, errors.New("arrowgo: nil arrow type")
 	}
 
 	switch t.ID() {
@@ -60,11 +61,15 @@ func ImportType(t arrow.DataType) (dtype.DataType, error) {
 		return dtype.Date32, nil
 	case arrow.DATE64:
 		return dtype.Date64, nil
+	default:
+		return importParameterized(t)
 	}
+}
 
-	// The parameterized types, which have to be reached through the concrete
-	// type rather than the id because the parameters are what makes them
-	// different from each other.
+// importParameterized is the rest of [ImportType], which is the types that have
+// to be reached through the concrete type rather than through the id because
+// the parameters are what makes them different from each other.
+func importParameterized(t arrow.DataType) (dtype.DataType, error) {
 	switch x := t.(type) {
 	case *arrow.Time32Type:
 		return dtype.Time32{Unit: importUnit(x.Unit)}, nil
@@ -111,12 +116,12 @@ func importDictionary(t *arrow.DictionaryType) (dtype.DataType, error) {
 // ExportType returns the arrow-go type for a kuma one.
 //
 // A string is a string_view and a binary is a binary_view, which is the layout
-// kuma stores and so the one that crosses without copying. large_string and
-// large_binary are the offset layouts kuma keeps for interoperability and they
-// go back out as themselves.
+// kuma stores and so the one that crosses without copying. The large_string and
+// large_binary types are the offset layouts kuma keeps only so that a file
+// holding one can be read, and they go back out as themselves.
 func ExportType(t dtype.DataType) (arrow.DataType, error) {
 	if t == nil {
-		return nil, fmt.Errorf("arrowgo: nil kuma type")
+		return nil, errors.New("arrowgo: nil kuma type")
 	}
 
 	switch x := t.(type) {
@@ -266,7 +271,7 @@ func ExportField(f dtype.Field) (arrow.Field, error) {
 // ImportSchema returns the kuma schema for an arrow-go one.
 func ImportSchema(s *arrow.Schema) (dtype.Schema, error) {
 	if s == nil {
-		return dtype.Schema{}, fmt.Errorf("arrowgo: nil arrow schema")
+		return dtype.Schema{}, errors.New("arrowgo: nil arrow schema")
 	}
 
 	fields := make([]dtype.Field, s.NumFields())

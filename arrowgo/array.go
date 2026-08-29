@@ -1,6 +1,7 @@
 package arrowgo
 
 import (
+	"errors"
 	"fmt"
 	"unsafe"
 
@@ -32,7 +33,7 @@ import (
 // is used. See the note on memory in the package comment.
 func ImportArray(a arrow.Array) (*array.Array, error) {
 	if a == nil {
-		return nil, fmt.Errorf("arrowgo: nil arrow array")
+		return nil, errors.New("arrowgo: nil arrow array")
 	}
 
 	if d, ok := a.(*arrowarray.Dictionary); ok {
@@ -51,6 +52,9 @@ func ImportArray(a arrow.Array) (*array.Array, error) {
 		return nil, err
 	}
 
+	// The types not named here are the fixed width ones, which are one buffer
+	// of values whatever they mean, and the ones ImportType has already turned
+	// away above.
 	switch a.DataType().ID() {
 	case arrow.NULL:
 		return array.NewNull(n), nil
@@ -58,8 +62,9 @@ func ImportArray(a arrow.Array) (*array.Array, error) {
 		return importOffsets(a, dt, valid, off, n)
 	case arrow.STRING_VIEW, arrow.BINARY_VIEW:
 		return importViews(data, dt, valid, off, n)
+	default:
+		return importFixed(data, dt, valid, off, n)
 	}
-	return importFixed(data, dt, valid, off, n)
 }
 
 // importFixed wraps the one value buffer of a fixed width column, which is
@@ -188,6 +193,8 @@ type stringValues struct {
 	a interface{ Value(int) string }
 }
 
+// Value gives the bytes of one value, which is the accessor [importOffsets]
+// wants and the one a utf8 column does not have.
 func (s stringValues) Value(i int) []byte {
 	v := s.a.Value(i)
 	if v == "" {
@@ -252,7 +259,7 @@ func sliceValidity(b *bitmap.Bitmap, off, n int) *bitmap.Bitmap {
 // nothing and forgetting to release it leaks nothing.
 func ExportArray(a *array.Array) (arrow.Array, error) {
 	if a == nil {
-		return nil, fmt.Errorf("arrowgo: nil kuma array")
+		return nil, errors.New("arrowgo: nil kuma array")
 	}
 
 	if a.Dictionary() != nil {

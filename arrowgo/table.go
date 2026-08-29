@@ -1,6 +1,7 @@
 package arrowgo
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -15,7 +16,7 @@ import (
 // nothing and both sides read a column one chunk at a time anyway.
 func ImportChunked(c *arrow.Chunked) (*array.Chunked, error) {
 	if c == nil {
-		return nil, fmt.Errorf("arrowgo: nil arrow column")
+		return nil, errors.New("arrowgo: nil arrow column")
 	}
 
 	dt, err := ImportType(c.DataType())
@@ -44,7 +45,7 @@ func ImportChunked(c *arrow.Chunked) (*array.Chunked, error) {
 // nothing but is what the rest of arrow-go expects to be able to do.
 func ExportChunked(c *array.Chunked) (*arrow.Chunked, error) {
 	if c == nil {
-		return nil, fmt.Errorf("arrowgo: nil kuma column")
+		return nil, errors.New("arrowgo: nil kuma column")
 	}
 
 	dt, err := ExportType(c.DType())
@@ -73,7 +74,7 @@ func ExportChunked(c *array.Chunked) (*arrow.Chunked, error) {
 // record batch, each of them a single chunk.
 func ImportRecordBatch(rec arrow.RecordBatch) (*array.Table, error) {
 	if rec == nil {
-		return nil, fmt.Errorf("arrowgo: nil arrow record")
+		return nil, errors.New("arrowgo: nil arrow record")
 	}
 
 	schema, err := ImportSchema(rec.Schema())
@@ -133,7 +134,7 @@ func ExportRecordBatch(t *array.Table) (arrow.RecordBatch, error) {
 // chunks and all.
 func ImportTable(t arrow.Table) (*array.Table, error) {
 	if t == nil {
-		return nil, fmt.Errorf("arrowgo: nil arrow table")
+		return nil, errors.New("arrowgo: nil arrow table")
 	}
 
 	schema, err := ImportSchema(t.Schema())
@@ -181,7 +182,7 @@ func ExportTable(t *array.Table) (arrow.Table, error) {
 // converts, there is a column for every field, and neither half is nil.
 func exportColumns(t *array.Table) (*arrow.Schema, []*array.Chunked, error) {
 	if t == nil {
-		return nil, nil, fmt.Errorf("arrowgo: nil kuma table")
+		return nil, nil, errors.New("arrowgo: nil kuma table")
 	}
 	if t.NumCols() != t.Schema.Len() {
 		return nil, nil, fmt.Errorf("arrowgo: a table of %d columns with a schema of %d fields",

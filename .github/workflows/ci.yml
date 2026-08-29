@@ -109,6 +109,10 @@ jobs:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
     defaults:
       run:
+        # Named again rather than inherited from the top of the file. A job that
+        # sets defaults.run replaces the block rather than adding to it, and
+        # without this the Windows runner reads the gofmt step as PowerShell.
+        shell: bash
         working-directory: arrowgo
     steps:
       - uses: actions/checkout@v7
