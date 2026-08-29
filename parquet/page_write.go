@@ -27,9 +27,10 @@ import (
 //
 // The body is the bytes as they go in the file, which means already encoded,
 // already compressed if the chunk is compressed, and with the levels in front of
-// the values. Nothing here encodes or compresses anything. It returns how many
-// bytes it wrote, header and body together, which is what a caller adds up to
-// know where the next page starts.
+// the values. Nothing here encodes or compresses anything, and the body is
+// written from where it sits rather than copied. It returns how many bytes it
+// wrote, header and body together, which is what a caller adds up to know where
+// the next page starts.
 //
 // The header has to agree with the body. CompressedSize is the length of the
 // body, and for the second version of the data page the two level lengths are
@@ -51,13 +52,20 @@ func WritePage(w io.Writer, h *PageHeader, body []byte) (int64, error) {
 	var b writer
 	h.write(&b, body)
 	b.put(byte(thriftStop))
-	b.buf = append(b.buf, body...)
 
+	// The header and the body go down as two writes rather than one. Joining
+	// them would mean copying every page of every file through a buffer to save
+	// a call, and a page is a megabyte where a header is forty bytes.
 	n, err := w.Write(b.buf)
 	if err != nil {
 		return int64(n), fmt.Errorf("parquet: writing a %s: %w", h.Kind, err)
 	}
-	return int64(n), nil
+
+	m, err := w.Write(body)
+	if err != nil {
+		return int64(n + m), fmt.Errorf("parquet: writing a %s: %w", h.Kind, err)
+	}
+	return int64(n + m), nil
 }
 
 // writable says whether the header describes the body it was handed.

@@ -91,6 +91,19 @@
 // one of is written as the one and comes back as it, which is what happens to
 // large strings, large lists, fixed size lists and dictionaries.
 //
+// Write is all of that in one call, which is what writing a file amounts to: a
+// table goes in and a parquet file comes out. It goes down in one pass with
+// nothing seeked back to, so the writer can be a pipe or a socket, and it holds
+// one page rather than the file, so a table of a hundred million rows costs a
+// page. The bookkeeping is the whole of the job, because every offset in the
+// footer has to be where the thing it points at actually started and there is no
+// length in front of a page for a reader to check it against. So there is one
+// counter of bytes written and every offset in the footer is a copy of it,
+// rather than the same number arrived at a second way by adding up sizes. What
+// comes out is the plain file, with no compression, no dictionary pages and no
+// statistics in it, which is the largest file anything will open and the floor
+// the rest is built on. WriteFile is the same over a named file.
+//
 // ColumnReader is where the two halves meet. A page keeps its levels and its
 // values apart and only the rows that have a value are written down, so putting
 // a column back together means walking the two together and dropping the values
