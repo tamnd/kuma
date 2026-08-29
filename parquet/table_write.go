@@ -29,16 +29,16 @@ import (
 // started. Nothing here computes an offset by adding up sizes, since that is the
 // same number arrived at twice and the second way is the one that goes wrong.
 //
-// The file this writes is the plain one: every value written as it is, no
-// compression, no dictionary and no page index. That is a file any reader opens
-// and it is the floor the rest is built on, since a dictionary page holds plain
-// values and a chunk that gives up on its dictionary falls back to exactly what
-// this writes. What it costs is size, and a caller who wants the file smaller
-// wants the parts that are not written yet.
+// The file this writes is uncompressed and has no page index in it. What it
+// does have is a dictionary for each chunk of the columns that have few enough
+// distinct values for one, which is what makes a parquet file smaller than the
+// values in it, and the statistics, which are what a reader skips row groups on.
+// The dictionaries are in dict_write.go and the statistics in stats_write.go,
+// each next to the code that builds it.
 //
-// The statistics are written, since they cost a comparison a value and they are
-// what a reader skips row groups on. What goes down and why is in stats_write.go
-// next to the code that collects it.
+// The plain file is still the floor underneath all of that: a dictionary page
+// holds plain values, a chunk that decides against a dictionary is written
+// plainly, and WriteOptions.Plain writes the whole file that way.
 //
 // Only flat columns go out. A list or a group needs repetition levels, and the
 // reader next door does not read them either, so a writer that produced one
@@ -85,6 +85,16 @@ type WriteOptions struct {
 	// CreatedBy is the writer's name and version, which goes in the footer as
 	// free text. It defaults to naming this library.
 	CreatedBy string
+
+	// Plain writes every value as it is and puts no dictionary pages in the
+	// file.
+	//
+	// The default is to write a dictionary for each chunk of the columns that
+	// have few enough distinct values for one, which is what every other
+	// writer does and what makes a parquet file smaller than the values in it.
+	// Turning it off gives a larger file that costs less to write, since what
+	// a dictionary costs on the way out is a hash of every value.
+	Plain bool
 }
 
 // Write writes a table as a parquet file and returns how many bytes it wrote.
@@ -97,15 +107,18 @@ type WriteOptions struct {
 // connection, and nothing is buffered beyond the page being built, so a table of
 // a hundred million rows costs a page rather than a file.
 //
-// Every value is written plain and uncompressed, which is the file any reader
-// opens and the largest one. A column whose type kuma has and parquet has not is
-// refused by name rather than approximated, and so is a column that is a list, a
-// map or a struct, since those need repetition levels that nothing here reads
-// back yet.
+// Nothing is compressed. Each chunk of a column with few enough distinct values
+// is written as a dictionary page and indices into it, which is where most of
+// the size of a parquet file goes, and Options.Plain turns that off. A column
+// whose type kuma has and parquet has not is refused by name rather than
+// approximated, and so is a column that is a list, a map or a struct, since
+// those need repetition levels that nothing here reads back yet.
 //
-// A dictionary encoded column is written as its values, because in parquet a
-// dictionary is a decision about a page rather than a type and this does not
-// write dictionary pages yet. Such a column comes back as its value type.
+// A column the caller kept dictionary encoded is written as its values and gets
+// whatever dictionary this writer decides on, because in parquet a dictionary is
+// a decision about a chunk rather than a type. It comes back as its value type
+// where the chunk was written plainly and as a dictionary of it where the chunk
+// was not, which is the same rule every other file is read by.
 func Write(w io.Writer, t *array.Table, opts *WriteOptions) (int64, error) {
 	tw, err := newTableWriter(w, t, opts)
 	if err != nil {
@@ -160,8 +173,11 @@ type tableWriter struct {
 
 	plain  PlainEncoder
 	levels RLEEncoder
+	index  RLEEncoder
 	body   []byte
 	defs   []int32
+	codes  []int32
+	arrays []*array.Array
 }
 
 // newTableWriter settles everything about the file that does not depend on the
@@ -326,23 +342,41 @@ func (tw *tableWriter) group(lo, hi int) error {
 // say about it.
 func (tw *tableWriter) chunk(i int, col *array.Chunked) (ColumnChunk, error) {
 	c := &tw.columns[i]
+	v := tw.values[i]
+
+	// The arrays are settled before anything is written, because the dictionary
+	// decision needs a look at all of them and a column the caller kept
+	// dictionary encoded would otherwise be expanded once for the look and
+	// again for the writing. Nothing is copied for the ordinary column, which
+	// arrives as the type the schema says it is. Expanding a dictionary only to
+	// build another one is work this could avoid by writing the one that
+	// arrived, and that is worth doing when there is a table to measure it on.
+	tw.arrays = append(tw.arrays[:0], col.Chunks()...)
+	for k, a := range tw.arrays {
+		if !dtype.Equal(a.DType(), c.Type) {
+			tw.arrays[k] = decode(a, c.Type)
+		}
+	}
+	d := tw.dictFor(v)
 
 	// A required column writes no levels at all, so the only encoding in it is
 	// the one the values are in. Saying otherwise would have a reader believe a
-	// page holds something it does not.
+	// page holds something it does not. Plain stays in the list of a dictionary
+	// chunk, since a dictionary page is plain values.
 	encodings := []Encoding{Plain}
 	if c.MaxDefinition > 0 {
-		encodings = []Encoding{Plain, RLE}
+		encodings = append(encodings, RLE)
+	}
+	if d != nil {
+		encodings = append(encodings, RLEDictionary)
 	}
 
-	v := tw.values[i]
 	meta := ColumnMeta{
-		Type:           c.Element.Type,
-		Encodings:      encodings,
-		Path:           c.Path,
-		Codec:          Uncompressed,
-		NumValues:      int64(col.Len()),
-		DataPageOffset: tw.n,
+		Type:      c.Element.Type,
+		Encodings: encodings,
+		Path:      c.Path,
+		Codec:     Uncompressed,
+		NumValues: int64(col.Len()),
 
 		// How many values are missing is worth saying on its own, since a chunk
 		// with none missing is one a filter never has to think about nulls in
@@ -350,17 +384,25 @@ func (tw *tableWriter) chunk(i int, col *array.Chunked) (ColumnChunk, error) {
 		Stats: Statistics{NullCount: int64(col.NullCount()), HasNullCount: true},
 	}
 
-	for _, a := range col.Chunks() {
-		// A column the caller kept dictionary encoded is written as its values,
-		// since the schema says it is the value type and there are no dictionary
-		// pages yet. The cast is a gather rather than a conversion.
-		if !dtype.Equal(a.DType(), c.Type) {
-			a = decode(a, c.Type)
+	if d != nil {
+		// The dictionary page goes in front of the data pages and is where the
+		// chunk starts, so a reader that seeks to the chunk lands on it. Its
+		// bytes count towards both totals for the same reason: what a reader
+		// reads to get the chunk is the dictionary and the pages together.
+		meta.DictionaryPageOffset = tw.n
+		n, err := tw.dictionaryPage(d)
+		if err != nil {
+			return ColumnChunk{}, err
 		}
+		meta.TotalUncompressedSize += n
+		meta.TotalCompressedSize += n
+	}
 
+	meta.DataPageOffset = tw.n
+	for _, a := range tw.arrays {
 		for at := 0; at < a.Len(); {
 			rows := v.rows(a, at, tw.opts.PageSize)
-			n, err := tw.page(c, v, a, at, at+rows)
+			n, err := tw.page(c, v, d, a, at, at+rows)
 			if err != nil {
 				return ColumnChunk{}, err
 			}
@@ -372,6 +414,10 @@ func (tw *tableWriter) chunk(i int, col *array.Chunked) (ColumnChunk, error) {
 			meta.TotalCompressedSize += n
 			at += rows
 		}
+	}
+
+	if d != nil {
+		d.reset()
 	}
 
 	// The bounds are taken after the pages rather than before, because a chunk
@@ -387,13 +433,72 @@ func (tw *tableWriter) chunk(i int, col *array.Chunked) (ColumnChunk, error) {
 	return ColumnChunk{Meta: meta}, nil
 }
 
+// dictFor decides whether a column chunk goes down as a dictionary, and builds
+// the dictionary when it does.
+//
+// The whole chunk is walked before any of it is written. A writer that changed
+// its mind part way would leave indices at the front of the chunk and values at
+// the back, which the reader next door refuses by name, so a dictionary that
+// grows past what one is worth is thrown away and the chunk is written the plain
+// way. The walk is the price of the decision being right rather than nearly
+// right, and what it costs is a hash of every value.
+func (tw *tableWriter) dictFor(v *pageWriter) dictionary {
+	if v.dict == nil || tw.opts.Plain {
+		return nil
+	}
+
+	for _, a := range tw.arrays {
+		if !v.dict.scan(a, 0, a.Len()) {
+			v.dict.reset()
+			return nil
+		}
+	}
+
+	// A chunk of nothing but missing values has no values to point at, and a
+	// dictionary page of none is a page no reader is expecting to find.
+	if v.dict.size() == 0 {
+		return nil
+	}
+	return v.dict
+}
+
+// dictionaryPage writes the values of a chunk's dictionary as the page in front
+// of it.
+func (tw *tableWriter) dictionaryPage(d dictionary) (int64, error) {
+	tw.plain.Reset()
+	d.write(&tw.plain)
+	body := tw.plain.Bytes()
+
+	h := PageHeader{
+		Kind:             DictionaryPage,
+		CompressedSize:   int32(len(body)),
+		UncompressedSize: int32(len(body)),
+		NumValues:        int32(d.size()),
+
+		// A dictionary page is plain values whatever the pages behind it are.
+		// The older files say PlainDictionary here, which is the name the format
+		// took away from the dictionary page and gave to the data pages.
+		Encoding: Plain,
+	}
+
+	n, err := WritePage(tw.w, &h, body)
+	tw.n += n
+	return n, err
+}
+
 // page writes rows [i, j) of one chunk as one data page.
 //
 // It is the first version of the data page, which keeps the levels inside the
 // body behind four bytes of their length. The second version keeps them outside
 // it and says how long they are in the header, which is worth having when the
 // body is compressed and is a header field for nothing when it is not.
-func (tw *tableWriter) page(c *Column, v *pageWriter, a *array.Array, i, j int) (int64, error) {
+//
+// How many rows fit was worked out from the width of a plain value even when d
+// says the page holds indices, which makes the pages of a dictionary chunk
+// smaller than the page size asks for rather than larger. That is the right way
+// round to be wrong: a page under the size costs a header and a page over it
+// costs a reader the memory it sized a buffer to.
+func (tw *tableWriter) page(c *Column, v *pageWriter, d dictionary, a *array.Array, i, j int) (int64, error) {
 	tw.body = tw.body[:0]
 	if c.MaxDefinition > 0 {
 		levels := tw.definitions(c, a, i, j)
@@ -401,16 +506,22 @@ func (tw *tableWriter) page(c *Column, v *pageWriter, a *array.Array, i, j int) 
 		tw.body = append(tw.body, levels...)
 	}
 
-	tw.plain.Reset()
-	v.encode(&tw.plain, a, i, j)
-	tw.body = append(tw.body, tw.plain.Bytes()...)
+	encoding := Plain
+	if d != nil {
+		encoding = RLEDictionary
+		tw.body = tw.indices(tw.body, d, a, i, j)
+	} else {
+		tw.plain.Reset()
+		v.encode(&tw.plain, a, i, j)
+		tw.body = append(tw.body, tw.plain.Bytes()...)
+	}
 
 	h := PageHeader{
 		Kind:             DataPage,
 		CompressedSize:   int32(len(tw.body)),
 		UncompressedSize: int32(len(tw.body)),
 		NumValues:        int32(j - i),
-		Encoding:         Plain,
+		Encoding:         encoding,
 
 		// Both level encodings are given even for a column that writes no
 		// levels, because a data page that does not say how its levels are
@@ -422,6 +533,21 @@ func (tw *tableWriter) page(c *Column, v *pageWriter, a *array.Array, i, j int) 
 	n, err := WritePage(tw.w, &h, tw.body)
 	tw.n += n
 	return n, err
+}
+
+// indices appends rows [i, j) to a page body as indices into the chunk's
+// dictionary, which is one byte saying how wide an index is and then the runs.
+//
+// The width is what the largest index takes, so a chunk of two distinct values
+// is a bit a row before the runs are picked and a repeat of the whole page after
+// they are. A chunk of one distinct value has a width of nothing at all, which
+// is legal and is what it should be: every value is the same one and the header
+// already says how many there are.
+func (tw *tableWriter) indices(body []byte, d dictionary, a *array.Array, i, j int) []byte {
+	width := bits.Len(uint(d.size() - 1))
+	tw.codes = d.indices(a, i, j, tw.codes[:0])
+	body = append(body, byte(width))
+	return append(body, mustLevels(&tw.index, width, tw.codes)...)
 }
 
 // definitions writes the definition levels of rows [i, j).
@@ -482,6 +608,11 @@ type pageWriter struct {
 	// goes in the footer for a reader to skip the chunk on. It is nil for a
 	// column of nothing, which has no values to be the smallest and largest of.
 	take tracker
+
+	// dict is the distinct values of the chunk being written, when the column
+	// is one worth writing as a dictionary. It is nil for the types that are
+	// not, and it is filled in and thrown away once per chunk.
+	dict dictionary
 
 	// bits is how many bits one value takes, which is what the rows of a page
 	// are worked out from. It is zero for a byte array, whose values have no
@@ -561,10 +692,15 @@ func valueWriter(t dtype.DataType) (*pageWriter, error) {
 		return direct[int32]((*PlainEncoder).Int32, int32Bound), nil
 	case dtype.Int64Kind, dtype.Time64Kind, dtype.TimestampKind:
 		return direct[int64]((*PlainEncoder).Int64, int64Bound), nil
+	// A float is written plainly whatever else the file does. A dictionary is
+	// a map and equality there is not identity: a negative zero equals a
+	// positive one and would come back as whichever of them went in first, and
+	// a NaN equals nothing at all including itself, so a chunk of them would
+	// fill a dictionary with values none of which could be found in it again.
 	case dtype.Float32Kind:
-		return direct[float32]((*PlainEncoder).Float, floatBound), nil
+		return plain(direct[float32]((*PlainEncoder).Float, floatBound)), nil
 	case dtype.Float64Kind:
-		return direct[float64]((*PlainEncoder).Double, doubleBound), nil
+		return plain(direct[float64]((*PlainEncoder).Double, doubleBound)), nil
 
 	case dtype.StringKind, dtype.LargeStringKind, dtype.BinaryKind, dtype.LargeBinaryKind:
 		return blobWriter((*PlainEncoder).ByteArray), nil
@@ -579,12 +715,20 @@ func valueWriter(t dtype.DataType) (*pageWriter, error) {
 	}
 }
 
+// plain takes the dictionary off a page writer, for the columns where a
+// dictionary is the wrong thing rather than a thing that did not pay.
+func plain(v *pageWriter) *pageWriter {
+	v.dict = nil
+	return v
+}
+
 // direct writes a column already at the width parquet stores it at, which is
 // the case that costs nothing when nothing is missing.
 func direct[T array.Numeric](put func(*PlainEncoder, []T), bound func(T) []byte) *pageWriter {
 	var buf []T
 	var b bounds[T]
-	return &pageWriter{take: b.taker(bound), encode: func(e *PlainEncoder, a *array.Array, i, j int) {
+	d := &numberDict[T, T]{put: put, add: b.add}
+	return &pageWriter{take: b.taker(bound), dict: d, encode: func(e *PlainEncoder, a *array.Array, i, j int) {
 		vals := a.Values[T]()
 		if a.NullCount() == 0 {
 			// The whole run in one call and no copy, which is the path a column
@@ -613,7 +757,8 @@ func direct[T array.Numeric](put func(*PlainEncoder, []T), bound func(T) []byte)
 func widened[T array.Numeric, W array.Numeric](put func(*PlainEncoder, []W), bound func(T) []byte) *pageWriter {
 	var buf []W
 	var b bounds[T]
-	return &pageWriter{take: b.taker(bound), encode: func(e *PlainEncoder, a *array.Array, i, j int) {
+	d := &numberDict[T, W]{put: put, add: b.add}
+	return &pageWriter{take: b.taker(bound), dict: d, encode: func(e *PlainEncoder, a *array.Array, i, j int) {
 		vals := a.Values[T]()
 		buf = slices.Grow(buf[:0], j-i)
 		for k := i; k < j; k++ {
@@ -651,7 +796,8 @@ func boolWriter() *pageWriter {
 func blobWriter(put func(*PlainEncoder, [][]byte)) *pageWriter {
 	var buf [][]byte
 	var b blobBounds
-	return &pageWriter{take: b.taker(), encode: func(e *PlainEncoder, a *array.Array, i, j int) {
+	d := &blobDict{put: put, add: b.add}
+	return &pageWriter{take: b.taker(), dict: d, encode: func(e *PlainEncoder, a *array.Array, i, j int) {
 		buf = slices.Grow(buf[:0], j-i)
 		for k := i; k < j; k++ {
 			if a.IsValid(k) {
