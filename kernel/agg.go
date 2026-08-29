@@ -508,10 +508,11 @@ func NUnique(c *array.Chunked, g *Groups) (*array.Chunked, error) {
 // dt, which is always a count, and an error for a column there is no key
 // encoding for. It is exported for the reason [SumType] gives.
 //
-// This one is the rule itself rather than a copy of it, since deciding what a
-// value encodes as is a job that starts with the type.
+// Counting the distinct values of a column is grouping by it and asking how
+// many groups there were, so what it can read is [GroupKeyType]'s answer rather
+// than a list of its own.
 func NUniqueType(dt dtype.DataType) (dtype.DataType, error) {
-	if _, err := binderFor(dt); err != nil {
+	if _, err := GroupKeyType(dt); err != nil {
 		return nil, err
 	}
 	return dtype.Int64, nil

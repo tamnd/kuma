@@ -22,6 +22,11 @@ var (
 	// meaning, such as a literal no column can hold or an expression that is
 	// asked to be a condition and is not.
 	ErrWrongType = errors.New("wrong type")
+
+	// ErrDuplicateColumn is returned when an operator would produce two columns
+	// of the same name, which is a frame nobody can read a column out of by
+	// name.
+	ErrDuplicateColumn = errors.New("duplicate column")
 )
 
 // ColumnError says that a column was asked for and is not there.
@@ -35,9 +40,10 @@ var (
 //	  available: symbol, price, qty, side
 //	  did you mean: symbol?
 type ColumnError struct {
-	// Op is the operation that was running, such as "Select". It is empty when
-	// the plan was being checked rather than run, since what went wrong there
-	// is the expression and not the step it sits in.
+	// Op is the operation that was running, such as "Select", or the operator
+	// the name was written in when the plan was being checked rather than run,
+	// such as "Filter". It is empty when neither is known, which is what
+	// checking an expression on its own against a schema gives.
 	Op string
 
 	// Name is the column that was asked for.

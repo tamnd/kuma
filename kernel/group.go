@@ -209,6 +209,23 @@ func (k *key) appendRow(dst []byte, i int) []byte {
 // for equality.
 func newKey(c *array.Chunked) (*key, error) { return buildKey(c, binderFor) }
 
+// GroupKeyType returns the type a column of type dt has when it is grouped by,
+// which is its own type since a key column comes through a group by unchanged,
+// and an error for a column whose values there is no way to compare for
+// equality.
+//
+// It is exported for the same reason [HasOrder] is. A plan has to know whether
+// a query can group by a column before there is a column to ask, and the same
+// question decides what a distinct and a join can be keyed on. This one is the
+// rule itself rather than a copy of it, since deciding how a value is written
+// into a key is a job that starts with the type.
+func GroupKeyType(dt dtype.DataType) (dtype.DataType, error) {
+	if _, err := binderFor(dt); err != nil {
+		return nil, err
+	}
+	return dt, nil
+}
+
 // buildKey is newKey with a say in how a value is written.
 //
 // Encoding a column as a dictionary walks the rows the way a group by does and
