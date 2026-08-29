@@ -176,6 +176,7 @@ type tableWriter struct {
 	index  RLEEncoder
 	body   []byte
 	defs   []int32
+	marks  []int32
 	codes  []int32
 	arrays []*array.Array
 }
@@ -399,10 +400,11 @@ func (tw *tableWriter) chunk(i int, col *array.Chunked) (ColumnChunk, error) {
 	}
 
 	meta.DataPageOffset = tw.n
+	base := 0
 	for _, a := range tw.arrays {
 		for at := 0; at < a.Len(); {
 			rows := v.rows(a, at, tw.opts.PageSize)
-			n, err := tw.page(c, v, d, a, at, at+rows)
+			n, err := tw.page(c, v, d, a, base, at, at+rows)
 			if err != nil {
 				return ColumnChunk{}, err
 			}
@@ -414,6 +416,7 @@ func (tw *tableWriter) chunk(i int, col *array.Chunked) (ColumnChunk, error) {
 			meta.TotalCompressedSize += n
 			at += rows
 		}
+		base += a.Len()
 	}
 
 	if d != nil {
@@ -442,13 +445,20 @@ func (tw *tableWriter) chunk(i int, col *array.Chunked) (ColumnChunk, error) {
 // grows past what one is worth is thrown away and the chunk is written the plain
 // way. The walk is the price of the decision being right rather than nearly
 // right, and what it costs is a hash of every value.
+//
+// What the walk leaves behind in marks is the index of every row of the chunk,
+// one for one and in order, which is what the pages are written from. A chunk
+// that gives its dictionary up leaves whatever it had got to, which nothing
+// reads.
 func (tw *tableWriter) dictFor(v *pageWriter) dictionary {
 	if v.dict == nil || tw.opts.Plain {
 		return nil
 	}
 
+	tw.marks = tw.marks[:0]
 	for _, a := range tw.arrays {
-		if !v.dict.scan(a, 0, a.Len()) {
+		var ok bool
+		if tw.marks, ok = v.dict.scan(a, tw.marks); !ok {
 			v.dict.reset()
 			return nil
 		}
@@ -498,7 +508,10 @@ func (tw *tableWriter) dictionaryPage(d dictionary) (int64, error) {
 // smaller than the page size asks for rather than larger. That is the right way
 // round to be wrong: a page under the size costs a header and a page over it
 // costs a reader the memory it sized a buffer to.
-func (tw *tableWriter) page(c *Column, v *pageWriter, d dictionary, a *array.Array, i, j int) (int64, error) {
+//
+// The rows are [i, j) of a, and base is where a starts in the chunk, which is
+// what says where in the marks of the chunk those rows are.
+func (tw *tableWriter) page(c *Column, v *pageWriter, d dictionary, a *array.Array, base, i, j int) (int64, error) {
 	tw.body = tw.body[:0]
 	if c.MaxDefinition > 0 {
 		levels := tw.definitions(c, a, i, j)
@@ -509,7 +522,7 @@ func (tw *tableWriter) page(c *Column, v *pageWriter, d dictionary, a *array.Arr
 	encoding := Plain
 	if d != nil {
 		encoding = RLEDictionary
-		tw.body = tw.indices(tw.body, d, a, i, j)
+		tw.body = tw.indices(tw.body, d, a, tw.marks[base+i:base+j], i, j)
 	} else {
 		tw.plain.Reset()
 		v.encode(&tw.plain, a, i, j)
@@ -543,11 +556,26 @@ func (tw *tableWriter) page(c *Column, v *pageWriter, d dictionary, a *array.Arr
 // they are. A chunk of one distinct value has a width of nothing at all, which
 // is legal and is what it should be: every value is the same one and the header
 // already says how many there are.
-func (tw *tableWriter) indices(body []byte, d dictionary, a *array.Array, i, j int) []byte {
+//
+// The marks handed in are the chunk's marks for those rows, one for one with
+// them and including the missing ones. A page holds the values that are there
+// and nothing for the ones that are not, so an array with something missing is
+// walked to leave those out, and one with nothing missing goes down as it
+// stands.
+func (tw *tableWriter) indices(body []byte, d dictionary, a *array.Array, marks []int32, i, j int) []byte {
+	if a.NullCount() > 0 {
+		tw.codes = tw.codes[:0]
+		for k := i; k < j; k++ {
+			if a.IsValid(k) {
+				tw.codes = append(tw.codes, marks[k-i])
+			}
+		}
+		marks = tw.codes
+	}
+
 	width := bits.Len(uint(d.size() - 1))
-	tw.codes = d.indices(a, i, j, tw.codes[:0])
 	body = append(body, byte(width))
-	return append(body, mustLevels(&tw.index, width, tw.codes)...)
+	return append(body, mustLevels(&tw.index, width, marks)...)
 }
 
 // definitions writes the definition levels of rows [i, j).
