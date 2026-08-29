@@ -191,3 +191,12 @@ func writeEnums[T ~int32](w *writer, id int16, vals []T) {
 		w.varint(int64(v))
 	}
 }
+
+// writeLongs writes a list of long integers, which in a footer is a histogram of
+// levels and nothing else.
+func writeLongs(w *writer, id int16, vals []int64) {
+	w.listHeader(id, thriftInt64, len(vals))
+	for _, v := range vals {
+		w.varint(v)
+	}
+}

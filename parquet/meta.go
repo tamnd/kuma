@@ -207,6 +207,62 @@ type ColumnMeta struct {
 	// range happens to contain the value.
 	BloomFilterOffset int64
 	BloomFilterLength int32
+
+	// PageStats counts the pages of the chunk by what they hold and how they
+	// are encoded, and is empty for a writer that did not produce it.
+	PageStats []PageEncodingStats
+
+	// Sizes is what the chunk costs to hold once it is decoded, and is what a
+	// reader would otherwise have to read the pages to find out.
+	Sizes SizeStatistics
+}
+
+// PageEncodingStats counts the pages of a column chunk that hold one thing and
+// are encoded one way.
+//
+// A chunk with a dictionary usually has two of these, one saying there is a
+// single dictionary page in the plain encoding and one saying how many data
+// pages there are in the dictionary encoding. That is enough to tell a reader
+// whether a chunk fell back off its dictionary part way through without opening
+// a page of it, which is the thing the encodings list on the chunk cannot say,
+// since a list holding both the dictionary encoding and the plain one is the
+// same list whether one page fell back or every page did.
+type PageEncodingStats struct {
+	Kind     PageKind
+	Encoding Encoding
+
+	// Count is how many pages of the chunk are that kind in that encoding.
+	Count int32
+}
+
+// SizeStatistics is what a column chunk costs once it is decoded.
+//
+// A reader sizing a buffer knows the compressed and the uncompressed size of a
+// chunk from the metadata, but uncompressed is still encoded, and a column of
+// byte arrays written as a dictionary or as deltas is many times larger laid out
+// than it is on disk. UnencodedBytes is that size, so a reader can allocate once
+// rather than grow into it.
+//
+// The two histograms are for repeated columns. Each counts the values of the
+// chunk at every level from nought to the maximum, so a reader can work out how
+// many rows a chunk holds, and how many of them are null or empty lists, without
+// reading a level out of a page. They are absent for a flat column, where the
+// answer is the number of values and the null count that are already there.
+type SizeStatistics struct {
+	UnencodedBytes int64
+
+	// HasUnencodedBytes says the writer wrote UnencodedBytes, which tells a
+	// chunk that costs nothing to hold from one that said nothing. A column of
+	// empty strings is the first and most files are the second.
+	HasUnencodedBytes bool
+
+	RepetitionHistogram []int64
+	DefinitionHistogram []int64
+}
+
+// written says whether the writer said anything about the size of the chunk.
+func (s *SizeStatistics) written() bool {
+	return s.HasUnencodedBytes || s.RepetitionHistogram != nil || s.DefinitionHistogram != nil
 }
 
 // Statistics is what a writer said about the values of a column chunk.
@@ -551,10 +607,59 @@ func (m *ColumnMeta) read(r *reader, t thriftType) error {
 			m.DictionaryPageOffset, err = r.integer(t)
 		case 12:
 			err = m.Stats.read(r, t)
+		case 13:
+			m.PageStats, err = structs(r, t, (*PageEncodingStats).read)
 		case 14:
 			m.BloomFilterOffset, err = r.integer(t)
 		case 15:
 			m.BloomFilterLength, err = r.int32(t)
+		case 16:
+			err = m.Sizes.read(r, t)
+		default:
+			err = r.skip(t)
+		}
+		return err
+	})
+}
+
+func (p *PageEncodingStats) read(r *reader) error {
+	p.Encoding = NoEncoding
+
+	return r.fields(func(id int16, t thriftType) error {
+		var err error
+		switch id {
+		case 1:
+			var v int32
+			if v, err = r.int32(t); err == nil {
+				p.Kind = PageKind(v)
+			}
+		case 2:
+			err = readEncoding(r, t, &p.Encoding)
+		case 3:
+			p.Count, err = r.int32(t)
+		default:
+			err = r.skip(t)
+		}
+		return err
+	})
+}
+
+func (s *SizeStatistics) read(r *reader, t thriftType) error {
+	if t != thriftStruct {
+		return r.skip(t)
+	}
+
+	return r.fields(func(id int16, t thriftType) error {
+		var err error
+		switch id {
+		case 1:
+			if s.UnencodedBytes, err = r.integer(t); err == nil {
+				s.HasUnencodedBytes = true
+			}
+		case 2:
+			s.RepetitionHistogram, err = longs(r, t)
+		case 3:
+			s.DefinitionHistogram, err = longs(r, t)
 		default:
 			err = r.skip(t)
 		}
