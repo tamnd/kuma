@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
+	"slices"
 	"testing"
 
 	"github.com/tamnd/kuma/array"
@@ -176,21 +178,197 @@ func TestReadColumnEmptyDictionary(t *testing.T) {
 	}
 }
 
-// TestReadColumnFallback refuses a chunk that starts as indices into a
-// dictionary and gives up on it half way through.
+// TestReadColumnFallback reads a chunk that starts as indices into a dictionary
+// and gives up on it half way through.
 //
 // A writer keeps a dictionary while the distinct values fit in a page of their
 // own and writes the rest of the chunk plainly once they do not, which leaves
-// one chunk in two shapes. Reading it would mean expanding the dictionary into
-// the column, and not doing that is the whole reason to read a dictionary this
-// way, so the chunk is refused until there is something better to do with it.
+// one chunk in two shapes. Every column of this file is two thousand distinct
+// strings written by pyarrow with a dictionary page limit small enough to
+// overflow, so the chunk really does change encoding half way down and what
+// comes back is a plain column rather than a dictionary one.
 func TestReadColumnFallback(t *testing.T) {
-	b, chunk, column := chunkOf(t, "fallback.parquet", "code")
-
-	_, err := parquet.ReadColumn(bytes.NewReader(b), int64(len(b)), chunk, column)
-	if !errors.Is(err, parquet.ErrUnsupported) {
-		t.Errorf("got %v, want %v", err, parquet.ErrUnsupported)
+	a := readColumn(t, "fallback.parquet", "code")
+	if a.DType() != dtype.String {
+		t.Fatalf("got %s, want %s", a.DType(), dtype.String)
 	}
+	if a.Len() != 2000 {
+		t.Fatalf("got %d rows, want 2000", a.Len())
+	}
+
+	for i := range a.Len() {
+		want := fmt.Sprintf("value-%06d", i)
+		if got := string(a.Bytes(i)); got != want {
+			t.Fatalf("value %d: got %q, want %q", i, got, want)
+		}
+	}
+}
+
+// TestColumnReaderFallbackPages reads the fallback out of pages built by hand,
+// which is where the parts of it a real file does not reach are.
+//
+// A file this package can write is either one shape or the other, so the rows
+// in front of the fallback holding a missing one and an index the dictionary
+// has no value for are both shapes only a hand built page has.
+func TestColumnReaderFallbackPages(t *testing.T) {
+	// The rows read as indices keep what they were, missing ones included, and
+	// the plain page behind them reads as any plain page does.
+	t.Run("nulls in front of the fallback", func(t *testing.T) {
+		r := readerOf(t, optional())
+		if err := r.Page(dictPage(10, 20)); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+		if err := r.Page(indexPage([]byte{0x03, 0x05}, 3, 1, 0)); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+		if err := r.Page(pageV1([]byte{0x02, 0x01}, 30)); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+
+		a := finish(t, r)
+		if a.DType() != dtype.Int32 {
+			t.Fatalf("got %s, want %s", a.DType(), dtype.Int32)
+		}
+		if a.Len() != 4 || a.NullCount() != 1 || !a.IsNull(1) {
+			t.Fatalf("%d values, %d of them null, and the second is null: %v",
+				a.Len(), a.NullCount(), a.IsNull(1))
+		}
+
+		got := a.Values[int32]()
+		for i, want := range map[int]int32{0: 20, 2: 10, 3: 30} {
+			if got[i] != want {
+				t.Errorf("value %d: got %d, want %d", i, got[i], want)
+			}
+		}
+	})
+
+	// An index the dictionary has no value for is the error it would have been
+	// had the chunk stayed a dictionary to the end, since a chunk that expands
+	// never builds the array that would otherwise have caught it.
+	t.Run("an index the dictionary has not got", func(t *testing.T) {
+		r := readerOf(t, optional())
+		if err := r.Page(dictPage(10, 20)); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+		if err := r.Page(indexPage([]byte{0x04, 0x01}, 2, 1, 7)); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+
+		err := r.Page(pageV1([]byte{0x02, 0x01}, 30))
+		if !errors.Is(err, parquet.ErrFormat) {
+			t.Errorf("got %v, want %v", err, parquet.ErrFormat)
+		}
+	})
+}
+
+// TestColumnReaderFallbackTypes puts the rows back for a column of each shape a
+// value comes in.
+//
+// Reading a value out of the dictionary is a different thing for each of them:
+// a number is copied, a narrow one is copied at the width the column keeps
+// rather than the width the file wrote, a boolean is a bit, and a column of
+// nothing but nulls has no values at all. No writer puts any of these four in a
+// dictionary, so the pages are built by hand, but a reader meets what it is
+// given rather than what this package would have written.
+func TestColumnReaderFallbackTypes(t *testing.T) {
+	// The one width parquet has no type for. The file wrote int32 and the
+	// column keeps int8, so the row put back is narrowed the same way a row read
+	// out of a plain page is.
+	t.Run("a narrow column", func(t *testing.T) {
+		c := optional()
+		c.Type = dtype.Int8
+
+		r := readerOf(t, c)
+		if err := r.Page(dictPage(10, 20)); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+		if err := r.Page(indexPage([]byte{0x04, 0x01}, 2, 1, 0)); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+		if err := r.Page(pageV1([]byte{0x02, 0x01}, 30)); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+
+		a := finish(t, r)
+		if got := a.Values[int8](); !slices.Equal(got, []int8{20, 10, 30}) {
+			t.Errorf("got %v, want [20 10 30]", got)
+		}
+	})
+
+	t.Run("a float column", func(t *testing.T) {
+		c := optional()
+		c.Element.Type = parquet.Float
+		c.Type = dtype.Float32
+
+		r := readerOf(t, c)
+		if err := r.Page(dictPageOf(2, floatBytes(1.5, 2.5))); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+		if err := r.Page(indexPage([]byte{0x04, 0x01}, 2, 1, 0)); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+		if err := r.Page(plainPage([]byte{0x02, 0x01}, 1, floatBytes(3.5))); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+
+		a := finish(t, r)
+		if got := a.Values[float32](); !slices.Equal(got, []float32{2.5, 1.5, 3.5}) {
+			t.Errorf("got %v, want [2.5 1.5 3.5]", got)
+		}
+	})
+
+	// A boolean is a bit rather than a byte wherever it is written, so both the
+	// dictionary page and the plain page behind it are packed.
+	t.Run("a boolean column", func(t *testing.T) {
+		c := optional()
+		c.Element.Type = parquet.Boolean
+		c.Type = dtype.Bool
+
+		r := readerOf(t, c)
+		if err := r.Page(dictPageOf(2, []byte{0x02})); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+		if err := r.Page(indexPage([]byte{0x04, 0x01}, 2, 1, 0)); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+		if err := r.Page(plainPage([]byte{0x02, 0x01}, 1, []byte{0x01})); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+
+		a := finish(t, r)
+		if a.Len() != 3 {
+			t.Fatalf("%d values", a.Len())
+		}
+		for i, want := range []bool{true, false, true} {
+			if got := a.Bool(i); got != want {
+				t.Errorf("value %d: got %v, want %v", i, got, want)
+			}
+		}
+	})
+
+	// A column the writer knew nothing about, whose pages hold no values under
+	// their levels. There is nothing in the dictionary to read, so a row put
+	// back is a null the same as a row read.
+	t.Run("a column of nothing but nulls", func(t *testing.T) {
+		c := optional()
+		c.Type = dtype.Null
+
+		r := readerOf(t, c)
+		if err := r.Page(dictPageOf(2, nil)); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+		if err := r.Page(indexPage([]byte{0x04, 0x01}, 2, 1, 0)); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+		if err := r.Page(plainPage([]byte{0x02, 0x01}, 1, nil)); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+
+		a := finish(t, r)
+		if a.Len() != 3 || a.NullCount() != 3 {
+			t.Fatalf("%d values, %d of them null", a.Len(), a.NullCount())
+		}
+	})
 }
 
 // dictPage builds a dictionary page of int32 values written plainly.
@@ -199,13 +377,41 @@ func dictPage(values ...int32) parquet.Page {
 	for _, v := range values {
 		body = binary.LittleEndian.AppendUint32(body, uint32(v))
 	}
+	return dictPageOf(int32(len(values)), body)
+}
+
+// dictPageOf builds a dictionary page out of a body already written, which is
+// how the types dictPage does not write are put in one.
+func dictPageOf(values int32, body []byte) parquet.Page {
 	return parquet.Page{
 		PageHeader: parquet.PageHeader{
-			Kind: parquet.DictionaryPage, Encoding: parquet.Plain,
-			NumValues: int32(len(values)),
+			Kind: parquet.DictionaryPage, Encoding: parquet.Plain, NumValues: values,
 		},
 		Data: body,
 	}
+}
+
+// plainPage builds a data page out of a body already written, which is pageV1
+// for the types it does not write either.
+func plainPage(levels []byte, values int32, body []byte) parquet.Page {
+	data := binary.LittleEndian.AppendUint32(nil, uint32(len(levels)))
+	data = append(data, levels...)
+	return parquet.Page{
+		PageHeader: parquet.PageHeader{
+			Kind: parquet.DataPage, Encoding: parquet.Plain,
+			DefinitionEncoding: parquet.RLE, NumValues: values,
+		},
+		Data: append(data, body...),
+	}
+}
+
+// floatBytes writes float32 values the way a plain page holds them.
+func floatBytes(values ...float32) []byte {
+	var body []byte
+	for _, v := range values {
+		body = binary.LittleEndian.AppendUint32(body, math.Float32bits(v))
+	}
+	return body
 }
 
 // indexRun writes up to eight indices the way the values of a dictionary
@@ -494,5 +700,27 @@ func BenchmarkReadColumnDictionary(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// BenchmarkReadColumnFallback reads a chunk that gives its dictionary up half
+// way through, which is the one shape that costs more to read than the same
+// column written plainly would have.
+//
+// The rows in front of the fallback are read twice, once as indices and once
+// again out of the dictionary, and the file here is the worst case for it: every
+// value is distinct, so the dictionary buys nothing and the writer fills it as
+// fast as it can. What this measures is the price of opening such a file at all,
+// since the alternative was refusing it.
+func BenchmarkReadColumnFallback(b *testing.B) {
+	file, chunk, c := chunkOf(&testing.T{}, "fallback.parquet", "code")
+	r := bytes.NewReader(file)
+
+	b.SetBytes(chunk.Meta.TotalCompressedSize)
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := parquet.ReadColumn(r, int64(len(file)), chunk, c); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

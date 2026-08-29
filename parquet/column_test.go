@@ -375,7 +375,7 @@ func TestReadColumnEmptyChunk(t *testing.T) {
 // cannot read yet.
 //
 // Each of them is a piece that is still to come rather than a file that is
-// wrong, so all three say so with the same error and none of them is read half
+// wrong, so all four say so with the same error and none of them is read half
 // way and handed back.
 func TestReadColumnRefused(t *testing.T) {
 	cases := []struct {
@@ -386,6 +386,7 @@ func TestReadColumnRefused(t *testing.T) {
 		{name: "a chunk compressed with brotli", file: "codecs.parquet", column: "br"},
 		{name: "a repeated column", file: "nested.parquet", column: "tags.list.element"},
 		{name: "a decimal", file: "plain.parquet", column: "price"},
+		{name: "a byte stream split column", file: "split.parquet", column: "x"},
 	}
 
 	for _, c := range cases {

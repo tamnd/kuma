@@ -17,6 +17,14 @@ import "fmt"
 // would work on ten million strings instead of ten million integers. The one
 // thing worth doing with a dictionary on the way in is nothing.
 //
+// A chunk whose writer gave the dictionary up part way through is the one place
+// that does not hold. It is indices at the front and plain values at the back,
+// and a column is one shape or the other, so the rows read as indices are put
+// back as values when the first plain page turns up and the rest of the chunk
+// is read the way any plain chunk is. The work lands on the chunks that fall
+// back and on no others, which is the trade the format leaves: reading such a
+// chunk costs a gather, and refusing it costs the file.
+//
 // The indices are the RLE hybrid again, the same encoding as the levels, at a
 // width the writer chose and wrote in the first byte of the page rather than
 // one that follows from the schema. A width of nought is a column with one
@@ -72,15 +80,16 @@ func (r *ColumnReader) dictionary(p Page) error {
 // the chunk, since the encodings a chunk lists are the ones it used somewhere. A
 // writer that fills its dictionary gives up on it and writes the rest of the
 // chunk the way it would have written all of it, which leaves a chunk that is
-// indices at the front and values at the back. Reading that would mean expanding
-// the dictionary into the column, which is the one thing reading it this way is
-// for, so it is refused by name rather than done quietly.
+// indices at the front and values at the back. Both of the writers most files
+// come from do that, so it is a shape to read rather than one to refuse, and
+// what it takes is expanding the dictionary into the rows already read.
 func (r *ColumnReader) encoding(p Page) error {
 	switch p.Encoding {
 	case Plain, DeltaBinaryPacked, DeltaLengthByteArray, DeltaByteArray:
 		if r.dict != nil {
-			return fmt.Errorf("parquet: %w: %s falls back from its dictionary to %s pages",
-				ErrUnsupported, r.column.Name(), p.Encoding)
+			if err := r.expand(); err != nil {
+				return err
+			}
 		}
 		if !r.values.reads(p.Encoding) {
 			// Each of the delta encodings goes with some of the physical types
@@ -105,6 +114,38 @@ func (r *ColumnReader) encoding(p Page) error {
 		return fmt.Errorf("parquet: %w: a %s page of %s and only plain, dictionary and delta pages are read yet",
 			ErrUnsupported, p.Encoding, r.column.Name())
 	}
+}
+
+// expand puts the rows read as indices back as values, which is what a chunk
+// that gives its dictionary up leaves no choice about.
+//
+// It is the one thing reading a dictionary is meant to avoid and there is
+// nothing else to do with such a chunk: the rows behind the fallback are values
+// and the ones in front of it are indices, and a column is one or the other.
+// The cost lands on the chunks that fall back and on no others, and it is a
+// gather of the rows already read rather than of the whole chunk, since
+// everything after this point is read as values in the first place.
+//
+// The indices are checked here rather than left to the dictionary array that is
+// never now built, so an index the file has no value for is the same error
+// whichever shape the chunk turns out to have.
+func (r *ColumnReader) expand() error {
+	dict, rows := r.dict, r.indices.Finish()
+	r.dict, r.out, r.run = nil, r.builder, r.values.run
+
+	at := rows.Values[int32]()
+	for k := range rows.Len() {
+		if rows.IsNull(k) {
+			r.builder.AppendNull()
+			continue
+		}
+		if at[k] < 0 || int(at[k]) >= dict.Len() {
+			return fmt.Errorf("parquet: %w: a row of %s indexes %d of a dictionary of %d",
+				ErrFormat, r.column.Name(), at[k], dict.Len())
+		}
+		r.values.take(dict, int(at[k]))
+	}
+	return nil
 }
 
 // decodeIndices reads the indices of one data page into r.index.
