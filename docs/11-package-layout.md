@@ -69,6 +69,7 @@ github.com/tamnd/kuma
     expr.go                     the untyped expression the typed handles carry
     intern.go                   the table that makes two equal expressions one
     plan.go                     node types
+    agg.go                      the aggregations, and what each one reads
     optimize.go                 the passes from document 02
     explain.go                  the documented output format
     serialize.go                the protobuf plan format for document 07

@@ -8,6 +8,13 @@
 // expression written against the wrong frame, and what it hands to the engine
 // underneath is an [Expr].
 //
+// A plan is a tree of [Node], one node per operator, with a scan at the leaves
+// and the rows flowing up. It says what the query asks for and not how to work
+// it out, so a filter over a scan is a filter over a scan whether the engine
+// ends up reading the whole file or skipping most of it. Turning the first into
+// the second is what the optimizer passes do, and each of them takes a plan and
+// returns a plan rather than changing the one it was given.
+//
 // The two rules that everything else here depends on are that an expression
 // never changes once it has been built, and that two expressions that say the
 // same thing are the same [Expr]. Together they make finding a repeated
