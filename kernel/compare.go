@@ -73,30 +73,15 @@ func Compare(a, b *array.Chunked, op CompareOp) (*array.Chunked, error) {
 	if int(op) >= len(compareNames) {
 		panic(fmt.Sprintf("kernel: compare with an unknown operator %d", uint8(op)))
 	}
-	n, fixedA, fixedB := binaryLen("compare", a, b)
-
-	dt, err := dtype.Coerce(a.DType(), b.DType())
-	if err != nil {
-		return nil, fmt.Errorf("kernel: cannot compare %s with %s: %w", a.DType(), b.DType(), err)
-	}
-
-	// Dictionary encoding is storage rather than meaning, so what is compared
-	// is the values behind the indices. Coerce keeps the encoding when both
-	// sides have one, because a gather and a group by would rather have it, and
-	// a comparison is the operation that has to see through it.
-	if d, ok := dt.(dtype.Dictionary); ok {
-		dt = d.Value
-	}
-
-	// A null column has no values to compare, so every answer is that nobody
-	// knows. It is the one type that gets this far without a comparison.
-	if dt.Kind() == dtype.NullKind {
-		return nulls(dtype.Bool, n), nil
-	}
-
-	rel, err := comparator(dt)
+	rel, err := relationFor(a.DType(), b.DType())
 	if err != nil {
 		return nil, err
+	}
+	n, fixedA, fixedB := binaryLen("compare", a, b)
+	if rel == nil {
+		// A null column has no values to compare, so every answer is that
+		// nobody knows.
+		return nulls(dtype.Bool, n), nil
 	}
 
 	out := builder(dtype.Bool)
@@ -114,6 +99,45 @@ func Compare(a, b *array.Chunked, op CompareOp) (*array.Chunked, error) {
 		out.AppendBool(holds(op, r, ordered))
 	}
 	return one(dtype.Bool, out.Finish()), nil
+}
+
+// CompareType returns the type a comparison of two column types gives, which
+// is a boolean whenever the two can be compared at all, and an error saying why
+// not when they cannot.
+//
+// It is the answer [Compare] would give, worked out from the types alone with
+// no data behind them, so that a query can be turned away while it is being
+// built. Compare goes through the same rule, so the two cannot come to
+// disagree.
+func CompareType(a, b dtype.DataType) (dtype.DataType, error) {
+	if _, err := relationFor(a, b); err != nil {
+		return nil, err
+	}
+	return dtype.Bool, nil
+}
+
+// relationFor is what the two sides are compared by, and the one rule that
+// [Compare] and [CompareType] both go through. It is nil when there is nothing
+// to compare, which is when both sides are columns of nothing.
+func relationFor(a, b dtype.DataType) (relation, error) {
+	dt, err := dtype.Coerce(a, b)
+	if err != nil {
+		return nil, fmt.Errorf("kernel: cannot compare %s with %s: %w", a, b, err)
+	}
+
+	// Dictionary encoding is storage rather than meaning, so what is compared
+	// is the values behind the indices. Coerce keeps the encoding when both
+	// sides have one, because a gather and a group by would rather have it, and
+	// a comparison is the operation that has to see through it.
+	if d, ok := dt.(dtype.Dictionary); ok {
+		dt = d.Value
+	}
+
+	// The null type is the one that gets this far without a comparison.
+	if dt.Kind() == dtype.NullKind {
+		return nil, nil
+	}
+	return comparator(dt)
 }
 
 // holds says whether a three way comparison satisfies the operator. An

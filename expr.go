@@ -150,26 +150,19 @@ func operands(n *plan.Expr, look lookupFunc) (a, b *array.Chunked, err error) {
 // where the rule about a float literal against an integer column lives.
 func literal(v any, hint dtype.DataType) (*array.Chunked, error) {
 	if t, ok := v.(time.Time); ok {
-		ts, ok := hint.(dtype.Timestamp)
-		if !ok {
-			// The literal is on its own, or against a column that is not a
-			// timestamp. Nanoseconds is what a time.Time holds, and what the
-			// other side makes of that is the other side's business.
-			ts = dtype.Timestamp{Unit: dtype.Nanosecond, Zone: "UTC"}
-		}
-		return timeLiteral(t, ts)
+		// A time is the one value with no column type of its own to coerce, so
+		// what it becomes is a rule rather than a coercion.
+		return timeLiteral(t, plan.TimeLiteralType(hint))
 	}
 
-	dt, err := literalType(v)
+	want, err := plan.LiteralTypeAgainst(v, hint)
 	if err != nil {
 		return nil, err
 	}
-	want := dt
-	if hint != nil {
-		want, err = dtype.CoerceLiteral(hint, dt)
-		if err != nil {
-			return nil, fmt.Errorf("kuma: %w", err)
-		}
+
+	dt, err := plan.LiteralTypeAgainst(v, nil)
+	if err != nil {
+		return nil, err
 	}
 
 	c, err := litColumn(dt, v)
@@ -226,47 +219,6 @@ func timeOfCount(count int64, unit dtype.TimeUnit) time.Time {
 	}
 }
 
-// literalType is the column type a value written in a query has on its own,
-// before it meets a column.
-func literalType(v any) (dtype.DataType, error) {
-	switch v.(type) {
-	case nil:
-		return dtype.Null, nil
-	case bool:
-		return dtype.Bool, nil
-	case int:
-		return dtype.Int64, nil
-	case int8:
-		return dtype.Int8, nil
-	case int16:
-		return dtype.Int16, nil
-	case int32:
-		return dtype.Int32, nil
-	case int64:
-		return dtype.Int64, nil
-	case uint:
-		return dtype.Uint64, nil
-	case uint8:
-		return dtype.Uint8, nil
-	case uint16:
-		return dtype.Uint16, nil
-	case uint32:
-		return dtype.Uint32, nil
-	case uint64:
-		return dtype.Uint64, nil
-	case float32:
-		return dtype.Float32, nil
-	case float64:
-		return dtype.Float64, nil
-	case string:
-		return dtype.String, nil
-	case []byte:
-		return dtype.Binary, nil
-	default:
-		return nil, fmt.Errorf("kuma: %T is not a value a column can hold: %w", v, ErrWrongType)
-	}
-}
-
 // litColumn builds a column holding the single value v, which is what a literal
 // written in a query becomes.
 func litColumn(dt dtype.DataType, v any) (*array.Chunked, error) {
@@ -285,9 +237,10 @@ func litColumn(dt dtype.DataType, v any) (*array.Chunked, error) {
 
 // appendLiteral writes one value of whatever type it turns out to be.
 //
-// A type that is not one of these has already been refused by [literalType],
-// which is asked first and is the same list, so getting here with one is a
-// mistake in this file rather than something a caller can write.
+// A type that is not one of these has already been refused by
+// [plan.LiteralType], which is asked first, or turned into a count by
+// [timeLiteral], so getting here with one is a mistake in this file rather than
+// something a caller can write.
 func appendLiteral(b *array.Builder, v any) {
 	switch v := v.(type) {
 	case nil:

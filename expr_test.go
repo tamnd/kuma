@@ -10,6 +10,8 @@ import (
 	"github.com/tamnd/kuma"
 	"github.com/tamnd/kuma/array"
 	"github.com/tamnd/kuma/dtype"
+	"github.com/tamnd/kuma/kernel"
+	"github.com/tamnd/kuma/plan"
 )
 
 // Trade is the schema the typed tests are written against. It is what a caller
@@ -844,6 +846,104 @@ func TestExprIsReusable(t *testing.T) {
 		}
 		if got.NumRows() != 3 {
 			t.Fatalf("the same condition kept %d rows this time, want 3", got.NumRows())
+		}
+	}
+}
+
+// TestThePlanTypeIsTheColumnThatComesOut is the promise plan.TypeOf makes: the
+// type a plan is checked to have is the type the values arrive as. The two are
+// worked out by different code over different things, one over the schema
+// alone and one over the values, so this is what keeps them in step.
+func TestThePlanTypeIsTheColumnThatComesOut(t *testing.T) {
+	f := trades(t)
+	s := f.Schema()
+
+	tests := []struct {
+		eager kuma.Expr[kuma.Dynamic]
+		node  *plan.Expr
+	}{
+		{
+			kuma.Dyn("price").Gt(150),
+			plan.Compare(kernel.OpGt, plan.Col("price"), plan.Lit(150)),
+		},
+		{
+			kuma.Dyn("qty").Add(1),
+			plan.Arith(kernel.OpAdd, plan.Col("qty"), plan.Lit(1)),
+		},
+		{
+			kuma.Dyn("price").MulExpr(kuma.Lit(2.0)),
+			plan.Arith(kernel.OpMul, plan.Col("price"), plan.Lit(2.0)),
+		},
+		{
+			kuma.Dyn("price").Gt(150).And(kuma.Dyn("symbol").Eq("AAPL")),
+			plan.And(
+				plan.Compare(kernel.OpGt, plan.Col("price"), plan.Lit(150)),
+				plan.Compare(kernel.OpEq, plan.Col("symbol"), plan.Lit("AAPL")),
+			),
+		},
+		{
+			kuma.Dyn("symbol").IsNull(),
+			plan.IsNull(plan.Col("symbol")),
+		},
+		{
+			kuma.NewF64Col[kuma.Dynamic]("price").AsI64(),
+			plan.Cast(dtype.Int64, plan.Col("price")),
+		},
+	}
+
+	for _, tt := range tests {
+		if tt.eager.String() != tt.node.String() {
+			t.Errorf("the query reads %s and the plan reads %s", tt.eager, tt.node)
+			continue
+		}
+
+		got, err := f.Eval(tt.eager)
+		if err != nil {
+			t.Errorf("Eval %s: %v", tt.eager, err)
+			continue
+		}
+		want, err := plan.TypeOf(tt.node, s)
+		if err != nil {
+			t.Errorf("TypeOf %s: %v", tt.node, err)
+			continue
+		}
+		if !dtype.Equal(got.DType(), want) {
+			t.Errorf("%s was checked as a %s and came out as a %s", tt.node, want, got.DType())
+		}
+	}
+}
+
+// TestThePlanCatchesWhatTheFrameWould is the other half of it. An expression
+// the check turns away is one the frame turns away too, so a query is refused
+// for the same reason wherever it is run.
+func TestThePlanCatchesWhatTheFrameWould(t *testing.T) {
+	f := trades(t)
+	s := f.Schema()
+
+	tests := []struct {
+		eager kuma.Expr[kuma.Dynamic]
+		node  *plan.Expr
+	}{
+		{
+			kuma.Dyn("price").AddExpr(kuma.Dyn("qty")),
+			plan.Arith(kernel.OpAdd, plan.Col("price"), plan.Col("qty")),
+		},
+		{
+			kuma.Dyn("qty").Gt(1.5),
+			plan.Compare(kernel.OpGt, plan.Col("qty"), plan.Lit(1.5)),
+		},
+		{
+			kuma.Dyn("nope").Gt(1),
+			plan.Compare(kernel.OpGt, plan.Col("nope"), plan.Lit(1)),
+		},
+	}
+
+	for _, tt := range tests {
+		if _, err := f.Eval(tt.eager); err == nil {
+			t.Errorf("the frame ran %s, which the plan should have turned away", tt.eager)
+		}
+		if _, err := plan.TypeOf(tt.node, s); err == nil {
+			t.Errorf("the plan passed %s, which the frame turns away", tt.node)
 		}
 	}
 }

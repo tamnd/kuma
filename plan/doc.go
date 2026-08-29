@@ -15,6 +15,13 @@
 // the second is what the optimizer passes do, and each of them takes a plan and
 // returns a plan rather than changing the one it was given.
 //
+// A plan is checked before it is run. [TypeOf] says what an expression comes
+// out as over a given schema, or what is wrong with it, and the rules it
+// follows are the kernels' own rather than a second set written out here. That
+// is what lets a query be turned away while it is still being built, with the
+// column that was misspelled and the cast that would fix it, rather than
+// partway through the second file.
+//
 // The two rules that everything else here depends on are that an expression
 // never changes once it has been built, and that two expressions that say the
 // same thing are the same [Expr]. Together they make finding a repeated

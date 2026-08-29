@@ -103,17 +103,23 @@ func TestNaNLiteralsAreNotShared(t *testing.T) {
 		t.Errorf("two NaN literals came back as one expression at %p", a)
 	}
 
-	// The table has to be no bigger for them, since an entry under a key that
-	// cannot be found again is an entry that cannot be removed again either.
-	everything := func(key) bool { return true }
-	before := countKeys(everything)
+	// None of them is in the table, since an entry under a key that cannot be
+	// found again is an entry that cannot be removed again either. What is
+	// counted is the NaN keys rather than the whole table, for the reason
+	// countCols gives: another test's expression being collected halfway
+	// through this one would otherwise move the answer.
+	nans := func(k key) bool {
+		v, ok := k.lit.(float64)
+		return k.kind == KindLiteral && ok && math.IsNaN(v)
+	}
 	held := make([]*Expr, 100)
 	for i := range held {
 		held[i] = nan()
 	}
-	if after := countKeys(everything); after != before {
-		t.Errorf("building %d NaN literals put %d entries in the table", len(held), after-before)
+	if got := countKeys(nans); got != 0 {
+		t.Errorf("building %d NaN literals put %d of them in the table", len(held), got)
 	}
+	runtime.KeepAlive(held)
 }
 
 func TestLiteralOfATypeNoColumnHoldsIsNotShared(t *testing.T) {
