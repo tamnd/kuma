@@ -31,14 +31,17 @@ import (
 // goroutine and evaluate it on another.
 //
 // Writing a step the table has seen before is a read lock and a map lookup, and
-// allocates nothing. Writing one it has not seen costs more than a plain
-// allocation would, since it is a write lock, an entry, and a cleanup left with
-// the runtime to take that entry out again when nobody holds the node any more.
-// That is the right way round. The expressions a program writes are nearly
-// always ones it has written before, because they come from the program rather
-// than from the data, and the case that pays is a caller building a genuinely
-// new expression per row, which is about a microsecond a row and gets its
-// memory back.
+// allocates nothing. That is not free, since hashing a key this size costs
+// about what allocating the node did, so a repeated expression is built for
+// roughly the same time as before and no memory at all.
+//
+// Writing a step the table has not seen costs more than a plain allocation
+// would, since it is a write lock, an entry, and a cleanup left with the
+// runtime to take that entry out again when nobody holds the node any more.
+// That is the right way round. Expressions come from the program rather than
+// from the data, so nearly all of them are ones the program has written before,
+// and the case that pays is a caller building a genuinely new expression per
+// row, which is a microsecond or so a row and gets its memory back.
 
 // nodeKey is everything that makes one step of an expression different from
 // another one. It is the key of the table, so it has to be comparable, and
