@@ -149,14 +149,15 @@ func operands(n *plan.Expr, look lookupFunc) (a, b *array.Chunked, err error) {
 // int64 column. What is refused is refused by [dtype.CoerceLiteral], which is
 // where the rule about a float literal against an integer column lives.
 func literal(v any, hint dtype.DataType) (*array.Chunked, error) {
+	if t, ok := v.(time.Time); ok {
+		// A time is the one value with no column type of its own to coerce, so
+		// what it becomes is a rule rather than a coercion.
+		return timeLiteral(t, plan.TimeLiteralType(hint))
+	}
+
 	want, err := plan.LiteralTypeAgainst(v, hint)
 	if err != nil {
 		return nil, err
-	}
-	if t, ok := v.(time.Time); ok {
-		// A time literal always comes back as a timestamp, since that is the
-		// only type it has, so the assertion holds whatever the hint was.
-		return timeLiteral(t, want.(dtype.Timestamp))
 	}
 
 	dt, err := plan.LiteralTypeAgainst(v, nil)

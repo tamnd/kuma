@@ -171,10 +171,27 @@ func LiteralType(v any) (dtype.DataType, bool) {
 	case []byte:
 		return dtype.Binary, true
 	case time.Time:
-		return dtype.Timestamp{Unit: dtype.Nanosecond, Zone: "UTC"}, true
+		return TimeLiteralType(nil), true
 	default:
 		return nil, false
 	}
+}
+
+// TimeLiteralType returns the timestamp a time literal takes when it is used
+// with a column of type dt, which is the column's own unit and zone when it is
+// a timestamp and nanoseconds in UTC when it is anything else or nothing at
+// all.
+//
+// A time.Time holds nanoseconds since the epoch and a zone, and it is the one
+// value written in a query with no column type of its own, so what it becomes
+// is this rule rather than [dtype.CoerceLiteral]. What a column that is not a
+// timestamp makes of a count of nanoseconds is its own business, which is
+// usually an error one step later.
+func TimeLiteralType(dt dtype.DataType) dtype.Timestamp {
+	if ts, ok := dt.(dtype.Timestamp); ok {
+		return ts
+	}
+	return dtype.Timestamp{Unit: dtype.Nanosecond, Zone: "UTC"}
 }
 
 // LiteralTypeAgainst returns the type a literal takes when it is used with a
@@ -196,13 +213,7 @@ func LiteralTypeAgainst(v any, dt dtype.DataType) (dtype.DataType, error) {
 		return lit, nil
 	}
 	if _, isTime := v.(time.Time); isTime {
-		if ts, ok := dt.(dtype.Timestamp); ok {
-			return ts, nil
-		}
-		// The column is not a timestamp, so there is no unit to take from it.
-		// What the other side makes of nanoseconds is its own business, and it
-		// is usually an error a line further on.
-		return lit, nil
+		return TimeLiteralType(dt), nil
 	}
 
 	want, err := dtype.CoerceLiteral(dt, lit)
