@@ -44,7 +44,7 @@ A CI check asserts that every package has a tier line and that no tier 1 package
 github.com/tamnd/kuma
 
   kuma.go                       Frame, LazyFrame, Series, the top level functions   T1
-  expr.go                       expression construction                             T1
+  expr.go                       the typed expression interface, evaluation          T1
   col.go                        F64Col, I64Col, StrCol, BoolCol, TimeCol and friends T1
   agg.go                        aggregation constructors                            T1
   io.go                         ScanCSV, ScanParquet, ScanIPC, ScanNDJSON           T1
@@ -66,6 +66,8 @@ github.com/tamnd/kuma
     dispatch_init.go            runtime feature detection
 
   plan/                         logical plan, optimizer passes, Explain             T2
+    expr.go                     the untyped expression the typed handles carry
+    intern.go                   the table that makes two equal expressions one
     plan.go                     node types
     optimize.go                 the passes from document 02
     explain.go                  the documented output format

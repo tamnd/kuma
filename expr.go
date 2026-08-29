@@ -1,15 +1,13 @@
 package kuma
 
 import (
-	"bytes"
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/tamnd/kuma/array"
 	"github.com/tamnd/kuma/dtype"
 	"github.com/tamnd/kuma/kernel"
+	"github.com/tamnd/kuma/plan"
 )
 
 // Expr is anything that turns into a column when a frame is put behind it,
@@ -17,7 +15,8 @@ import (
 //
 // The type parameter is the schema, so an expression written against Trade
 // cannot be handed to a frame of orders. That check is the compiler's, and it
-// is the reason the typed handles exist.
+// is the reason the typed handles exist. What the handle carries underneath is
+// a [plan.Expr], which is the same expression with the schema forgotten.
 //
 // The interface has an unexported method, so the expression types in this
 // package are the whole of it. That is on purpose. An expression is a small
@@ -30,176 +29,7 @@ import (
 type Expr[S any] interface {
 	fmt.Stringer
 
-	expr() *node
-}
-
-// nodeKind is what one step of an expression does.
-type nodeKind uint8
-
-const (
-	kindColumn    nodeKind = iota // a column of the frame, by name
-	kindLiteral                   // a value written in the query
-	kindCompare                   // one of the six comparisons
-	kindArith                     // one of the five arithmetic operators
-	kindAnd                       // three valued and
-	kindOr                        // three valued or
-	kindNot                       // three valued not
-	kindIsNull                    // whether the value is missing
-	kindIsNotNull                 // whether the value is there
-	kindCast                      // the same values in another type
-)
-
-// node is one step of an expression.
-//
-// It is one struct with a kind rather than an interface per operation. An
-// expression is built once and walked once, the tree is a few nodes deep, and
-// the shape of it is fixed by this package, so the tag is cheaper to build and
-// easier to read than a family of types would be.
-//
-// A node is never written to after the constructor that made it has returned,
-// and two nodes that say the same thing are one node. See exprintern.go for
-// what that buys and what it costs.
-type node struct {
-	kind nodeKind
-	name string           // the column, when kind is kindColumn
-	lit  any              // the value, when kind is kindLiteral
-	cmp  kernel.CompareOp // the comparison, when kind is kindCompare
-	ari  kernel.ArithOp   // the operator, when kind is kindArith
-	dt   dtype.DataType   // the type, when kind is kindCast
-	l, r *node            // the operands, none for a leaf
-}
-
-// The constructors. Every one of them goes through [intern], which is what makes
-// two equal expressions one expression. They describe the step rather than
-// building it, so that writing one the program has written before costs a
-// lookup and no allocation at all.
-
-func colNode(name string) *node {
-	return intern(nodeKey{kind: kindColumn, name: name}, nil, nil)
-}
-
-func litNode(v any) *node {
-	if b, ok := v.([]byte); ok {
-		// The one literal that refers to memory the caller still holds. It is
-		// copied so that an expression cannot change under whoever built it,
-		// which is what everything else here assumes, and so that what is in
-		// the table stays equal to the key it went in under.
-		v = bytes.Clone(b)
-	}
-
-	lit, ok := litKey(v)
-	if !ok {
-		// A value that cannot be looked up again once it is stored. Leaving it
-		// out of the table costs nothing but the sharing, and putting it in
-		// would mean an entry that can never be found and never be removed.
-		return build(nodeKey{kind: kindLiteral}, nil, v)
-	}
-	return intern(nodeKey{kind: kindLiteral, lit: lit}, nil, v)
-}
-
-func cmpNode(op kernel.CompareOp, l, r *node) *node {
-	return intern(nodeKey{kind: kindCompare, cmp: op, l: l, r: r}, nil, nil)
-}
-
-func ariNode(op kernel.ArithOp, l, r *node) *node {
-	return intern(nodeKey{kind: kindArith, ari: op, l: l, r: r}, nil, nil)
-}
-
-func logicNode(kind nodeKind, l, r *node) *node {
-	return intern(nodeKey{kind: kind, l: l, r: r}, nil, nil)
-}
-
-func unaryNode(kind nodeKind, l *node) *node {
-	return intern(nodeKey{kind: kind, l: l}, nil, nil)
-}
-
-func castNode(dt dtype.DataType, l *node) *node {
-	// A type goes into the key by the name it prints rather than by its value.
-	// The dtype package promises that two types print the same name if and
-	// only if they are equal, and a struct type holds a slice of fields, which
-	// a map key cannot.
-	return intern(nodeKey{kind: kindCast, dt: dt.String(), l: l}, dt, nil)
-}
-
-// String returns the expression as it would be written, which is what an error
-// about it names and what a column built from it is called.
-func (n *node) String() string {
-	var sb strings.Builder
-	n.write(&sb)
-	return sb.String()
-}
-
-func (n *node) write(sb *strings.Builder) {
-	switch n.kind {
-	case kindColumn:
-		sb.WriteString(n.name)
-	case kindLiteral:
-		sb.WriteString(literalText(n.lit))
-	case kindCompare:
-		n.infix(sb, n.cmp.String())
-	case kindArith:
-		n.infix(sb, n.ari.String())
-	case kindAnd:
-		n.infix(sb, "and")
-	case kindOr:
-		n.infix(sb, "or")
-	case kindNot:
-		sb.WriteString("(not ")
-		n.l.write(sb)
-		sb.WriteByte(')')
-	case kindIsNull:
-		n.suffix(sb, "is null")
-	case kindCast:
-		n.suffix(sb, "as "+n.dt.String())
-	default:
-		n.suffix(sb, "is not null")
-	}
-}
-
-// infix writes a two sided step in brackets, so that reading the text back
-// gives the tree that produced it rather than whatever Go's precedence would
-// have made of it. Every step but a leaf is written that way, for the same
-// reason.
-func (n *node) infix(sb *strings.Builder, op string) {
-	sb.WriteByte('(')
-	n.l.write(sb)
-	sb.WriteByte(' ')
-	sb.WriteString(op)
-	sb.WriteByte(' ')
-	n.r.write(sb)
-	sb.WriteByte(')')
-}
-
-// suffix writes a one sided step whose operator comes after the value.
-func (n *node) suffix(sb *strings.Builder, op string) {
-	sb.WriteByte('(')
-	n.l.write(sb)
-	sb.WriteByte(' ')
-	sb.WriteString(op)
-	sb.WriteByte(')')
-}
-
-// literalText is a literal as it would be written in Go, which is why a string
-// is quoted and a time is in RFC 3339.
-func literalText(v any) string {
-	switch v := v.(type) {
-	case nil:
-		return "null"
-	case bool:
-		return strconv.FormatBool(v)
-	case string:
-		return strconv.Quote(v)
-	case time.Time:
-		return v.Format(time.RFC3339Nano)
-	case float32:
-		return strconv.FormatFloat(float64(v), 'g', -1, 32)
-	case float64:
-		return strconv.FormatFloat(v, 'g', -1, 64)
-	case []byte:
-		return strconv.Quote(string(v))
-	default:
-		return fmt.Sprint(v)
-	}
+	expr() *plan.Expr
 }
 
 // lookupFunc finds a column of the frame an expression is being evaluated
@@ -226,53 +56,53 @@ func (f *Frame[S]) lookup(op string) lookupFunc {
 // is used by a literal and ignored by everything else, since a literal is the
 // one thing in an expression with no type of its own: the caller wrote 100 and
 // meant the number, so what it becomes is the column's business.
-func eval(n *node, look lookupFunc, hint dtype.DataType) (*array.Chunked, error) {
-	switch n.kind {
-	case kindColumn:
-		return look(n.name)
-	case kindLiteral:
-		return literal(n.lit, hint)
-	case kindCompare:
+func eval(n *plan.Expr, look lookupFunc, hint dtype.DataType) (*array.Chunked, error) {
+	switch n.Kind() {
+	case plan.KindColumn:
+		return look(n.Name())
+	case plan.KindLiteral:
+		return literal(n.Value(), hint)
+	case plan.KindCompare:
 		a, b, err := operands(n, look)
 		if err != nil {
 			return nil, err
 		}
-		return kernel.Compare(a, b, n.cmp)
-	case kindArith:
+		return kernel.Compare(a, b, n.CompareOp())
+	case plan.KindArith:
 		a, b, err := operands(n, look)
 		if err != nil {
 			return nil, err
 		}
-		return kernel.Arith(a, b, n.ari)
-	case kindAnd, kindOr:
+		return kernel.Arith(a, b, n.ArithOp())
+	case plan.KindAnd, plan.KindOr:
 		a, b, err := operands(n, look)
 		if err != nil {
 			return nil, err
 		}
-		if n.kind == kindAnd {
+		if n.Kind() == plan.KindAnd {
 			return kernel.And(a, b)
 		}
 		return kernel.Or(a, b)
-	case kindNot:
-		a, err := eval(n.l, look, nil)
+	case plan.KindNot:
+		a, err := eval(n.Left(), look, nil)
 		if err != nil {
 			return nil, err
 		}
 		return kernel.Not(a)
-	case kindIsNull:
-		a, err := eval(n.l, look, nil)
+	case plan.KindIsNull:
+		a, err := eval(n.Left(), look, nil)
 		if err != nil {
 			return nil, err
 		}
 		return kernel.IsNull(a), nil
-	case kindCast:
-		a, err := eval(n.l, look, nil)
+	case plan.KindCast:
+		a, err := eval(n.Left(), look, nil)
 		if err != nil {
 			return nil, err
 		}
-		return kernel.Cast(a, n.dt)
+		return kernel.Cast(a, n.DType())
 	default:
-		a, err := eval(n.l, look, nil)
+		a, err := eval(n.Left(), look, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -282,24 +112,25 @@ func eval(n *node, look lookupFunc, hint dtype.DataType) (*array.Chunked, error)
 
 // operands works out both sides of a two sided step, doing the side that has a
 // type first so that the literal on the other side knows what to become.
-func operands(n *node, look lookupFunc) (a, b *array.Chunked, err error) {
-	if n.l.kind == kindLiteral && n.r.kind != kindLiteral {
-		b, err = eval(n.r, look, nil)
+func operands(n *plan.Expr, look lookupFunc) (a, b *array.Chunked, err error) {
+	l, r := n.Left(), n.Right()
+	if l.Kind() == plan.KindLiteral && r.Kind() != plan.KindLiteral {
+		b, err = eval(r, look, nil)
 		if err != nil {
 			return nil, nil, err
 		}
-		a, err = eval(n.l, look, b.DType())
+		a, err = eval(l, look, b.DType())
 		if err != nil {
 			return nil, nil, err
 		}
 		return a, b, nil
 	}
 
-	a, err = eval(n.l, look, nil)
+	a, err = eval(l, look, nil)
 	if err != nil {
 		return nil, nil, err
 	}
-	b, err = eval(n.r, look, a.DType())
+	b, err = eval(r, look, a.DType())
 	if err != nil {
 		return nil, nil, err
 	}
