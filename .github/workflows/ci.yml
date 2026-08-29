@@ -96,6 +96,52 @@ jobs:
       - name: Test with simd
         run: go test -race ./...
 
+  # The arrow-go bridge is its own module, so the root ./... does not reach it
+  # and it needs a job of its own to be built and tested at all. It is the only
+  # part of the repository with a dependency, which is the reason it is a
+  # separate module and the reason this job exists.
+  arrowgo:
+    name: arrowgo (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: arrowgo
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: arrowgo/go.mod
+          check-latest: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test -race -shuffle=on ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go mod tidy is a no-op
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
   # The C data interface is an agreement with other libraries, so it is checked
   # against one. pyarrow and kuma end up in the same process and hand columns
   # to each other in both directions, and the test compares buffer addresses,

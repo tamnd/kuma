@@ -78,7 +78,7 @@ github.com/tamnd/kuma
 
   csv/                          reader and writer, schema inference                 T1
   parquet/                      reader with pushdown, writer with statistics        T1
-  ipc/                          Arrow IPC, C Data Interface, arrow-go bridge        T1
+  ipc/                          Arrow IPC and the C Data Interface                  T1
   ndjson/                       on encoding/json/v2                                 T1
   orc/  fwf/  xlsx/  htmlio/  xmlio/                                                T2
 
@@ -99,6 +99,8 @@ github.com/tamnd/kuma
 
   kumatest/                     frame equality, readable diffs, random data         T1
   kumagen/                      the code generator, main package                    T1
+
+  arrowgo/                      the arrow-go bridge, a module of its own            T2
 ```
 
 The tier column is the point of the table. Nothing in tier 1 may name a `simd` type, and nothing outside `kernel` may either.
@@ -117,6 +119,8 @@ The tier column is the point of the table. Nothing in tier 1 may name a `simd` t
 
 **`kuma-plot` is a separate module**, not a package here, so that a plotting dependency can never end up in a server binary. Same reasoning for the bindings repositories in document 07.
 
+**`arrowgo` is a nested module in the same repository.** Document 01 put the arrow-go bridge inside `ipc/`, and that would have put `apache/arrow-go` and its six transitive dependencies into the `go.mod` of everyone who imports kuma at all, including the people who only want to read a CSV. It is a directory here with a `go.mod` of its own, so `go get github.com/tamnd/kuma/arrowgo` brings the dependency and `go get github.com/tamnd/kuma` still brings nothing. It is in this repository rather than its own because a change to a kuma buffer layout and the change to the bridge that reads it are one commit, and a `replace` line in a module that is not the main one is ignored by consumers, so the tests here run against the working tree while everybody else gets the tagged version named in the require.
+
 ## Naming
 
 Package names are lowercase, single word, no underscores. `strs` rather than `stringops` because `strings` is taken and the alternative was worse. `temporal` rather than `time` for the same reason.
@@ -125,13 +129,14 @@ Do not stutter. `bitmap.New`, not `bitmap.NewBitmap`. `dtype.Int64`, not `dtype.
 
 Files are named for what they contain, and the build tagged variants share a stem so that the family is visible in a directory listing.
 
-## The modules, all four
+## The modules, all five
 
 | Module | Path | Contains |
 |---|---|---|
-| the library | `github.com/tamnd/kuma` | everything above |
+| the library | `github.com/tamnd/kuma` | everything above except the bridge |
+| the arrow-go bridge | `github.com/tamnd/kuma/arrowgo` | nested here, the one module with a dependency |
 | plotting | `github.com/tamnd/kuma-plot` | Vega-Lite output, post 1.0 |
 | benchmarks | `github.com/tamnd/kuma-bench` | document 10 |
 | bindings | `tamnd/kuma-py`, `tamnd/kuma-js` | document 07, not Go modules |
 
-Four repositories rather than one, because the release cadences differ, because the dependency sets are incompatible, and because a Python user should never have to clone Go source to install a wheel.
+Separate repositories rather than one, because the release cadences differ, because the dependency sets are incompatible, and because a Python user should never have to clone Go source to install a wheel. The bridge is the exception that stays in this repository, for the reason given above.

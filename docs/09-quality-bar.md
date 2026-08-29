@@ -72,7 +72,7 @@ No cgo in the core. The C Data Interface in `kuma/ipc` is build tagged separatel
 
 The core, meaning `kuma`, `kuma/dtype`, `kuma/bitmap`, `kuma/kernel`, `kuma/plan` and `kuma/exec`, depends on the standard library and nothing else.
 
-Packages around the edge may take narrow, well maintained dependencies: compression codecs in `kuma/parquet`, `apache/arrow-go` at the boundary in `kuma/ipc`, `database/sql` in `kuma/sqlio`. `kuma-plot` is a separate module and does not appear in the main `go.mod` at all.
+Packages around the edge may take narrow, well maintained dependencies: compression codecs in `kuma/parquet`, `database/sql` in `kuma/sqlio`. `kuma-plot` is a separate module and does not appear in the main `go.mod` at all, and neither does `kuma/arrowgo`, which is a nested module for exactly this reason: `apache/arrow-go` is a real dependency with transitive dependencies of its own, and only the people who want the bridge should be paying for it.
 
 Every new dependency needs a written justification in the pull request. The core staying standard library only is what makes `kuma/bitmap` and `kuma/kernel` credible as packages someone might import on their own, which is part of the argument in document 11 for not having an `internal/` directory.
 
