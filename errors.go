@@ -22,8 +22,9 @@ var (
 	ErrNoColumn = plan.ErrNoColumn
 
 	// ErrDuplicateColumn is returned when two columns in the same frame have
-	// the same name.
-	ErrDuplicateColumn = errors.New("duplicate column")
+	// the same name. It is the same error a plan gives for an operator that
+	// would produce two of them, for the reason ErrNoColumn is.
+	ErrDuplicateColumn = plan.ErrDuplicateColumn
 
 	// ErrWrongType is returned when a column is read as a Go type it is not
 	// stored as, such as reading a float64 column as an int64, and when a value

@@ -71,6 +71,7 @@ github.com/tamnd/kuma
     plan.go                     node types
     agg.go                      the aggregations, and what each one reads
     type.go                     what an expression is checked to be, before it runs
+    schema.go                   what a plan produces, and Validate
     error.go                    what a plan says when the check turns it away
     optimize.go                 the passes from document 02
     explain.go                  the documented output format

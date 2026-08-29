@@ -169,6 +169,27 @@ func TestHasOrderAgreesWithTheSort(t *testing.T) {
 	}
 }
 
+// TestGroupKeyTypeAgreesWithTheGroupBy is the same check for the key encoding,
+// which is what decides whether a query can group by a column, keep the
+// distinct rows of one, or join on it.
+func TestGroupKeyTypeAgreesWithTheGroupBy(t *testing.T) {
+	for _, tt := range everyType {
+		t.Run(tt.dt.String(), func(t *testing.T) {
+			c := columnOf(t, tt.dt, tt.vals)
+
+			_, err := kernel.GroupBy(c)
+			got, gerr := kernel.GroupKeyType(tt.dt)
+			if (gerr == nil) != (err == nil) {
+				t.Fatalf("GroupKeyType says %v for a %s column, and grouping by one says %v",
+					gerr, tt.dt, err)
+			}
+			if gerr == nil && !dtype.Equal(got, tt.dt) {
+				t.Errorf("a %s column is a %s when it is grouped by", tt.dt, got)
+			}
+		})
+	}
+}
+
 // columnOf builds a column of the values, or an empty one of a type there is no
 // builder for, which is how a list column gets into these tables.
 func columnOf(t *testing.T, dt dtype.DataType, vals []any) *array.Chunked {
