@@ -431,7 +431,7 @@ func TestWriteChunk(t *testing.T) {
 	}
 }
 
-// TestWriteEncodings checks the encodings a chunk says it holds.
+// TestWriteEncodings checks the encodings a plainly written chunk says it holds.
 //
 // A required column writes no levels, so saying it uses the run length encoding
 // would have a reader believe there is something in the page that is not there.
@@ -445,7 +445,7 @@ func TestWriteEncodings(t *testing.T) {
 		func(b *array.Builder) { b.AppendValues([]int64{1}); b.AppendNull() },
 	)
 
-	_, raw := writtenBytes(t, want, nil)
+	_, raw := writtenBytes(t, want, &parquet.WriteOptions{Plain: true})
 	m, err := parquet.ReadMetadata(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
 		t.Fatalf("ReadMetadata: %v", err)
@@ -512,9 +512,10 @@ func TestWriteCollapsed(t *testing.T) {
 // This is the round trip a caller doing anything at all to a parquet file makes:
 // most of a real file is dictionary encoded, the reader hands those columns back
 // encoded because that is the shape the kernels want them in, and writing one
-// out again has to expand it, since there are no dictionary pages here yet. The
-// values are what is checked rather than the encoding, because the point is that
-// nothing was lost on the way through.
+// out again expands it and builds a dictionary of its own, since in parquet a
+// dictionary is a decision about a chunk rather than a type. The values are what
+// is checked rather than the encoding, because the point is that nothing was
+// lost on the way through.
 func TestWriteDictionary(t *testing.T) {
 	want := readTable(t, "dictionary.parquet", &parquet.Options{Dictionary: true})
 	if want.Columns[0].Chunks()[0].Dictionary() == nil {

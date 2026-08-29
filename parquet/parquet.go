@@ -99,10 +99,18 @@
 // footer has to be where the thing it points at actually started and there is no
 // length in front of a page for a reader to check it against. So there is one
 // counter of bytes written and every offset in the footer is a copy of it,
-// rather than the same number arrived at a second way by adding up sizes. What
-// comes out is a plain file, with no compression and no dictionary pages in it,
-// which is the largest file anything will open and the floor the rest is built
-// on. WriteFile is the same over a named file.
+// rather than the same number arrived at a second way by adding up sizes.
+// WriteFile is the same over a named file.
+//
+// What comes out is uncompressed and has no page index in it, and every chunk
+// of a column with few enough distinct values is written as a dictionary page
+// and indices into it. That is where most of the size of a parquet file goes: a
+// chunk of ten million country codes holds two hundred and fifty strings once
+// and ten million small integers pointing at them. The decision is taken per
+// chunk and taken before anything is written, since a chunk that changed its
+// mind part way is one the reader here refuses, and a boolean and a float never
+// get one. WriteOptions.Plain writes every value as it is instead, which is the
+// largest file anything will open and the floor the rest is built on.
 //
 // What it does write is the statistics, and they are what turns a file into one
 // a scan can skip most of. Every column chunk goes down with the smallest and
