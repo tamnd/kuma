@@ -38,6 +38,14 @@
 // and the second writes how much of each value the one in front of it already
 // said, which is what turns a sorted column of keys into a few bytes a row.
 //
+// PlainEncoder is the same encoding the other way round and is where writing a
+// file starts. It writes the values of a page into a buffer, one method per
+// physical type and no conversions, because a value written at the wrong width
+// is not a wrong value but a different value at every position after it. There
+// is nothing in it that writes an int96, since no writer has produced one for
+// years and a timestamp in twelve bytes with no zone and no unit is a mistake
+// the format has replaced twice over.
+//
 // ColumnReader is where the two halves meet. A page keeps its levels and its
 // values apart and only the rows that have a value are written down, so putting
 // a column back together means walking the two together and dropping the values
