@@ -20,12 +20,12 @@ import (
 // The decision is taken per chunk and taken before anything is written. A writer
 // that started a chunk as a dictionary and gave up part way through would leave
 // indices at the front of the chunk and values at the back, which the reader
-// next door refuses by name, and rightly: reading it would mean expanding the
-// dictionary into the column, which is the one thing reading a dictionary this
-// way is for. So the values are walked once to build the dictionary, and if it
-// grows past what a dictionary is worth the whole chunk is written plainly
-// instead. The walk costs a hash of every value and it is the price of the
-// decision being right rather than nearly right.
+// next door reads, but only by expanding the dictionary into the rows it had
+// already read, which is the one thing reading a dictionary this way is for. So
+// the values are walked once to build the dictionary, and if it grows past what
+// a dictionary is worth the whole chunk is written plainly instead. The walk
+// costs a hash of every value and it is the price of the decision being right
+// rather than nearly right.
 //
 // The walk keeps the index of every row as it goes, which is what the pages
 // behind the dictionary page are made of. It is worth doing that here rather

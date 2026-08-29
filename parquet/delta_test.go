@@ -485,6 +485,31 @@ func TestColumnReaderDeltaPages(t *testing.T) {
 			t.Fatalf("%d values, %d and %d", a.Len(), a.Value[int32](0), a.Value[int32](1))
 		}
 	})
+
+	// A writer that fills its dictionary gives up on it and writes the rest of
+	// the chunk in whatever encoding it would have used all along, which here is
+	// differences rather than plain values. The rows read as indices are put
+	// back as values when the first of those turns up.
+	t.Run("falling back from a dictionary", func(t *testing.T) {
+		r := readerOf(t, optional())
+		if err := r.Page(dictPage(10, 20)); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+		if err := r.Page(indexPage([]byte{0x04, 0x01}, 2, 1, 0)); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+		if err := r.Page(deltaPage([]byte{0x04, 0x01}, 2, deltaOf(128, 4, 1, 2))); err != nil {
+			t.Fatalf("Page: %v", err)
+		}
+
+		a := finish(t, r)
+		if a.DType() != dtype.Int32 || a.Len() != 4 {
+			t.Fatalf("%d values of %s", a.Len(), a.DType())
+		}
+		if got := a.Values[int32](); !slices.Equal(got, []int32{20, 10, 1, 2}) {
+			t.Errorf("got %v, want [20 10 1 2]", got)
+		}
+	})
 }
 
 // TestColumnReaderRefusedDelta is the delta encoded pages a column has to
@@ -508,19 +533,6 @@ func TestColumnReaderRefusedDelta(t *testing.T) {
 			column: doubles,
 			pages:  []parquet.Page{deltaPage([]byte{0x04, 0x01}, 2, deltaOf(128, 4, 1, 2))},
 			want:   parquet.ErrFormat,
-		},
-		{
-			// A writer that fills its dictionary gives up on it and writes the
-			// rest of the chunk in whatever encoding it would have used all
-			// along, which here is differences rather than plain values.
-			name:   "falling back from a dictionary",
-			column: optional(),
-			pages: []parquet.Page{
-				dictPage(10, 20),
-				indexPage([]byte{0x04, 0x01}, 2, 1, 0),
-				deltaPage([]byte{0x04, 0x01}, 2, deltaOf(128, 4, 1, 2)),
-			},
-			want: parquet.ErrUnsupported,
 		},
 		{
 			name:   "a page whose header is not there",

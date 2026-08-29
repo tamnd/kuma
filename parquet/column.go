@@ -106,6 +106,13 @@ type columnValues struct {
 	// run appends count values from the buffer, starting at from. They are all
 	// present, since the nulls are put in by the caller.
 	run func(from, count int)
+
+	// take appends row k of a, which is the chunk's dictionary. It is how a
+	// chunk that gives its dictionary up part way through puts back the rows it
+	// had already read as indices, and it reads out of the dictionary rather
+	// than out of the buffer because the buffer of a byte array column points
+	// at the page it was decoded from and that page is long gone by then.
+	take func(a *array.Array, k int)
 }
 
 // reads says whether a page in the encoding e is one this column's values can
@@ -180,8 +187,9 @@ func NewColumnReader(c Column) (*ColumnReader, error) {
 //
 // A chunk written as indices into a dictionary comes back dictionary encoded,
 // so what Finish hands back for one of those is a dictionary of this type
-// rather than this type. Which of the two shapes a chunk has is not known
-// until its first page has been read.
+// rather than this type. Which of the two shapes a chunk has is not known until
+// its pages have been read, since a chunk that fills its dictionary and writes
+// the rest of itself plainly comes back as this type after all.
 func (r *ColumnReader) DType() dtype.DataType { return r.column.Type }
 
 // Len returns how many values have been assembled, nulls included.
@@ -195,6 +203,9 @@ func (r *ColumnReader) Len() int { return r.out.Len() }
 // hundred distinct strings is a million indices and two hundred strings. That
 // is the shape it was written in and the shape the kernels would rather have
 // it in, and expanding it would be undoing the one thing the encoding is for.
+//
+// The exception is a chunk that gave its dictionary up part way through, which
+// expand has already turned back into values by the time this is reached.
 func (r *ColumnReader) Finish() (*array.Array, error) {
 	if r.dict == nil {
 		return r.builder.Finish(), nil
@@ -522,6 +533,7 @@ func valuesFor(c Column, b *array.Builder) (*columnValues, error) {
 		return &columnValues{
 			decode: func(*PlainDecoder, int) error { return nil },
 			run:    func(_, count int) { b.AppendNulls(count) },
+			take:   func(*array.Array, int) { b.AppendNull() },
 		}, nil
 
 	case dtype.BoolKind:
@@ -584,7 +596,8 @@ func numbers[T array.Numeric](b *array.Builder, read func(*PlainDecoder, []T) (i
 			got, err := read(d, buf)
 			return exactly(got, n, err)
 		},
-		run: func(from, count int) { b.AppendValues(buf[from : from+count]) },
+		run:  func(from, count int) { b.AppendValues(buf[from : from+count]) },
+		take: func(a *array.Array, k int) { b.Append(a.Value[T](k)) },
 	}
 }
 
@@ -606,7 +619,8 @@ func integers[T deltaValue](b *array.Builder, read func(*PlainDecoder, []T) (int
 			got, err := d.Read(buf)
 			return exactly(got, n, err)
 		},
-		run: func(from, count int) { b.AppendValues(buf[from : from+count]) },
+		run:  func(from, count int) { b.AppendValues(buf[from : from+count]) },
+		take: func(a *array.Array, k int) { b.Append(a.Value[T](k)) },
 	}
 }
 
@@ -642,7 +656,8 @@ func narrowed[W deltaValue, T array.Numeric](b *array.Builder, read func(*PlainD
 			got, err := d.Read(wide)
 			return narrow(got, n, err)
 		},
-		run: func(from, count int) { b.AppendValues(buf[from : from+count]) },
+		run:  func(from, count int) { b.AppendValues(buf[from : from+count]) },
+		take: func(a *array.Array, k int) { b.Append(a.Value[T](k)) },
 	}
 }
 
@@ -655,7 +670,8 @@ func booleans(b *array.Builder) *columnValues {
 			got, err := d.Boolean(buf)
 			return exactly(got, n, err)
 		},
-		run: func(from, count int) { b.AppendBools(buf[from : from+count]) },
+		run:  func(from, count int) { b.AppendBools(buf[from : from+count]) },
+		take: func(a *array.Array, k int) { b.AppendBool(a.Bool(k)) },
 	}
 }
 
@@ -707,6 +723,7 @@ func blobsOf(b *array.Builder, read func(*PlainDecoder, [][]byte) (int, error)) 
 				b.AppendBytes(v)
 			}
 		},
+		take: func(a *array.Array, k int) { b.AppendBytes(a.Bytes(k)) },
 	}
 }
 

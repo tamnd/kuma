@@ -317,6 +317,30 @@ def fallback():
     )
 
 
+def split():
+    """A column written with the encoding that shuffles the bytes of a value.
+
+    Every value of a float is written a byte at a time, all the first bytes and
+    then all the second ones, which puts the bytes that repeat next to each
+    other and leaves the compressor something to work with. It is worth having
+    for the columns of measurements a dictionary is no use for, and this reader
+    does not read it yet, so the file is here for the refusal rather than for
+    the values.
+    """
+    rows = 1000
+    table = pa.table({"x": pa.array([i * 0.5 for i in range(rows)], pa.float64())})
+    pq.write_table(
+        table,
+        "split.parquet",
+        compression="none",
+        version="2.6",
+        column_encoding={"x": "BYTE_STREAM_SPLIT"},
+        use_dictionary=False,
+        write_statistics=False,
+        store_schema=False,
+    )
+
+
 def delta():
     """Integers written as differences rather than as values.
 
@@ -679,6 +703,7 @@ if __name__ == "__main__":
     pages()
     dictionary()
     fallback()
+    split()
     delta()
     strings()
     codecs()
@@ -689,7 +714,7 @@ if __name__ == "__main__":
     empty()
     print(
         "wrote alltypes.parquet, plain.parquet, chunks.parquet, nested.parquet, "
-        "pages.parquet, dictionary.parquet, fallback.parquet, delta.parquet, "
+        "pages.parquet, dictionary.parquet, fallback.parquet, split.parquet, delta.parquet, "
         "strings.parquet, codecs.parquet, codecs2.parquet, legacy.parquet, "
         "stats.parquet, index.parquet, bloom.parquet and empty.parquet"
     )
