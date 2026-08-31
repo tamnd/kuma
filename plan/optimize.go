@@ -82,6 +82,7 @@ func Optimize(n *Node, passes ...Pass) (*Node, error) {
 // on its own and so that a test can name the pass it is about.
 func Passes() []Pass {
 	return []Pass{
+		{Name: "predicate pushdown", Rewrite: PushPredicate},
 		{Name: "projection pushdown", Rewrite: PushProjection},
 	}
 }

@@ -1092,3 +1092,46 @@ func BenchmarkLazyFilterOfAWideFrame(b *testing.B) {
 		frameSink = out
 	}
 }
+
+// BenchmarkEagerFilterOverAJoin is the query written out by hand: the whole
+// left side goes into the join and an eighth of what comes out of it survives
+// the filter.
+func BenchmarkEagerFilterOverAJoin(b *testing.B) {
+	left, right := benchJoinSides(b)
+	cond := kuma.I64("qty").Lt(benchLen / 8)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		joined, err := left.Join(right, kuma.Using("k"), kuma.InnerJoin)
+		if err != nil {
+			b.Fatalf("Join: %v", err)
+		}
+		out, err := joined.Filter(cond)
+		if err != nil {
+			b.Fatalf("Filter: %v", err)
+		}
+		frameSink = out
+	}
+}
+
+// BenchmarkLazyFilterOverAJoin is the same query written down first, which is
+// what the predicate pushdown is worth. The filter reads a column of the left
+// side alone, so it runs before the join rather than after it, and the join
+// builds its table against an eighth of the rows and pairs an eighth as many.
+func BenchmarkLazyFilterOverAJoin(b *testing.B) {
+	left, right := benchJoinSides(b)
+	cond := kuma.I64("qty").Lt(benchLen / 8)
+	ctx := b.Context()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := left.Lazy().
+			Join(right.Lazy(), kuma.Using("k"), kuma.InnerJoin).
+			Filter(cond).
+			Collect(ctx)
+		if err != nil {
+			b.Fatalf("Collect: %v", err)
+		}
+		frameSink = out
+	}
+}

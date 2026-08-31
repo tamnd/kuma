@@ -670,6 +670,128 @@ func TestLazyJoin(t *testing.T) {
 	}
 }
 
+// TestLazyFilterOverAJoin is the case a wrong predicate pushdown gets quietly
+// wrong. The optimizer is free to move a filter under the join, and moving one
+// under the side of an outer join that gets filled with nulls changes the
+// answer without changing the shape of it, so the check is against the eager
+// join filtered afterwards, which cannot move anything anywhere.
+func TestLazyFilterOverAJoin(t *testing.T) {
+	left, right := trades(t), sectors(t)
+
+	tests := []struct {
+		name string
+		how  kuma.JoinType
+		cond kuma.BoolValue[kuma.Dynamic]
+	}{
+		{"the left side of an inner join", kuma.InnerJoin, kuma.F64("price").Gt(150)},
+		{"the right side of an inner join", kuma.InnerJoin, kuma.Str("sector").Eq("hardware")},
+		{"the left side of a left join", kuma.LeftJoin, kuma.F64("price").Gt(150)},
+		{"the right side of a left join", kuma.LeftJoin, kuma.Str("sector").Eq("hardware")},
+		{"the left side of a right join", kuma.RightJoin, kuma.F64("price").Gt(150)},
+		{"the right side of a right join", kuma.RightJoin, kuma.Str("sector").Eq("hardware")},
+		{"the left side of an outer join", kuma.OuterJoin, kuma.F64("price").Gt(150)},
+		{"the right side of an outer join", kuma.OuterJoin, kuma.Str("sector").Eq("hardware")},
+		{"both sides at once", kuma.LeftJoin, kuma.F64("price").Gt(150).And(kuma.Str("sector").Eq("hardware"))},
+		{"a semi join, which keeps no column of its right side", kuma.SemiJoin, kuma.I64("qty").Lt(100)},
+		{"an anti join, which keeps none of them either", kuma.AntiJoin, kuma.I64("qty").Lt(100)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lazy, err := left.Lazy().
+				Join(right.Lazy(), kuma.Using("symbol"), tt.how).
+				Filter(tt.cond).
+				Collect(t.Context())
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+
+			joined, err := left.Join(right, kuma.Using("symbol"), tt.how)
+			if err != nil {
+				t.Fatalf("Join: %v", err)
+			}
+			eager, err := joined.Filter(tt.cond)
+			if err != nil {
+				t.Fatalf("Filter: %v", err)
+			}
+
+			if lazy.String() != eager.String() {
+				t.Errorf("the lazy query gave\n%s\nand the eager one gave\n%s", lazy, eager)
+			}
+		})
+	}
+}
+
+// TestLazyFilterOverTheRestOfThePlan is the same check for the operators a
+// filter can be written above that are not joins, since each of them decides
+// for itself whether what is above it may go below it.
+func TestLazyFilterOverTheRestOfThePlan(t *testing.T) {
+	f := trades(t)
+	dear := kuma.F64("price").Gt(150)
+
+	tests := []struct {
+		name  string
+		lazy  func() *kuma.LazyFrame[kuma.Dynamic]
+		eager func() (*kuma.Frame[kuma.Dynamic], error)
+	}{
+		{
+			name: "over a sort, which the filter goes under",
+			lazy: func() *kuma.LazyFrame[kuma.Dynamic] {
+				return f.Lazy().Sort(kuma.Asc("qty")).Filter(dear)
+			},
+			eager: func() (*kuma.Frame[kuma.Dynamic], error) {
+				sorted, err := f.Sort(kuma.Asc("qty"))
+				if err != nil {
+					return nil, err
+				}
+				return sorted.Filter(dear)
+			},
+		},
+		{
+			name: "over a limit, which it stays above",
+			lazy: func() *kuma.LazyFrame[kuma.Dynamic] {
+				return f.Lazy().Sort(kuma.Asc("qty")).Head(3).Filter(dear)
+			},
+			eager: func() (*kuma.Frame[kuma.Dynamic], error) {
+				sorted, err := f.Sort(kuma.Asc("qty"))
+				if err != nil {
+					return nil, err
+				}
+				return sorted.Head(3).Filter(dear)
+			},
+		},
+		{
+			name: "over a distinct by one column, which it stays above",
+			lazy: func() *kuma.LazyFrame[kuma.Dynamic] {
+				return f.Lazy().Distinct("symbol").Filter(dear)
+			},
+			eager: func() (*kuma.Frame[kuma.Dynamic], error) {
+				one, err := f.Distinct("symbol")
+				if err != nil {
+					return nil, err
+				}
+				return one.Filter(dear)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lazy, err := tt.lazy().Collect(t.Context())
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			eager, err := tt.eager()
+			if err != nil {
+				t.Fatalf("the eager query: %v", err)
+			}
+			if lazy.String() != eager.String() {
+				t.Errorf("the lazy query gave\n%s\nand the eager one gave\n%s", lazy, eager)
+			}
+		})
+	}
+}
+
 // TestLazyCrossJoin is the seventh, which takes no keys and is the one a
 // forgotten key must not fall into.
 func TestLazyCrossJoin(t *testing.T) {
