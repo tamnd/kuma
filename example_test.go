@@ -1319,3 +1319,73 @@ func ExampleLazyFrame_Distinct() {
 	//   MSFT
 	//   NVDA
 }
+
+// ExampleFrame_SelectAs shows keeping the columns a struct names, which is a
+// select and a bind written once.
+func ExampleFrame_SelectAs() {
+	type Quote struct {
+		Symbol string  `kuma:"symbol"`
+		Price  float64 `kuma:"price"`
+	}
+
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT").Column(),
+		kuma.NewSeries("price", 189.5, 411.2).Column(),
+		kuma.NewSeries("qty", int64(100), 50).Column(),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	q, err := f.SelectAs[Quote]()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(q)
+	// Output:
+	// kuma.Frame[kuma_test.Quote] 2 rows x 2 cols
+	//
+	//   symbol |   price
+	//   string | float64
+	// ---------+--------
+	//   AAPL   |   189.5
+	//   MSFT   |   411.2
+}
+
+// ExampleLazyFrame_SelectAs shows the same step in a query, where what it buys
+// is that the steps after it are written against the struct rather than against
+// a frame whose columns the compiler no longer knows.
+func ExampleLazyFrame_SelectAs() {
+	type Quote struct {
+		Symbol string  `kuma:"symbol"`
+		Price  float64 `kuma:"price"`
+	}
+	price := kuma.NewF64Col[Quote]("price")
+
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT", "NVDA").Column(),
+		kuma.NewSeries("price", 189.5, 411.2, 121.0).Column(),
+		kuma.NewSeries("qty", int64(100), 50, 400).Column(),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	out, err := f.Lazy().SelectAs[Quote]().Filter(price.Gt(150)).Collect(context.Background())
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(out)
+	// Output:
+	// kuma.Frame[kuma_test.Quote] 2 rows x 2 cols
+	//
+	//   symbol |   price
+	//   string | float64
+	// ---------+--------
+	//   AAPL   |   189.5
+	//   MSFT   |   411.2
+}

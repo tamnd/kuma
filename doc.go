@@ -46,8 +46,10 @@
 //
 // [Bind] checks a frame against a Go struct and gives back the same frame with
 // that struct as its schema, after which a handle written for the struct works
-// on it and a handle written for anything else does not compile. [Dyn] is the
-// handle for a column whose type is only known when the file is read.
+// on it and a handle written for anything else does not compile.
+// [Frame.SelectAs] is the same thing with the columns the struct does not name
+// left out, which is a select and a bind written once. [Dyn] is the handle for a
+// column whose type is only known when the file is read.
 //
 // # Grouping
 //
@@ -123,12 +125,13 @@
 // what the same query written out by hand gives, because the same kernels do
 // the work.
 //
-// The steps are Filter, Select, With, Drop, GroupBy, Join, Distinct, Sort, Head
-// and Slice, and each of them is written the way the eager one is:
+// The steps are Filter, Select, SelectAs, With, Drop, GroupBy, Join, Distinct,
+// Sort, Head and Slice, and each of them is written the way the eager one is:
 //
 //	totals, err := prices.Lazy().GroupBy("symbol").Agg(kuma.Sum("qty")).Collect(ctx)
 //	both, err := trades.Lazy().InnerJoin(sectors.Lazy(), "symbol").Collect(ctx)
 //	names, err := trades.Lazy().Select("symbol").Distinct().Collect(ctx)
+//	quotes, err := trades.Lazy().SelectAs[Quote]().Collect(ctx)
 //
 // That is every operator the plan has today. A union, an explode, a pivot and a
 // window are what it grows next, and asking for one of those before the engine

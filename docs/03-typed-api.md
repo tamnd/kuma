@@ -120,6 +120,8 @@ func (lf *LazyFrame[S]) Join[R, Out any](other *LazyFrame[R], on JoinKeys[S, R])
 func (lf *LazyFrame[S]) Rows(ctx context.Context) ([]S, error)
 ```
 
+The names these ship under carry an As, so the first of them is `SelectAs[R]`. Go has no overloading, the string spelling of each of these was written first and is what most code uses, and one method cannot be written twice with different type parameters, so the typed half needs a name of its own. `SelectAs[Quote]()` takes no arguments: the struct already says which columns and in which order, and a column that has to be worked out first is a `With` and then a select of the result.
+
 Before Go 1.27 a method could only use the type parameters of its receiver, so `Agg[R]` was impossible. You had to write `kuma.Agg[Trade, Bar](lf, ...)` as a free function, which breaks the chain and reads terribly. That single restriction is why nobody has built this API in Go before, and it is why this project is worth starting now rather than two years ago.
 
 ## Where the names get checked against real data

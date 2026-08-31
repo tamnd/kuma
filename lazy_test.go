@@ -1030,5 +1030,23 @@ func BenchmarkLazyDistinct(b *testing.B) {
 	}
 }
 
+// BenchmarkLazySelectAs is BenchmarkFrameSelectAs written as a query, over the
+// same frame and the same struct, so the gap between the two is the whole cost
+// of going through the plan. Both of them are per column rather than per row,
+// so this is the one query where that cost is most of the number.
+func BenchmarkLazySelectAs(b *testing.B) {
+	f := benchFrame(b)
+	ctx := b.Context()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.Lazy().SelectAs[benchRow]().Collect(ctx)
+		if err != nil {
+			b.Fatalf("Collect: %v", err)
+		}
+		boundSink = out
+	}
+}
+
 // planSink keeps the plan the benchmark built from being optimized away.
 var planSink *plan.Node
