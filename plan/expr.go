@@ -193,6 +193,56 @@ func (e *Expr) eachColumn(yield func(string)) {
 	e.r.eachColumn(yield)
 }
 
+// conjuncts returns the parts of an expression that are joined by and, which
+// are the parts a predicate pushdown moves one at a time.
+//
+// An expression that is not an and is one conjunct, which is itself. The parts
+// come back in the order they are written, so rebuilding them with and in that
+// order gives back an expression that says the same thing, and gives back this
+// very expression when it was written left to right to begin with.
+func conjuncts(e *Expr) []*Expr {
+	if e == nil || e.kind != KindAnd {
+		return []*Expr{e}
+	}
+	return append(conjuncts(e.l), conjuncts(e.r)...)
+}
+
+// substitute returns the expression with every column named in by replaced by
+// what it stands for.
+//
+// It is what pushing a predicate under a projection means: a filter written
+// over the columns a step produces has to be rewritten over the columns that
+// step reads before it can run underneath it. An expression with none of those
+// names in it comes back as itself, since a rebuilt expression that says the
+// same thing is the same expression.
+func substitute(e *Expr, by map[string]*Expr) *Expr {
+	switch e.kind {
+	case KindColumn:
+		if r, ok := by[e.name]; ok {
+			return r
+		}
+		return e
+	case KindLiteral:
+		return e
+	case KindCompare:
+		return Compare(e.cmp, substitute(e.l, by), substitute(e.r, by))
+	case KindArith:
+		return Arith(e.ari, substitute(e.l, by), substitute(e.r, by))
+	case KindAnd:
+		return And(substitute(e.l, by), substitute(e.r, by))
+	case KindOr:
+		return Or(substitute(e.l, by), substitute(e.r, by))
+	case KindNot:
+		return Not(substitute(e.l, by))
+	case KindIsNull:
+		return IsNull(substitute(e.l, by))
+	case KindIsNotNull:
+		return IsNotNull(substitute(e.l, by))
+	default:
+		return Cast(e.dt, substitute(e.l, by))
+	}
+}
+
 // String returns the expression as it would be written, which is what an error
 // about it names and what a column built from it is called.
 func (e *Expr) String() string {
