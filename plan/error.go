@@ -29,6 +29,12 @@ var (
 	ErrDuplicateColumn = errors.New("duplicate column")
 )
 
+// errNoPlan is what every entry point says about a nil node. A plan is built by
+// the kuma package rather than written out by hand, so reaching it means a
+// query was thrown away half built and the caller kept going, and the message
+// is aimed at whoever has to work that out.
+var errNoPlan = errors.New("kuma: a plan with no operator in it")
+
 // ColumnError says that a column was asked for and is not there.
 //
 // It prints on several lines on purpose. A missing column name is the most

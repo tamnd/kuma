@@ -1052,3 +1052,43 @@ func BenchmarkLazyExplode(b *testing.B) {
 		frameSink = out
 	}
 }
+
+// BenchmarkEagerFilterOfAWideFrame is the query written out by hand: the filter
+// carries all sixteen columns through the take and the select drops fourteen of
+// them afterwards.
+func BenchmarkEagerFilterOfAWideFrame(b *testing.B) {
+	f := benchFrame(b)
+	cond := kuma.I64("c00").Lt(benchLen / 2)
+
+	b.SetBytes(benchLen * 8)
+	for b.Loop() {
+		kept, err := f.Filter(cond)
+		if err != nil {
+			b.Fatalf("Filter: %v", err)
+		}
+		out, err := kept.Select("c00", "c01")
+		if err != nil {
+			b.Fatalf("Select: %v", err)
+		}
+		frameSink = out
+	}
+}
+
+// BenchmarkLazyFilterOfAWideFrame is the same query written down first, which
+// is what the projection pushdown is worth. The two columns the query asks for
+// and the one it filters on are the only ones the take copies, so the work is
+// three columns of sixteen and the query pays a plan and a pass for it.
+func BenchmarkLazyFilterOfAWideFrame(b *testing.B) {
+	f := benchFrame(b)
+	cond := kuma.I64("c00").Lt(benchLen / 2)
+	ctx := b.Context()
+
+	b.SetBytes(benchLen * 8)
+	for b.Loop() {
+		out, err := f.Lazy().Filter(cond).Select("c00", "c01").Collect(ctx)
+		if err != nil {
+			b.Fatalf("Collect: %v", err)
+		}
+		frameSink = out
+	}
+}

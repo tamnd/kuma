@@ -468,6 +468,11 @@ func (lf *LazyFrame[S]) Slice(off, n int) *LazyFrame[S] {
 // fail on what the data turns out to be, such as a file that is not there or a
 // value that will not fit the type it is being cast to.
 //
+// The plan is optimized after it is checked and before it is run, which is what
+// makes a query worth writing down rather than calling. A projection pushdown
+// is the pass that is there now, so a query over two columns of a frame of
+// forty reads the two.
+//
 // The context is checked between operators. A query that is given up on stops
 // at the next one rather than at the next row, which is a check that costs
 // nothing to make and is close enough for reads that take seconds.

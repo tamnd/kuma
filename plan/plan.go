@@ -172,6 +172,7 @@ type Node struct {
 	how    kernel.JoinType
 	off, n int64    // OpLimit
 	names  []string // OpExplode
+	read   []string // OpScan, the columns to read, and nil for all of them
 }
 
 // The constructors. Each one takes what its operator needs and nothing else,
@@ -181,6 +182,21 @@ type Node struct {
 // Scan reads a source. It is the leaf every plan starts from.
 func Scan(src Source) *Node {
 	return &Node{op: OpScan, src: src}
+}
+
+// ScanOnly reads the named columns of a source and leaves the rest of them
+// unread.
+//
+// It is what a projection pushdown builds, and it is the pass that pays for the
+// whole optimizer: a query over forty columns that reads two of them reads two
+// of them out of the file rather than reading forty and dropping thirty eight.
+// The columns come out in the order the source has them, since a scan is a read
+// and putting the columns in an order is what a projection is for.
+//
+// A name that is not a column of the source is an error when the plan is
+// checked, the same as a name written anywhere else.
+func ScanOnly(src Source, names []string) *Node {
+	return &Node{op: OpScan, src: src, read: slices.Clone(names)}
 }
 
 // Filter keeps the rows the condition holds for. A row where the condition is
@@ -262,6 +278,10 @@ func (n *Node) Right() *Node { return n.r }
 // Source is where a scan reads from, and nil for every other operator.
 func (n *Node) Source() Source { return n.src }
 
+// ScanColumns is the columns a scan reads, and nil for a scan that reads every
+// column its source has and for every other operator.
+func (n *Node) ScanColumns() []string { return n.read }
+
 // Cond is the condition a filter keeps the rows by, and nil for every other
 // operator.
 func (n *Node) Cond() *Expr { return n.pred }
@@ -338,6 +358,11 @@ func (n *Node) String() string {
 	case OpScan:
 		sb.WriteByte(' ')
 		sb.WriteString(n.src.Name())
+		if len(n.read) > 0 {
+			sb.WriteString(" [")
+			sb.WriteString(strings.Join(n.read, ", "))
+			sb.WriteByte(']')
+		}
 	case OpFilter:
 		sb.WriteByte(' ')
 		sb.WriteString(n.pred.String())

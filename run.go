@@ -59,8 +59,18 @@ func (s frameSource) read(context.Context) (*Frame[Dynamic], error) { return s.f
 // fraction of it. The morsel scheduler that runs the operators against each
 // other rather than one after another is a later change, and it does not change
 // what any of this returns.
+//
+// The plan is optimized between the check and the run. It is checked first so
+// that a mistake in the query is reported as it was written rather than as some
+// pass left it, and so that the passes themselves can rely on every name in the
+// plan being a column and every expression having a type.
 func run(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
 	if _, err := n.Schema(); err != nil {
+		return nil, err
+	}
+
+	n, err := plan.Optimize(n, plan.Passes()...)
+	if err != nil {
 		return nil, err
 	}
 	return runNode(ctx, n)
@@ -108,7 +118,29 @@ func runScan(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
 	if !ok {
 		return nil, fmt.Errorf("kuma: %s is a source the engine cannot read: %w", n.Source().Name(), ErrNotSupported)
 	}
-	return src.read(ctx)
+
+	f, err := src.read(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if n.ScanColumns() == nil {
+		return f, nil
+	}
+
+	// A source that can leave the columns it was not asked for unread has done
+	// that already and hands back what it read. One that cannot, such as a
+	// frame that is in memory in full, hands back everything and the columns
+	// are dropped here, which is worth doing even so: every operator above this
+	// one carries the columns it is given, and the ones nothing asked for are
+	// carried for nothing.
+	//
+	// The names came from the source's own schema when the plan was checked, so
+	// the only way this can fail is a source that answers two different ways.
+	out, err := f.Select(n.ScanColumns()...)
+	if err != nil {
+		return nil, fmt.Errorf("kuma: %s read columns other than the ones it said it had: %w", n.Source().Name(), err)
+	}
+	return out, nil
 }
 
 func runFilter(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {

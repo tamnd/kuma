@@ -10,6 +10,7 @@ package kuma
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/tamnd/kuma/dtype"
@@ -73,6 +74,44 @@ func TestRunChecksThePlanBeforeReading(t *testing.T) {
 	}
 	if src.reads != 0 {
 		t.Errorf("the source was read %d times, want none of it read", src.reads)
+	}
+}
+
+// TestRunANarrowedScan is the engine half of the projection pushdown. The pass
+// writes down which columns a scan is for, and this is what happens when the
+// query runs: a source that cannot leave a column unread has the ones nothing
+// asked for dropped as soon as it hands them over, so nothing above carries
+// them.
+func TestRunANarrowedScan(t *testing.T) {
+	n := plan.ScanOnly(frameSource{frame: internFrame(t)}, []string{"qty"})
+
+	got, err := run(t.Context(), n)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if want := []string{"qty"}; !slices.Equal(got.Names(), want) {
+		t.Errorf("the scan gave %v, want %v", got.Names(), want)
+	}
+	if got.NumRows() != 3 {
+		t.Errorf("the scan gave %d rows, want the 3 the frame has", got.NumRows())
+	}
+}
+
+// TestAQueryNarrowsItsOwnScan is the pass running where it runs for real, which
+// is inside run and without the caller asking for it.
+func TestAQueryNarrowsItsOwnScan(t *testing.T) {
+	src := &countingSource{frame: internFrame(t)}
+	n := plan.Project(plan.Scan(src), []plan.Projection{{Expr: plan.Col("qty")}})
+
+	got, err := run(t.Context(), n)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if want := []string{"qty"}; !slices.Equal(got.Names(), want) {
+		t.Errorf("the query gave %v, want %v", got.Names(), want)
+	}
+	if src.reads != 1 {
+		t.Errorf("the source was read %d times, want once", src.reads)
 	}
 }
 

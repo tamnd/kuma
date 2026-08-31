@@ -1,6 +1,7 @@
 package plan_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/tamnd/kuma/dtype"
@@ -29,7 +30,6 @@ var (
 )
 
 func TestOperatorsPrintAsTheyWereWritten(t *testing.T) {
-	scan := plan.Scan(trades{})
 	notional := plan.Arith(kernel.OpMul, price, qty)
 
 	cases := []struct {
@@ -37,6 +37,7 @@ func TestOperatorsPrintAsTheyWereWritten(t *testing.T) {
 		want string
 	}{
 		{scan, "Scan trades/*.parquet"},
+		{plan.ScanOnly(trades{}, []string{"price", "qty"}), "Scan trades/*.parquet [price, qty]"},
 		{plan.Filter(scan, plan.Compare(kernel.OpGt, price, plan.Lit(100.0))), "Filter (price > 100)"},
 		{
 			plan.Project(scan, []plan.Projection{{Expr: symbol}, {Expr: notional, As: "notional"}}),
@@ -80,7 +81,6 @@ func TestOperatorsPrintAsTheyWereWritten(t *testing.T) {
 // TestAJoinKeyOfOneColumnPrintsOnce is the case where the two sides are called
 // the same thing, which is most joins and would read badly written out twice.
 func TestAJoinKeyOfOneColumnPrintsOnce(t *testing.T) {
-	scan := plan.Scan(trades{})
 	n := plan.Join(scan, scan, []plan.JoinKey{{Left: symbol, Right: symbol}}, kernel.InnerJoin)
 
 	if got, want := n.String(), "Join inner on symbol"; got != want {
@@ -89,7 +89,6 @@ func TestAJoinKeyOfOneColumnPrintsOnce(t *testing.T) {
 }
 
 func TestTheInputsAreWhatTheOperatorWasBuiltOver(t *testing.T) {
-	scan := plan.Scan(trades{})
 	right := plan.Scan(trades{})
 	filter := plan.Filter(scan, plan.Compare(kernel.OpGt, price, plan.Lit(100.0)))
 	join := plan.Join(filter, right, nil, kernel.CrossJoin)
@@ -108,12 +107,39 @@ func TestTheInputsAreWhatTheOperatorWasBuiltOver(t *testing.T) {
 	}
 }
 
+// TestTheColumnsAnExpressionReads is what a pass asks an expression before it
+// can work out which columns a step of a query depends on.
+func TestTheColumnsAnExpressionReads(t *testing.T) {
+	cases := []struct {
+		expr *plan.Expr
+		want []string
+	}{
+		{symbol, []string{"symbol"}},
+		{plan.Lit(100.0), nil},
+		{plan.Arith(kernel.OpMul, price, qty), []string{"price", "qty"}},
+		{plan.Compare(kernel.OpGt, price, plan.Lit(100.0)), []string{"price"}},
+		{plan.IsNull(plan.Cast(dtype.Float64, qty)), []string{"qty"}},
+		{
+			plan.And(plan.Compare(kernel.OpGt, price, plan.Lit(1.0)), plan.Compare(kernel.OpLt, price, plan.Lit(9.0))),
+			[]string{"price"},
+		},
+		{
+			plan.Or(plan.IsNull(qty), plan.Compare(kernel.OpEq, symbol, plan.Lit("ES"))),
+			[]string{"qty", "symbol"},
+		},
+	}
+
+	for _, c := range cases {
+		if got := c.expr.Columns(); !slices.Equal(got, c.want) {
+			t.Errorf("%s reads %v, want %v", c.expr, got, c.want)
+		}
+	}
+}
+
 // TestBuildingAPlanCopiesWhatItWasGiven is the promise that a plan does not
 // change after it is built. Everything the passes do depends on it, since a
 // pass keeps the tree it started from and builds the difference.
 func TestBuildingAPlanCopiesWhatItWasGiven(t *testing.T) {
-	scan := plan.Scan(trades{})
-
 	cols := []plan.Projection{{Expr: symbol}, {Expr: price}}
 	project := plan.Project(scan, cols)
 	cols[1] = plan.Projection{Expr: qty}
@@ -137,13 +163,20 @@ func TestBuildingAPlanCopiesWhatItWasGiven(t *testing.T) {
 	if got, want := explode.String(), "Explode tags"; got != want {
 		t.Errorf("after writing to the slice the explode reads %q, want %q", got, want)
 	}
+
+	read := []string{"price"}
+	narrow := plan.ScanOnly(trades{}, read)
+	read[0] = "qty"
+
+	if got, want := narrow.String(), "Scan trades/*.parquet [price]"; got != want {
+		t.Errorf("after writing to the slice the scan reads %q, want %q", got, want)
+	}
 }
 
 // TestAnOperatorOnlyAnswersForItself checks that a field belonging to another
 // operator reads as nothing rather than as a stale value, since a pass switches
 // on the operator and asks for what that one has.
 func TestAnOperatorOnlyAnswersForItself(t *testing.T) {
-	scan := plan.Scan(trades{})
 	n := plan.Filter(scan, plan.Compare(kernel.OpGt, price, plan.Lit(100.0)))
 
 	if n.Op() != plan.OpFilter {
@@ -163,6 +196,12 @@ func TestAnOperatorOnlyAnswersForItself(t *testing.T) {
 	}
 	if n.ExplodeNames() != nil {
 		t.Error("the filter has the columns of an explode")
+	}
+	if n.ScanColumns() != nil {
+		t.Error("the filter has the columns of a scan")
+	}
+	if scan.ScanColumns() != nil {
+		t.Error("a scan of everything names the columns it reads, and it reads all of them")
 	}
 	if scan.Source().Name() != "trades/*.parquet" {
 		t.Error("the scan reads a source other than the one it was built over")

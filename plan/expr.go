@@ -3,6 +3,7 @@ package plan
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -156,6 +157,41 @@ func (e *Expr) Left() *Expr { return e.l }
 
 // Right is the second operand, or nil for a leaf and for a one sided step.
 func (e *Expr) Right() *Expr { return e.r }
+
+// Columns returns the names of the columns the expression reads, in the order
+// they are first written and with no name twice.
+//
+// It is what a projection pushdown asks for, and what an explain shows when it
+// says which columns a step of a query depends on. An expression made of
+// nothing but literals reads no columns and gets nothing back.
+//
+// A name appearing here does not say the column exists. Checking the expression
+// against a schema is what says that.
+func (e *Expr) Columns() []string {
+	var names []string
+	e.eachColumn(func(name string) {
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	})
+	return names
+}
+
+// eachColumn calls yield with the name of every column the expression reads, in
+// order and with the repeats left in. It is the walk both [Expr.Columns] and
+// the passes are written on, since one of them wants a list and the others want
+// a set and none of them wants to write the walk again.
+func (e *Expr) eachColumn(yield func(string)) {
+	switch {
+	case e == nil:
+		return
+	case e.kind == KindColumn:
+		yield(e.name)
+		return
+	}
+	e.l.eachColumn(yield)
+	e.r.eachColumn(yield)
+}
 
 // String returns the expression as it would be written, which is what an error
 // about it names and what a column built from it is called.
