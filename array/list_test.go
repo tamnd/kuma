@@ -114,7 +114,7 @@ func TestListBuilderNullAfterValues(t *testing.T) {
 	if got, want := rowsOf(t, a), [][]int64{{1}, nil, {2, 3}}; !slices.EqualFunc(got, want, slices.Equal) {
 		t.Errorf("the rows are %v, want %v", got, want)
 	}
-	if a.IsValid(0) != true || a.IsValid(2) != true {
+	if !a.IsValid(0) || !a.IsValid(2) {
 		t.Error("a row appended before the first null reads as missing")
 	}
 }
@@ -466,7 +466,8 @@ func TestListBuilderElemIsTheSameBuilder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewListBuilder: %v", err)
 	}
-	if b.Elem() != b.Elem() {
+	elem := b.Elem()
+	if b.Elem() != elem {
 		t.Error("Elem gave two different builders")
 	}
 	if !dtype.Equal(b.Elem().DType(), dtype.Int64) {
