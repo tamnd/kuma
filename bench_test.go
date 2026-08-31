@@ -560,6 +560,23 @@ func BenchmarkFrameGroupByAndAgg(b *testing.B) {
 	}
 }
 
+// BenchmarkFrameDistinct is a drop duplicates over one key column, which is the
+// pass a group by makes over the rows with everything the aggregations need
+// left off. The gap to BenchmarkFrameGroupBy is what working out the group of
+// every row and gathering the key columns costs.
+func BenchmarkFrameDistinct(b *testing.B) {
+	f := benchGrouped(b).Frame()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.Distinct("k")
+		if err != nil {
+			b.Fatalf("Distinct: %v", err)
+		}
+		frameSink = out
+	}
+}
+
 // benchJoinSides returns two frames to join: a large left one with a key that
 // repeats and a small right one with each key once, which is the shape almost
 // every real join has.

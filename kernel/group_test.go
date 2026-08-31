@@ -363,3 +363,119 @@ func TestGroupByNoChunks(t *testing.T) {
 		t.Errorf("Len is %d, want 0", g.Len())
 	}
 }
+
+func TestDistinctIndex(t *testing.T) {
+	tests := []struct {
+		name string
+		cols []*array.Chunked
+		want []int
+	}{
+		{
+			"strings",
+			[]*array.Chunked{col(t, dtype.String, []any{"b", "a", "b", "c", "a"})},
+			[]int{0, 1, 3},
+		},
+		{
+			"a null is a value like any other",
+			[]*array.Chunked{col(t, dtype.Int64, []any{int64(1), nil, int64(1), nil})},
+			[]int{0, 1},
+		},
+		{
+			"two keys, one of them agreeing",
+			[]*array.Chunked{
+				col(t, dtype.String, []any{"a", "a", "b", "b", "a"}),
+				col(t, dtype.Int32, []any{int32(1), int32(2), int32(1), int32(1), int32(1)}),
+			},
+			[]int{0, 1, 2},
+		},
+		{
+			"every row already distinct",
+			[]*array.Chunked{col(t, dtype.Int64, []any{int64(1), int64(2), int64(3)})},
+			[]int{0, 1, 2},
+		},
+		{
+			"chunk boundaries do not matter",
+			[]*array.Chunked{col(t, dtype.Int64, []any{int64(5)}, []any{}, []any{int64(6), int64(5)})},
+			[]int{0, 1},
+		},
+		{
+			"the empty column",
+			[]*array.Chunked{col(t, dtype.Int64, []any{})},
+			nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := kernel.DistinctIndex(tt.cols...)
+			if err != nil {
+				t.Fatalf("DistinctIndex: %v", err)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("the rows are %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDistinctIndexIsTheFirstRowOfEachGroup is the promise that the two ways of
+// dividing the rows up agree, which is what lets a distinct be documented as a
+// group by with the aggregations left out.
+func TestDistinctIndexIsTheFirstRowOfEachGroup(t *testing.T) {
+	symbol := col(t, dtype.String, []any{"a", "b", "a", nil, "b", nil, "c"})
+	day := col(t, dtype.Int32, []any{int32(1), int32(1), int32(2), int32(1), int32(1), int32(1), nil})
+
+	g, err := kernel.GroupBy(symbol, day)
+	if err != nil {
+		t.Fatalf("GroupBy: %v", err)
+	}
+	got, err := kernel.DistinctIndex(symbol, day)
+	if err != nil {
+		t.Fatalf("DistinctIndex: %v", err)
+	}
+
+	if !slices.Equal(got, g.FirstRows()) {
+		t.Errorf("the rows are %v, want the first rows of the groups, %v", got, g.FirstRows())
+	}
+}
+
+func TestDistinctIndexRefused(t *testing.T) {
+	dt := dtype.List{Elem: dtype.Int64}
+	c, err := array.NewChunked(dt)
+	if err != nil {
+		t.Fatalf("NewChunked: %v", err)
+	}
+
+	if _, err := kernel.DistinctIndex(c); err == nil {
+		t.Fatal("the distinct rows of a list column succeeded")
+	} else if !strings.Contains(err.Error(), dt.String()) {
+		t.Errorf("the message is %q, want it to name the type", err.Error())
+	}
+}
+
+func TestDistinctIndexPanics(t *testing.T) {
+	tests := []struct {
+		name string
+		call func()
+	}{
+		{"no keys", func() { _, _ = kernel.DistinctIndex() }},
+		{"a nil key", func() { _, _ = kernel.DistinctIndex(nil) }},
+		{"keys of different lengths", func() {
+			_, _ = kernel.DistinctIndex(
+				col(t, dtype.Int64, []any{int64(1)}),
+				col(t, dtype.Int64, []any{int64(1), int64(2)}),
+			)
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Error("it did not panic")
+				}
+			}()
+			tt.call()
+		})
+	}
+}

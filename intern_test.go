@@ -31,30 +31,16 @@ func internFrame(t *testing.T) *Frame[Dynamic] {
 	return f
 }
 
-func TestRunAnOperatorTheEngineDoesNotHaveYet(t *testing.T) {
+// TestRunAnAggregateOfTheWholeInput is the one plan left that the engine turns
+// away. The lazy frame has no way to write it, since GroupBy takes at least one
+// column, and the engine has nowhere to put the answer for an input with no
+// rows, so this is the only place the refusal can be checked.
+func TestRunAnAggregateOfTheWholeInput(t *testing.T) {
 	scan := plan.Scan(frameSource{frame: internFrame(t)})
+	n := plan.Aggregate(scan, nil, []plan.Agg{{Func: plan.AggSum, Expr: plan.Col("qty")}})
 
-	cases := []struct {
-		name string
-		node *plan.Node
-	}{
-		{name: "distinct", node: plan.Distinct(scan, nil)},
-		{
-			// An aggregate of the whole input is a plan the lazy frame has no
-			// way to write, since GroupBy takes at least one column, and the
-			// engine has nowhere to put the answer for an input with no rows.
-			name: "aggregate with no keys",
-			node: plan.Aggregate(scan, nil, []plan.Agg{{Func: plan.AggSum, Expr: plan.Col("qty")}}),
-		},
-	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			_, err := run(t.Context(), c.node)
-			if !errors.Is(err, ErrNotSupported) {
-				t.Fatalf("run = %v, want ErrNotSupported", err)
-			}
-		})
+	if _, err := run(t.Context(), n); !errors.Is(err, ErrNotSupported) {
+		t.Fatalf("run = %v, want ErrNotSupported", err)
 	}
 }
 

@@ -170,6 +170,29 @@ func (f *Frame[S]) Series[T Value](name string) (Series[T], error) {
 	return c.As[T]()
 }
 
+// namedColumns returns the columns the given names name, or all of them when no
+// names were given.
+//
+// It is what the methods that take an optional set of columns to look at do with
+// the set, since looking at every column is what all of them mean by an empty
+// one. The who is the method to name in the error, so that a caller is told
+// which of them was given a name that is not there.
+func (f *Frame[S]) namedColumns(who string, names []string) ([]Column, error) {
+	if len(names) == 0 {
+		return f.cols, nil
+	}
+
+	cols := make([]Column, len(names))
+	for i, name := range names {
+		j, ok := f.index[name]
+		if !ok {
+			return nil, noColumn(who, name, f.Names())
+		}
+		cols[i] = f.cols[j]
+	}
+	return cols, nil
+}
+
 // Select returns a frame holding the named columns, in the order given.
 //
 // Naming the same column twice is a duplicate column and is rejected, since the

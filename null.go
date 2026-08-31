@@ -184,7 +184,7 @@ func (f *Frame[S]) FillNull[T Value](name string, v T) (*Frame[Dynamic], error) 
 // who wants the rows that are mostly there rather than the rows that are
 // entirely there.
 func (f *Frame[S]) DropNulls(names ...string) (*Frame[S], error) {
-	cols, err := f.nullCheckColumns("DropNulls", names)
+	cols, err := f.namedColumns("DropNulls", names)
 	if err != nil {
 		return nil, err
 	}
@@ -201,29 +201,11 @@ func (f *Frame[S]) DropNulls(names ...string) (*Frame[S], error) {
 // A present of zero or below keeps every row, since every row has at least
 // nothing.
 func (f *Frame[S]) KeepAtLeast(present int, names ...string) (*Frame[S], error) {
-	cols, err := f.nullCheckColumns("KeepAtLeast", names)
+	cols, err := f.namedColumns("KeepAtLeast", names)
 	if err != nil {
 		return nil, err
 	}
 	return f.keep(present, cols), nil
-}
-
-// nullCheckColumns returns the columns the named ones are, or all of them when
-// no names were given.
-func (f *Frame[S]) nullCheckColumns(who string, names []string) ([]Column, error) {
-	if len(names) == 0 {
-		return f.cols, nil
-	}
-
-	cols := make([]Column, len(names))
-	for i, name := range names {
-		j, ok := f.index[name]
-		if !ok {
-			return nil, noColumn(who, name, f.Names())
-		}
-		cols[i] = f.cols[j]
-	}
-	return cols, nil
 }
 
 // keep returns the frame with only the rows that have at least present values
