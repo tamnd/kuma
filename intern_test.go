@@ -46,14 +46,6 @@ func TestRunAnOperatorTheEngineDoesNotHaveYet(t *testing.T) {
 			name: "aggregate with no keys",
 			node: plan.Aggregate(scan, nil, []plan.Agg{{Func: plan.AggSum, Expr: plan.Col("qty")}}),
 		},
-		{
-			// The right side is the symbols on their own, since a join of a plan
-			// with itself would produce two columns called qty and the plan check
-			// would turn it away before the engine was asked.
-			name: "join",
-			node: plan.Join(scan, plan.Project(scan, []plan.Projection{{Expr: plan.Col("symbol")}}),
-				[]plan.JoinKey{{Left: plan.Col("symbol"), Right: plan.Col("symbol")}}, kernel.InnerJoin),
-		},
 	}
 
 	for _, c := range cases {

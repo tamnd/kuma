@@ -94,7 +94,24 @@ func (f *Frame[S]) Join(other *Frame[Dynamic], on []On, how JoinType) (*Frame[Dy
 	if err != nil {
 		return nil, err
 	}
-	return joinFrame(f, other, on, how, p)
+	return joinFrame(f, other, sharedKeys(on, how), how, p)
+}
+
+// sharedKeys returns the key names the result holds one column for rather than
+// two, which are the ones called the same thing on both sides. It is the rule
+// the plan states in SharedKeys, over names rather than over expressions.
+func sharedKeys(on []On, how JoinType) map[string]bool {
+	if how == SemiJoin || how == AntiJoin {
+		return nil
+	}
+
+	shared := make(map[string]bool, len(on))
+	for _, o := range on {
+		if o.Left == o.Right {
+			shared[o.Left] = true
+		}
+	}
+	return shared
 }
 
 // InnerJoin returns the rows of two frames put together on the named columns,
@@ -154,29 +171,21 @@ func joinKeys[S any](f *Frame[S], other *Frame[Dynamic], on []On, how JoinType) 
 
 // joinFrame gathers both sides at the positions the join worked out and puts
 // the columns together.
-func joinFrame[S any](f *Frame[S], other *Frame[Dynamic], on []On, how JoinType,
+//
+// The shared names are the keys the result holds one column for rather than
+// two, which is what [sharedKeys] works out for the eager path and the plan
+// works out for the engine. The right key columns hold the same values as the
+// left ones wherever the rows matched, so keeping both would be two identical
+// columns and a name clash.
+func joinFrame[S any](f *Frame[S], other *Frame[Dynamic], shared map[string]bool, how JoinType,
 	p kernel.Pairs) (*Frame[Dynamic], error) {
-	// The right key columns hold the same values as the left ones when they are
-	// called the same thing, so keeping both would be two identical columns and
-	// a name clash. When they are called different things both are kept, since
-	// a caller who wrote two names probably wants to see both.
-	shared := make(map[string]string, len(on))
-	if how != SemiJoin && how != AntiJoin {
-		for _, o := range on {
-			if o.Left == o.Right {
-				shared[o.Left] = o.Right
-			}
-		}
-	}
-
 	cols := make([]Column, 0, f.NumCols()+other.NumCols())
 	for _, c := range f.cols {
-		right, ok := shared[c.name]
-		if !ok {
+		if !shared[c.name] {
 			cols = append(cols, Column{name: c.name, data: kernel.Take(c.data, p.Left)})
 			continue
 		}
-		key, err := joinKeyColumn(c, other.cols[other.index[right]], p)
+		key, err := joinKeyColumn(c, other.cols[other.index[c.name]], p)
 		if err != nil {
 			return nil, err
 		}
@@ -190,7 +199,7 @@ func joinFrame[S any](f *Frame[S], other *Frame[Dynamic], on []On, how JoinType,
 	}
 
 	for _, c := range other.cols {
-		if _, ok := shared[c.name]; ok {
+		if shared[c.name] {
 			continue
 		}
 		cols = append(cols, Column{name: c.name, data: kernel.Take(c.data, p.Right)})

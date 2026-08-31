@@ -271,6 +271,35 @@ func (n *Node) JoinKeys() []JoinKey { return n.on }
 // JoinType is which rows of the two inputs a join keeps.
 func (n *Node) JoinType() kernel.JoinType { return n.how }
 
+// SharedKeys returns the names of the join keys the result holds one column
+// for rather than two, which are the keys that are a column of the same name on
+// both sides.
+//
+// Two such columns hold the same values wherever the rows matched, so keeping
+// both would be a name clash over a pair of columns that agree. It is here so
+// that what [Node.Schema] promises and what an engine builds are decided by the
+// same rule.
+//
+// It returns nothing for a node that is not a join, for a cross join, which has
+// no keys, and for a semi or an anti join, which take no columns from the right
+// side at all.
+func (n *Node) SharedKeys() []string {
+	if n.op != OpJoin || n.how == kernel.SemiJoin || n.how == kernel.AntiJoin {
+		return nil
+	}
+
+	var names []string
+	for _, k := range n.on {
+		if k.Left == nil || k.Right == nil {
+			continue
+		}
+		if name, ok := bothSides(k); ok {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 // Offset is how many rows a limit skips before it starts keeping them.
 func (n *Node) Offset() int64 { return n.off }
 
