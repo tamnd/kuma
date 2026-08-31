@@ -469,12 +469,14 @@ func (lf *LazyFrame[S]) Slice(off, n int) *LazyFrame[S] {
 // value that will not fit the type it is being cast to.
 //
 // The plan is optimized after it is checked and before it is run, which is what
-// makes a query worth writing down rather than calling. A predicate pushdown, a
-// slice pushdown, a common subexpression pass and a projection pushdown are the
-// passes that are there now, so a filter runs before the join that would have
-// paired the rows it throws away, a head of twenty is worked out for twenty rows
-// rather than for all of them, a value written in three columns is worked out
-// once, and a query over two columns of a frame of forty reads the two.
+// makes a query worth writing down rather than calling. A constant fold, a
+// predicate pushdown, a slice pushdown, a common subexpression pass and a
+// projection pushdown are the passes that are there now, so a step no data
+// decides is worked out once at plan time, a filter runs before the join that
+// would have paired the rows it throws away, a head of twenty is worked out for
+// twenty rows rather than for all of them, a value written in three columns is
+// worked out once, and a query over two columns of a frame of forty reads the
+// two.
 //
 // The context is checked between operators. A query that is given up on stops
 // at the next one rather than at the next row, which is a check that costs

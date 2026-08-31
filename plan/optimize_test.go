@@ -115,7 +115,8 @@ func TestThePassesThatRunOverEveryQuery(t *testing.T) {
 		names = append(names, p.Name)
 	}
 
-	want := "predicate pushdown, slice pushdown, common subexpression elimination, projection pushdown"
+	want := "constant folding, predicate pushdown, slice pushdown, " +
+		"common subexpression elimination, projection pushdown"
 	if got := strings.Join(names, ", "); got != want {
 		t.Errorf("the passes are %q, want %q", got, want)
 	}
