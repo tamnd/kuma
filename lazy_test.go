@@ -296,6 +296,9 @@ func TestLazyKeepsTheFirstMistake(t *testing.T) {
 	if got := q.String(); !strings.HasPrefix(got, "invalid query: ") {
 		t.Errorf("String() = %q, want it to say the query is not one", got)
 	}
+	if _, err := q.Explain(); !errors.Is(err, kuma.ErrNoColumn) {
+		t.Errorf("Explain = %v, want the same error Validate gave", err)
+	}
 }
 
 // TestLazyExpressionOfLiteralsOnly is the length check the executor makes. An
@@ -1524,6 +1527,100 @@ func TestLazyDropsACastAColumnDoesNotNeed(t *testing.T) {
 	}
 	if out.String() != eager.String() {
 		t.Errorf("the lazy query gave\n%s\nand the eager one gave\n%s", out, eager)
+	}
+}
+
+// TestLazyExplainShowsTheQueryThatRuns is the whole point of the thing: a
+// caller who has been told a filter runs before the join and that a query over
+// two columns reads the two can go and look.
+func TestLazyExplainShowsTheQueryThatRuns(t *testing.T) {
+	q := trades(t).Lazy().Filter(kuma.F64("price").Gt(150)).Select("symbol", "price").Head(2)
+
+	want := strings.Join([]string{
+		"the query as written",
+		"  Limit 2",
+		"    Project symbol, price",
+		"      Filter (price > 150)",
+		"        Scan frame",
+		"",
+		"the query that runs",
+		"  Project symbol, price",
+		"    Limit 2",
+		"      Filter (price > 150)",
+		"        Scan frame [symbol, price]",
+		"",
+		"changed by slice pushdown and projection pushdown",
+		"",
+	}, "\n")
+
+	got, err := q.Explain()
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+	if got != want {
+		t.Errorf("Explain() =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestLazyExplainOfAQueryNothingImproves is what a caller sees when there was
+// nothing to do, which is most short queries and is worth saying plainly.
+func TestLazyExplainOfAQueryNothingImproves(t *testing.T) {
+	q := trades(t).Lazy().Filter(kuma.F64("price").Gt(150))
+
+	got, err := q.Explain()
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+
+	want := "the query as written\n  Filter (price > 150)\n    Scan frame\n" +
+		"\nnothing the optimizer does changes it\n"
+	if got != want {
+		t.Errorf("Explain() =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestLazyExplainIsTheQueryThatCollectRuns is the promise that makes an explain
+// worth reading rather than an idea of what might happen.
+func TestLazyExplainIsTheQueryThatCollectRuns(t *testing.T) {
+	q := trades(t).Lazy().Filter(kuma.F64("price").Gt(150)).Select("symbol", "price").Head(2)
+
+	got, err := q.Explain()
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+
+	ran, err := plan.Optimize(q.Plan(), plan.Passes()...)
+	if err != nil {
+		t.Fatalf("Optimize: %v", err)
+	}
+	// The explain sets its plans in by two spaces, under the line that says
+	// which plan it is.
+	want := "  " + strings.ReplaceAll(ran.Tree(), "\n", "\n  ")
+	if !strings.Contains(got, want) {
+		t.Errorf("Explain() =\n%s\nand the plan Collect runs is\n%s", got, want)
+	}
+}
+
+// TestLazyExplainDoesNotChangeTheQuery is what lets a caller print an explain
+// and then run the query, or print it twice.
+func TestLazyExplainDoesNotChangeTheQuery(t *testing.T) {
+	q := trades(t).Lazy().Filter(kuma.F64("price").Gt(150)).Select("symbol", "price").Head(2)
+	before := q.String()
+
+	first, err := q.Explain()
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+	second, err := q.Explain()
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+
+	if second != first {
+		t.Errorf("the second explain reads\n%s\nand the first read\n%s", second, first)
+	}
+	if after := q.String(); after != before {
+		t.Errorf("explaining left the query reading\n%s\nwant\n%s", after, before)
 	}
 }
 

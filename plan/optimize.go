@@ -51,27 +51,55 @@ const maxRounds = 8
 // [Node.Schema] for it. A plan that does not check is not optimized either, so
 // the mistake a caller is told about is the one they made.
 func Optimize(n *Node, passes ...Pass) (*Node, error) {
+	out, _, err := optimize(n, passes)
+	return out, err
+}
+
+// optimize is [Optimize] and the names of the passes that changed the plan,
+// which is what [Explain] puts on its last line.
+//
+// A pass is named once however many rounds it found something in, and it is
+// named in the order the passes run rather than the order they first found
+// something, since the order they run in is the one worth showing. A pass named
+// here changed the plan at some point, which is not the same as it having made
+// the difference between the two plans that get printed, because the passes run
+// over each other until they settle and one of them can undo what another did.
+// Saying which pass is responsible for which line of the plan that came out is
+// a much bigger promise and is not one this makes.
+func optimize(n *Node, passes []Pass) (*Node, []string, error) {
 	if n == nil {
-		return nil, errNoPlan
+		return nil, nil, errNoPlan
 	}
 
+	moved := make([]bool, len(passes))
 	for range maxRounds {
 		done := true
-		for _, p := range passes {
+		for i, p := range passes {
 			out, err := p.Rewrite(n)
 			if err != nil {
-				return nil, fmt.Errorf("kuma: %s: %w", p.Name, err)
+				return nil, nil, fmt.Errorf("kuma: %s: %w", p.Name, err)
 			}
 			if out != n {
-				n, done = out, false
+				n, done, moved[i] = out, false, true
 			}
 		}
 		if done {
-			return n, nil
+			return n, changedBy(passes, moved), nil
 		}
 	}
-	return nil, fmt.Errorf("kuma: the optimizer did not settle after %d rounds over the plan, "+
+	return nil, nil, fmt.Errorf("kuma: the optimizer did not settle after %d rounds over the plan, "+
 		"which means two passes are undoing each other", maxRounds)
+}
+
+// changedBy is the names of the passes the flags are set for.
+func changedBy(passes []Pass, moved []bool) []string {
+	var names []string
+	for i, p := range passes {
+		if moved[i] {
+			names = append(names, p.Name)
+		}
+	}
+	return names
 }
 
 // Passes returns the passes that run over every query, in the order they run

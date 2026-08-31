@@ -100,18 +100,30 @@ Sentinel errors are comparable with `errors.Is`. Nothing panics across an API bo
 ## Explain and profile
 
 ```go
-fmt.Println(lf.Explain())
+text, err := lf.Explain()
 ```
 
 ```
-Sort [volume DESC] limit=20
-  Aggregate [symbol, minute] -> volume, p99, n
-    Filter [price > 100 AND side == "BUY"]
-      Scan parquet trades/*.parquet
-        projection: symbol, price, qty, side, ts
-        predicate:  price > 100
-        row groups: 41 of 512
+the query as written
+  Limit 20
+    Project symbol, price
+      Filter (price > 100)
+        Sort by qty desc
+          Scan trades/*.parquet
+
+the query that runs
+  Project symbol, price
+    Limit 20
+      Sort by qty desc
+        Filter (price > 100)
+          Scan trades/*.parquet
+
+changed by predicate pushdown and slice pushdown
 ```
+
+The query as written is what the caller built, the query that runs is what the passes turned it into, and the last line names the passes that made the difference. A query no pass changes is printed once with a line saying so, because printing the same plan twice tells nobody anything. The format is documented and kept, since people will parse it whether we want them to or not.
+
+Not in it yet: a row count per operator, which needs statistics on the source, and the row groups a scan skips, which needs the page index. Both go in as the scan learns to report them, under the operator they belong to.
 
 `lf.Profile(ctx)` runs the query and adds wall time, rows in and out, and bytes read for each operator.
 

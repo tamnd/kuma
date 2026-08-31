@@ -3,7 +3,6 @@ package kuma
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/tamnd/kuma/dtype"
 	"github.com/tamnd/kuma/plan"
@@ -500,32 +499,35 @@ func (lf *LazyFrame[S]) Collect(ctx context.Context) (*Frame[S], error) {
 // String returns the plan the query has been built into, one operator per line
 // with the inputs indented under it.
 //
-// It is not [LazyFrame.Explain], which is a documented format with the row
-// counts and the pushdowns in it and is a later change. This is the plan as it
-// stands, for reading in a test failure and at a prompt.
+// It is not [LazyFrame.Explain], which runs the passes and puts the query that
+// will run next to the query that was written. This is the plan as it stands,
+// before any of that, for reading in a test failure and at a prompt.
 func (lf *LazyFrame[S]) String() string {
 	if lf.err != nil {
 		return "invalid query: " + lf.err.Error()
 	}
-	var sb strings.Builder
-	planText(&sb, lf.node, 0)
-	return sb.String()
+	return lf.node.Tree()
 }
 
-// planText writes the plan as a tree, the operator first and its inputs
-// indented under it, which is the shape both pandas and Polars print and the
-// shape a reader expects.
-func planText(sb *strings.Builder, n *plan.Node, depth int) {
-	if n == nil {
-		return
+// Explain returns the query as written, the query that will run, and the passes
+// that made the difference between the two, in the format [plan.Explain]
+// documents.
+//
+// It is the answer to the question a query engine is otherwise no help with,
+// which is whether the thing you wrote is the thing that happens. A filter
+// written over a join runs under it, a head of twenty reads twenty rows, a
+// query over two columns of a frame of forty reads the two: all of that is
+// worth having and none of it is visible from the query as written, so it is
+// printable rather than something to be taken on trust.
+//
+// The passes it runs are the ones [LazyFrame.Collect] runs, so what it prints
+// is what will happen and not an idea of what might. It does not read anything
+// and it does not run the query. An error is what Collect would report about
+// the same query, which is a query that does not check, and it is reported as
+// the query was written rather than as some pass left it.
+func (lf *LazyFrame[S]) Explain() (string, error) {
+	if lf.err != nil {
+		return "", lf.err
 	}
-
-	if depth > 0 {
-		sb.WriteByte('\n')
-	}
-	sb.WriteString(strings.Repeat("  ", depth))
-	sb.WriteString(n.String())
-
-	planText(sb, n.Input(), depth+1)
-	planText(sb, n.Right(), depth+1)
+	return plan.Explain(lf.node, plan.Passes()...)
 }
