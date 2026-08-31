@@ -31,11 +31,12 @@ func takeList(c *array.Chunked, dt dtype.List, idx []int) *array.Chunked {
 
 	kids := make([]*array.Array, len(chunks))
 	base := make([]int, len(chunks))
-	n := 0
+	n, held := 0, 0
 	for k, a := range chunks {
 		kids[k] = a.Child()
 		base[k] = n
 		n += a.Child().Len()
+		held += chunkElems(a)
 	}
 	elems, err := array.NewChunked(dt.Elem, kids...)
 	if err != nil {
@@ -44,7 +45,7 @@ func takeList(c *array.Chunked, dt dtype.List, idx []int) *array.Chunked {
 		panic("kernel: " + err.Error())
 	}
 
-	off, take, valid := listRows(c, base, idx)
+	off, take, valid := listRows(c, elemHint(held, c.Len(), len(idx)), base, idx)
 	out, err := array.NewListFrom(dt, off, gatherElems(elems, dt.Elem, take), valid)
 	if err != nil {
 		panic("kernel: " + err.Error())
@@ -77,6 +78,43 @@ func gatherElems(elems *array.Chunked, elem dtype.DataType, take []int) *array.A
 	return out
 }
 
+// chunkElems returns how many elements the rows of one chunk hold, which is not
+// the length of its child. A chunk that was sliced out of a longer one keeps the
+// whole child and points at a range of it, so the child is what the column it
+// came from held and this is what this chunk holds.
+func chunkElems(a *array.Array) int {
+	if a.Len() == 0 {
+		return 0
+	}
+	start, _ := a.ListRange(0)
+	_, end := a.ListRange(a.Len() - 1)
+	return end - start
+}
+
+// elemHint guesses how many elements are kept by a gather that asks for rows
+// many of them out of a column whose length rows hold n elements between them.
+//
+// The count is not known until the rows have been walked, and growing the list
+// of positions as they are walked is where a gather of lists spends what a
+// gather of numbers does not: doubling from nothing to a million positions
+// allocates two million of them. A column whose rows are all the same length
+// makes the guess exact, and one whose rows vary makes it close, which is enough
+// to turn a run of allocations into one. The rounding up is so that a column
+// averaging under one element per row still gets a position per row.
+//
+// The multiplication is checked rather than trusted, since both sides of it come
+// from the caller and a capacity that wrapped is worse than a capacity that was
+// never guessed at.
+func elemHint(n, length, rows int) int {
+	if n <= 0 || length <= 0 {
+		return rows
+	}
+	if avg := n/length + 1; rows <= math.MaxInt/avg {
+		return rows * avg
+	}
+	return rows
+}
+
 // listRows works out what the gathered column looks like: where each of its rows
 // begins, which elements it holds and which of its rows are missing. The valid
 // it returns is nil when nothing was missing.
@@ -84,9 +122,9 @@ func gatherElems(elems *array.Chunked, elem dtype.DataType, take []int) *array.A
 // It is one pass over the positions, and all it reads per row is the two
 // offsets, which is why the row wise half of a list gather costs about what
 // gathering a column of numbers costs.
-func listRows(c *array.Chunked, base, idx []int) (off []int32, take []int, valid *bitmap.Bitmap) {
+func listRows(c *array.Chunked, hint int, base, idx []int) (off []int32, take []int, valid *bitmap.Bitmap) {
 	off = make([]int32, len(idx)+1)
-	take = make([]int, 0, len(idx))
+	take = make([]int, 0, hint)
 	f := newFinder(c)
 
 	for m, i := range idx {
