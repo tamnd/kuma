@@ -1183,6 +1183,31 @@ func BenchmarkLazyCollect(b *testing.B) {
 	}
 }
 
+// BenchmarkLazyCollectOfChainedColumns is a value built up over several steps
+// and then asked for on its own, which is how anyone writes a calculation that
+// does not fit on one line. Written that way it is four projections and three
+// whole columns worked out to be thrown away, and the fusion pass turns it into
+// one projection over the one column of the source it reads.
+func BenchmarkLazyCollectOfChainedColumns(b *testing.B) {
+	f := benchFrame(b)
+	c := kuma.I64("c00")
+	ctx := b.Context()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.Lazy().
+			With("doubled", c.Mul(2)).
+			With("quadrupled", kuma.I64("doubled").Mul(2)).
+			With("octupled", kuma.I64("quadrupled").Mul(2)).
+			Select("octupled").
+			Collect(ctx)
+		if err != nil {
+			b.Fatalf("Collect: %v", err)
+		}
+		frameSink = out
+	}
+}
+
 // BenchmarkLazyPlan is the query being written and not run, which is what a
 // program does once per report and an optimizer pass does per rewrite.
 func BenchmarkLazyPlan(b *testing.B) {
