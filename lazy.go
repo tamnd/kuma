@@ -2,6 +2,7 @@ package kuma
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/tamnd/kuma/dtype"
@@ -34,10 +35,10 @@ import (
 // nobody writes and everybody skips. What is kept is the first mistake, since
 // the steps after it were written against something that did not happen.
 //
-// The operators it can build today are a scan, a filter, a projection, a sort
-// and a limit. A group by, a join and an explode are the plan's already and are
-// what the engine is being taught next, and asking for one is an error saying
-// so rather than a wrong answer.
+// The operators it can build today are a scan, a filter, a projection, a group
+// by, a sort and a limit. A join, a distinct and an explode are the plan's
+// already and are what the engine is being taught next, and asking for one is
+// an error saying so rather than a wrong answer.
 //
 // The zero LazyFrame is not usable. Use [Frame.Lazy].
 type LazyFrame[S any] struct {
@@ -188,6 +189,89 @@ func (lf *LazyFrame[S]) Drop(names ...string) *LazyFrame[Dynamic] {
 	}
 	return &LazyFrame[Dynamic]{node: plan.Project(lf.node, cols)}
 }
+
+// GroupBy divides the rows up by the values of the named columns.
+//
+//	out, err := f.Lazy().GroupBy("symbol").Agg(kuma.Sum("qty")).Collect(ctx)
+//
+// Nothing is divided up here. What comes back is a query waiting for the
+// aggregations, because the plan holds the keys and the aggregations as one
+// operator: knowing both at once is what lets a pass read only the columns the
+// aggregations touch. That is also why there is no lazy [GroupedFrame], which
+// exists in the eager API so that several questions cost one grouping. Here the
+// same query asked twice is the same plan twice, and the answer is to write the
+// aggregations together.
+//
+// Two rows are in the same group when every key agrees, and a missing value
+// agrees with a missing value, which is the rule [Frame.GroupBy] follows. A
+// name that is not there is an error at [LazyFrame.Collect].
+func (lf *LazyFrame[S]) GroupBy(names ...string) *LazyGroupBy[S] {
+	if lf.err != nil {
+		return &LazyGroupBy[S]{err: lf.err}
+	}
+	if len(names) == 0 {
+		return &LazyGroupBy[S]{err: fmt.Errorf("kuma: GroupBy with no columns to group by: %w", ErrLength)}
+	}
+
+	by := make([]*plan.Expr, len(names))
+	for i, name := range names {
+		by[i] = plan.Col(name)
+	}
+	return &LazyGroupBy[S]{node: lf.node, by: by}
+}
+
+// LazyGroupBy is a query whose rows are to be divided up, waiting for the
+// aggregations that say what to work out about each group.
+//
+// It is what [LazyFrame.GroupBy] returns and the only things to do with it are
+// [LazyGroupBy.Agg] and [LazyGroupBy.Count]. It holds no data and does no work:
+// the grouping happens when the query it builds is collected.
+//
+// The zero value is not usable.
+type LazyGroupBy[S any] struct {
+	node *plan.Node
+	by   []*plan.Expr
+
+	// err is the mistake the query was already carrying, or the one made in the
+	// group by itself, kept for the frame Agg gives back to report.
+	err error
+}
+
+// Agg works out the given aggregations for every group.
+//
+//	q := f.Lazy().GroupBy("symbol").Agg(
+//		kuma.Sum("qty").As("total"),
+//		kuma.Mean("price").As("avg"),
+//		kuma.Size(),
+//	)
+//
+// The result has the key columns first, one row per group, followed by one
+// column per aggregation in the order they were given, which is what
+// [GroupedFrame.Agg] produces for the same query written eagerly.
+//
+// An aggregation is named after the column it reads unless [Aggregation.As]
+// says otherwise, so two aggregations of one column need at least one of them
+// named, and asking for both without naming either is an error about duplicate
+// column names at [LazyFrame.Collect].
+func (lg *LazyGroupBy[S]) Agg(aggs ...Aggregation) *LazyFrame[Dynamic] {
+	if lg.err != nil {
+		return &LazyFrame[Dynamic]{err: lg.err}
+	}
+	if len(aggs) == 0 {
+		return &LazyFrame[Dynamic]{err: fmt.Errorf("kuma: Agg with nothing to aggregate: %w", ErrLength)}
+	}
+
+	as := make([]plan.Agg, len(aggs))
+	for i, a := range aggs {
+		as[i] = a.plan()
+	}
+	return &LazyFrame[Dynamic]{node: plan.Aggregate(lg.node, lg.by, as)}
+}
+
+// Count works out how many rows each group has, which is the group by anybody
+// writes first. It counts rows and not values, so it is [Size] rather than
+// [Count].
+func (lg *LazyGroupBy[S]) Count() *LazyFrame[Dynamic] { return lg.Agg(Size()) }
 
 // Sort puts the rows in order, the first key deciding and each later one
 // breaking the ties of the one before.

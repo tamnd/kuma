@@ -115,11 +115,15 @@
 // what the same query written out by hand gives, because the same kernels do
 // the work.
 //
-// The steps are Filter, Select, With, Drop, Sort, Head and Slice, a group by
-// and a join are what the engine is being taught next, and asking for one of
-// those is an error that says so rather than a wrong answer. [LazyFrame.Plan]
-// is the plan as it stands, [LazyFrame.Validate] is the check on its own, and
-// printing a query prints the tree of operators it built.
+// The steps are Filter, Select, With, Drop, GroupBy, Sort, Head and Slice, and
+// a group by is written the way the eager one is:
+//
+//	totals, err := prices.Lazy().GroupBy("symbol").Agg(kuma.Sum("qty")).Collect(ctx)
+//
+// A join and an explode are what the engine is being taught next, and asking
+// for one of those is an error that says so rather than a wrong answer.
+// [LazyFrame.Plan] is the plan as it stands, [LazyFrame.Validate] is the check
+// on its own, and printing a query prints the tree of operators it built.
 //
 // # Reading a file
 //

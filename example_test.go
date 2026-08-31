@@ -1161,3 +1161,43 @@ func ExampleLazyFrame_Schema() {
 	//   available: symbol, price, qty
 	// true
 }
+
+// ExampleLazyGroupBy_Agg shows a group by written as part of a query, which
+// gives the same table the eager [kuma.GroupedFrame.Agg] does and does none of
+// the work until the query is collected.
+func ExampleLazyGroupBy_Agg() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT", "AAPL", "NVDA").Column(),
+		kuma.NewSeries("price", 189.5, 411.2, 190.1, 121.0).Column(),
+		kuma.NewSeries("qty", int64(100), 50, 25, 400).Column(),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	q := f.Lazy().GroupBy("symbol").Agg(
+		kuma.Sum("qty").As("total"),
+		kuma.Mean("price").As("avg"),
+		kuma.Size(),
+	)
+	fmt.Println(q)
+
+	out, err := q.Collect(context.Background())
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(out)
+	// Output:
+	// Aggregate by symbol: Sum(qty) as total, Mean(price) as avg, Size() as size
+	//   Scan frame
+	// kuma.Frame[kuma.Dynamic] 3 rows x 4 cols
+	//
+	//   symbol | total |     avg |  size
+	//   string | int64 | float64 | int64
+	// ---------+-------+---------+------
+	//   AAPL   |   125 |   189.8 |     2
+	//   MSFT   |    50 |   411.2 |     1
+	//   NVDA   |   400 |     121 |     1
+}
