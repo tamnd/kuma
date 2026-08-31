@@ -442,7 +442,7 @@ These are the places where 1:1 in capability means deliberately not 1:1 in behav
 
 **NaN is not null.** Missing values live in a validity bitmap and NaN is a perfectly valid float. pandas 3.0 reached the same model through Arrow.
 
-**No silent upcasting.** `int64 + float64` needs an explicit cast, and the error arrives at plan time rather than partway through the data. A number too big for the column it is written against arrives at plan time too, so comparing an int8 column against 300 is a query that never starts rather than one that reads the file first and then stops.
+**No silent upcasting.** `int64 + float64` needs an explicit cast, and the error arrives at plan time rather than partway through the data. A number too big for the column it is written against arrives at plan time too, so comparing an int8 column against 300 is a query that never starts rather than one that reads the file first and then stops. What a number does take is the type of the column it is written against, and the optimized plan says which type that was, so an explain shows a comparison against a float64 column happening in float64 rather than leaving it to be inferred.
 
 **Float summation order differs.** Vectorized summation associates differently from a scalar loop. The result is more accurate, not less, but it is not bit identical.
 

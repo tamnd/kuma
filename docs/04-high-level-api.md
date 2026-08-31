@@ -121,13 +121,15 @@ the query that runs
   Project symbol, price
     Limit 20
       Sort by qty desc
-        Filter (price > 100)
+        Filter (price > (100 as float64))
           Scan trades/*.parquet
 
-changed by predicate pushdown and slice pushdown
+changed by predicate pushdown, slice pushdown and type coercion
 ```
 
 The query as written is what the caller built, the query that runs is what the passes turned it into, and the last line names the passes that made the difference. A query no pass changes is printed once with a line saying so, because printing the same plan twice tells nobody anything. The format is documented and kept, since people will parse it whether we want them to or not.
+
+The `as float64` on the filter is worth a word. A value written in a query has no type of its own, and 100 against a float64 column is a float64 rather than dragging the column up to an int64. That rule used to live only in the engine, so the plan said `price > 100` and what happened was something you had to know. The type coercion pass works it out once and writes it into the plan, which means the comparison you can read is the comparison that runs. A value already at the type it is used with is left plain, so a float written against a float column reads exactly as it was written and only the conversions show up.
 
 Not in it yet: an estimated row count per operator, which needs statistics on the source, and the row groups a scan skips, which needs the page index. Both go in as the scan learns to report them, under the operator they belong to.
 
@@ -145,12 +147,12 @@ the query as written
         Scan trades/*.parquet
 
 the query that ran
-  Project symbol, price                         10.0us   2 rows
-    Limit 20                                    10.0us   2 rows
-      Filter (price > 100)                      50.0us   3 rows
-        Scan trades/*.parquet [symbol, price]   30.0us   4 rows
+  Project symbol, price                          10.0us   2 rows
+    Limit 20                                     10.0us   2 rows
+      Filter (price > (100 as float64))          50.0us   3 rows
+        Scan trades/*.parquet [symbol, price]    30.0us   4 rows
 
-changed by slice pushdown and projection pushdown
+changed by slice pushdown, projection pushdown and type coercion
 ran in 100us
 ```
 

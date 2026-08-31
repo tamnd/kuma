@@ -46,8 +46,14 @@
 // worked out once for the columns that read it. Then [PushProjection] works out
 // which columns each step of a query actually reads and writes that into the
 // scan too, so that a query over two columns of a file of forty reads two. The
-// projection pass goes last because a filter, a limit or a hoisted value that
-// has moved changes what the steps above it need.
+// projection pass goes last of those because a filter, a limit or a hoisted
+// value that has moved changes what the steps above it need. Then [Coerce]
+// writes down the type each value in the plan is used at, so that a comparison
+// of a float64 column against 100 reads as a comparison against a float64
+// hundred and the rule that made it one is in the plan rather than only in the
+// engine. It goes after the rest because it writes into the text of an
+// expression, and a value that moved should be hoisted and named as the caller
+// wrote it.
 //
 // [Explain] is how a caller checks any of that instead of taking it on trust.
 // It prints the query as written, the query the passes turned it into and the
