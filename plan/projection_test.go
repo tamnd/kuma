@@ -13,27 +13,10 @@ import (
 	"github.com/tamnd/kuma/plan"
 )
 
-// planText writes a plan as a tree, the operator first and its inputs indented
-// under it. The kuma package prints a query the same way, and a pass is easiest
-// to read a failure of when the whole plan is in front of you.
-func planText(sb *strings.Builder, n *plan.Node, depth int) {
-	if n == nil {
-		return
-	}
-	if depth > 0 {
-		sb.WriteByte('\n')
-		sb.WriteString(strings.Repeat("  ", depth))
-	}
-	sb.WriteString(n.String())
-	planText(sb, n.Input(), depth+1)
-	planText(sb, n.Right(), depth+1)
-}
-
-// tree is the plan as text, which is what these tests compare.
+// tree is the plan as text, which is what these tests compare. A pass is
+// easiest to read a failure of when the whole plan is in front of you.
 func tree(n *plan.Node) string {
-	var sb strings.Builder
-	planText(&sb, n, 0)
-	return sb.String()
+	return n.Tree()
 }
 
 // pushed optimizes a plan with the one pass under test and fails the test if it

@@ -46,6 +46,13 @@
 // projection pass goes last because a filter, a limit or a hoisted value that
 // has moved changes what the steps above it need.
 //
+// [Explain] is how a caller checks any of that instead of taking it on trust.
+// It prints the query as written, the query the passes turned it into and the
+// names of the passes that made the difference, in a format this package
+// documents and keeps. [Node.Tree] is the printing on its own, one operator per
+// line with the inputs indented under it, for a caller who wants the plan and
+// not the comparison.
+//
 // The two rules that everything else here depends on are that an expression
 // never changes once it has been built, and that two expressions that say the
 // same thing are the same [Expr]. Together they make finding a repeated
