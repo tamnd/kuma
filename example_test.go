@@ -1389,3 +1389,43 @@ func ExampleLazyFrame_SelectAs() {
 	//   AAPL   |   189.5
 	//   MSFT   |   411.2
 }
+
+// ExampleGroupedFrame_AggAs shows a group by whose result is a Go struct, which
+// is what keeps the steps after it written against the compiler.
+func ExampleGroupedFrame_AggAs() {
+	type Total struct {
+		Symbol string `kuma:"symbol"`
+		Qty    int64  `kuma:"qty"`
+	}
+
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT", "AAPL").Column(),
+		kuma.NewSeries("qty", int64(100), 50, 25).Column(),
+		kuma.NewSeries("price", 189.5, 411.2, 190.1).Column(),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	g, err := f.GroupBy("symbol")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	totals, err := g.AggAs[Total](kuma.Sum("qty"), kuma.Mean("price").As("avg"))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(totals)
+	// Output:
+	// kuma.Frame[kuma_test.Total] 2 rows x 2 cols
+	//
+	//   symbol |   qty
+	//   string | int64
+	// ---------+------
+	//   AAPL   |   125
+	//   MSFT   |    50
+}

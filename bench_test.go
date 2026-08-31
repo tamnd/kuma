@@ -30,6 +30,7 @@ var (
 	indexSink       []int
 	groupSink       *kuma.GroupedFrame[kuma.Dynamic]
 	boundSink       *kuma.Frame[benchRow]
+	totalSink       *kuma.Frame[benchTotal]
 )
 
 // benchInts returns a column of benchLen int64 values in the given number of
@@ -595,6 +596,35 @@ func BenchmarkFrameGroupByAndAgg(b *testing.B) {
 		}
 		frameSink = out
 	}
+}
+
+// BenchmarkFrameAggAs is the same group by and the same two aggregations with a
+// struct saying what the result holds, so the gap to BenchmarkFrameGroupByAndAgg
+// is what keeping the frame typed costs. It is the check of three columns and
+// the frame built from them, over a hundred groups.
+func BenchmarkFrameAggAs(b *testing.B) {
+	f := benchGrouped(b).Frame()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		g, err := f.GroupBy("k")
+		if err != nil {
+			b.Fatalf("GroupBy: %v", err)
+		}
+		out, err := g.AggAs[benchTotal](kuma.Sum("qty").As("total"), kuma.Mean("price").As("avg"))
+		if err != nil {
+			b.Fatalf("AggAs: %v", err)
+		}
+		totalSink = out
+	}
+}
+
+// benchTotal is the schema BenchmarkFrameAggAs asks for, which is the key and
+// the two aggregations.
+type benchTotal struct {
+	K     int64   `kuma:"k"`
+	Total int64   `kuma:"total"`
+	Avg   float64 `kuma:"avg"`
 }
 
 // BenchmarkFrameDistinct is a drop duplicates over one key column, which is the

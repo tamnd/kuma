@@ -50,23 +50,60 @@ import (
 //
 // Nothing is copied. The frame that comes back shares the columns it kept.
 func (f *Frame[S]) SelectAs[R any]() (*Frame[R], error) {
+	return selectAs[R](f, "SelectAs")
+}
+
+// AggAs works out the given aggregations for every group and returns the columns
+// the struct R names, as a frame whose schema type is R.
+//
+//	type Total struct {
+//		Symbol string  `kuma:"symbol"`
+//		Qty    int64   `kuma:"qty"`
+//		Price  float64 `kuma:"price"`
+//	}
+//
+//	totals, err := g.AggAs[Total](kuma.Sum("qty"), kuma.Mean("price"))
+//
+// It is [GroupedFrame.Agg] and [Frame.SelectAs] in one step, so the struct names
+// the key columns it wants as well as the aggregations, and the columns come out
+// in the struct's order rather than in the keys first order the untyped one
+// produces.
+//
+// An aggregation is named after the column it reads unless [Aggregation.As] says
+// otherwise, so a struct that names a column no aggregation produced is an error
+// saying which columns there were, and the fix is usually an As. Asking for an
+// aggregation the struct does not name is not a mistake: it is worked out and
+// then left out, the same as a column a select does not keep.
+func (g *GroupedFrame[S]) AggAs[R any](aggs ...Aggregation) (*Frame[R], error) {
+	f, err := g.Agg(aggs...)
+	if err != nil {
+		return nil, err
+	}
+	return selectAs[R](f, "AggAs")
+}
+
+// selectAs keeps the columns the struct R names, in the order R names them,
+// which is what the eager typed steps all end in. The who is the step to name in
+// an error, since a caller who wrote an AggAs is not helped by being told about
+// a SelectAs they did not write.
+func selectAs[R, S any](f *Frame[S], who string) (*Frame[R], error) {
 	fields, err := schemaOf[R]()
 	if err != nil {
 		return nil, err
 	}
 	if len(fields) == 0 {
-		return nil, noFields[R]("SelectAs")
+		return nil, noFields[R](who)
 	}
 
 	cols := make([]Column, len(fields))
 	for i, sf := range fields {
 		j, ok := f.index[sf.column]
 		if !ok {
-			return nil, noColumn("SelectAs", sf.column, f.Names())
+			return nil, noColumn(who, sf.column, f.Names())
 		}
 		c := f.cols[j]
 		if !canReadType(sf.typ, c.DType()) {
-			return nil, wrongField("SelectAs", sf, c.DType())
+			return nil, wrongField(who, sf, c.DType())
 		}
 		cols[i] = c
 	}
@@ -94,31 +131,72 @@ func (lf *LazyFrame[S]) SelectAs[R any]() *LazyFrame[R] {
 		return &LazyFrame[R]{err: lf.err}
 	}
 
-	fields, err := schemaOf[R]()
+	n, err := projectAs[R](lf.node, "SelectAs")
 	if err != nil {
 		return &LazyFrame[R]{err: err}
 	}
-	if len(fields) == 0 {
-		return &LazyFrame[R]{err: noFields[R]("SelectAs")}
+	return &LazyFrame[R]{node: n}
+}
+
+// AggAs works out the given aggregations for every group and keeps the columns
+// the struct R names, giving back a query whose schema type is R.
+//
+//	q := f.Lazy().GroupBy("symbol").AggAs[Total](kuma.Sum("qty"))
+//
+// It is [GroupedFrame.AggAs] written as a step of a query, and it is what keeps
+// a query typed across the one step that changes every column it has. The struct
+// names the keys it wants along with the aggregations, and what it does not name
+// is left out.
+//
+// Like [LazyFrame.SelectAs] this is checked where it is written, so an
+// aggregation that produced a column under a name the struct does not use is an
+// error from that line rather than at [LazyFrame.Collect].
+func (lg *LazyGroupBy[S]) AggAs[R any](aggs ...Aggregation) *LazyFrame[R] {
+	q := lg.Agg(aggs...)
+	if q.err != nil {
+		return &LazyFrame[R]{err: q.err}
 	}
 
-	s, err := lf.node.Schema()
+	n, err := projectAs[R](q.node, "AggAs")
 	if err != nil {
 		return &LazyFrame[R]{err: err}
+	}
+	return &LazyFrame[R]{node: n}
+}
+
+// projectAs returns the plan that keeps the columns the struct R names, in the
+// order R names them, checked against what the plan at n produces.
+//
+// The check is the point. The struct says what the result should hold and n
+// already knows what reaches it, so the two are compared where the step was
+// written rather than at Collect, which is what the untyped steps have to wait
+// for. The who is the step to name in an error.
+func projectAs[R any](n *plan.Node, who string) (*plan.Node, error) {
+	fields, err := schemaOf[R]()
+	if err != nil {
+		return nil, err
+	}
+	if len(fields) == 0 {
+		return nil, noFields[R](who)
+	}
+
+	s, err := n.Schema()
+	if err != nil {
+		return nil, err
 	}
 
 	cols := make([]plan.Projection, len(fields))
 	for i, sf := range fields {
 		fd, ok := s.Field(sf.column)
 		if !ok {
-			return &LazyFrame[R]{err: noColumn("SelectAs", sf.column, s.Names())}
+			return nil, noColumn(who, sf.column, s.Names())
 		}
 		if !canReadType(sf.typ, fd.Type) {
-			return &LazyFrame[R]{err: wrongField("SelectAs", sf, fd.Type)}
+			return nil, wrongField(who, sf, fd.Type)
 		}
 		cols[i] = plan.Projection{Expr: plan.Col(sf.column)}
 	}
-	return &LazyFrame[R]{node: plan.Project(lf.node, cols)}
+	return plan.Project(n, cols), nil
 }
 
 // noFields is the error for a schema struct that names no columns, which is one

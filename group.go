@@ -126,6 +126,10 @@ func (g *GroupedFrame[S]) Keys() []Column {
 // It reports an error if an aggregation names a column that is not there, or if
 // a column is of a type that aggregation has no answer for, such as the sum of
 // a string.
+//
+// What comes back is a Dynamic frame, since the columns are not the ones the
+// schema type describes any more. [GroupedFrame.AggAs] is the same step with a
+// struct saying what the result holds, which keeps the frame typed.
 func (g *GroupedFrame[S]) Agg(aggs ...Aggregation) (*Frame[Dynamic], error) {
 	if len(aggs) == 0 {
 		return nil, fmt.Errorf("kuma: Agg with nothing to aggregate: %w", ErrLength)

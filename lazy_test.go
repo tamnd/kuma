@@ -1048,5 +1048,24 @@ func BenchmarkLazySelectAs(b *testing.B) {
 	}
 }
 
+// BenchmarkLazyAggAs is BenchmarkFrameAggAs written as a query, over the same
+// frame and asking for the same three columns, so the gap between the two is the
+// whole cost of going through the plan.
+func BenchmarkLazyAggAs(b *testing.B) {
+	f := benchGrouped(b).Frame()
+	ctx := b.Context()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.Lazy().GroupBy("k").
+			AggAs[benchTotal](kuma.Sum("qty").As("total"), kuma.Mean("price").As("avg")).
+			Collect(ctx)
+		if err != nil {
+			b.Fatalf("Collect: %v", err)
+		}
+		totalSink = out
+	}
+}
+
 // planSink keeps the plan the benchmark built from being optimized away.
 var planSink *plan.Node

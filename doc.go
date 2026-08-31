@@ -67,6 +67,8 @@
 // A missing key is a group of its own rather than a row that disappears, and
 // the groups come out in the order they first appear, which is deterministic
 // without being sorted. Sort the result when the order matters.
+// [GroupedFrame.AggAs] is the same step with a struct saying what the result
+// holds, which is what keeps a typed frame typed across a group by.
 //
 // [Frame.Distinct] is the same division of the rows with only the first row of
 // each set kept, which is what pandas calls drop_duplicates:
