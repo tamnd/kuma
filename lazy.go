@@ -258,6 +258,9 @@ type LazyGroupBy[S any] struct {
 // says otherwise, so two aggregations of one column need at least one of them
 // named, and asking for both without naming either is an error about duplicate
 // column names at [LazyFrame.Collect].
+//
+// [LazyGroupBy.AggAs] is the same step with a struct saying what the result
+// holds, which is how a query stays typed across a group by.
 func (lg *LazyGroupBy[S]) Agg(aggs ...Aggregation) *LazyFrame[Dynamic] {
 	if lg.err != nil {
 		return &LazyFrame[Dynamic]{err: lg.err}

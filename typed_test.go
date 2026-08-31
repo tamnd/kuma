@@ -264,3 +264,143 @@ func TestLazySelectAsString(t *testing.T) {
 		t.Errorf("the plan is\n%s\nwant\n%s", got, want)
 	}
 }
+
+// Total is the result of a group by symbol with a sum of the quantity, written
+// with the aggregation first so that a test can tell the struct's order from the
+// keys first order the untyped Agg produces.
+type Total struct {
+	Qty    int64  `kuma:"qty"`
+	Symbol string `kuma:"symbol"`
+}
+
+func TestAggAs(t *testing.T) {
+	g, err := trades(t).GroupBy("symbol")
+	if err != nil {
+		t.Fatalf("GroupBy: %v", err)
+	}
+
+	got, err := g.AggAs[Total](kuma.Sum("qty"))
+	if err != nil {
+		t.Fatalf("AggAs: %v", err)
+	}
+
+	if want := []string{"qty", "symbol"}; !slices.Equal(got.Names(), want) {
+		t.Errorf("AggAs gave %v, want %v", got.Names(), want)
+	}
+	if r := rows(t, got); !slices.Equal(r, []string{"125 AAPL", "50 MSFT", "400 NVDA"}) {
+		t.Errorf("AggAs gave %v", r)
+	}
+}
+
+// TestAggAsLeavesOutWhatTheStructDoesNotName is the rule a select follows, here
+// applied to an aggregation that was worked out and then not wanted. Asking for
+// one and not keeping it is allowed, since a struct is a list of what the result
+// holds rather than a list of what to compute.
+func TestAggAsLeavesOutWhatTheStructDoesNotName(t *testing.T) {
+	g, err := trades(t).GroupBy("symbol")
+	if err != nil {
+		t.Fatalf("GroupBy: %v", err)
+	}
+
+	got, err := g.AggAs[Total](kuma.Sum("qty"), kuma.Mean("price").As("avg"))
+	if err != nil {
+		t.Fatalf("AggAs: %v", err)
+	}
+	if want := []string{"qty", "symbol"}; !slices.Equal(got.Names(), want) {
+		t.Errorf("AggAs gave %v, want %v", got.Names(), want)
+	}
+}
+
+// TestAggAsMistakes is the one a caller makes, which is naming a column that no
+// aggregation produced under that name. The message says AggAs rather than the
+// select underneath, since that is the step that was written.
+func TestAggAsMistakes(t *testing.T) {
+	g, err := trades(t).GroupBy("symbol")
+	if err != nil {
+		t.Fatalf("GroupBy: %v", err)
+	}
+
+	type wanted struct {
+		Symbol string `kuma:"symbol"`
+		Total  int64  `kuma:"total"`
+	}
+	_, err = g.AggAs[wanted](kuma.Sum("qty"))
+	if !errors.Is(err, kuma.ErrNoColumn) {
+		t.Fatalf("AggAs = %v, want ErrNoColumn", err)
+	}
+	if !strings.Contains(err.Error(), "AggAs") {
+		t.Errorf("the message is %q, want it to name the step", err.Error())
+	}
+
+	// The mistake the aggregation itself makes still comes from there.
+	if _, err := g.AggAs[Total](kuma.Sum("smybol")); !errors.Is(err, kuma.ErrNoColumn) {
+		t.Errorf("AggAs on a column that is not there = %v, want ErrNoColumn", err)
+	}
+	if _, err := g.AggAs[Total](); !errors.Is(err, kuma.ErrLength) {
+		t.Errorf("AggAs with nothing to aggregate = %v, want ErrLength", err)
+	}
+}
+
+func TestLazyAggAs(t *testing.T) {
+	f := typedTrades(t)
+
+	g, err := f.GroupBy("symbol")
+	if err != nil {
+		t.Fatalf("GroupBy: %v", err)
+	}
+	want, err := g.AggAs[Total](kuma.Sum("qty"))
+	if err != nil {
+		t.Fatalf("AggAs: %v", err)
+	}
+
+	got, err := f.Lazy().GroupBy("symbol").AggAs[Total](kuma.Sum("qty")).Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if got.String() != want.String() {
+		t.Errorf("the query gave\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestLazyAggAsKeepsTheSchemaType is the point of it, which is that the steps
+// after a group by are written against the struct rather than against strings.
+func TestLazyAggAsKeepsTheSchemaType(t *testing.T) {
+	qty := kuma.NewI64Col[Total]("qty")
+
+	out, err := typedTrades(t).Lazy().
+		GroupBy("symbol").
+		AggAs[Total](kuma.Sum("qty")).
+		Filter(qty.Ge(125)).
+		Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if r := rows(t, out); !slices.Equal(r, []string{"125 AAPL", "400 NVDA"}) {
+		t.Errorf("the query gave %v", r)
+	}
+}
+
+// TestLazyAggAsIsCheckedWhereItIsWritten is the same promise the typed select
+// makes, here over a step whose columns did not exist until it ran.
+func TestLazyAggAsIsCheckedWhereItIsWritten(t *testing.T) {
+	type wanted struct {
+		Symbol string `kuma:"symbol"`
+		Total  int64  `kuma:"total"`
+	}
+
+	q := trades(t).Lazy().GroupBy("symbol").AggAs[wanted](kuma.Sum("qty"))
+	if err := q.Validate(); !errors.Is(err, kuma.ErrNoColumn) {
+		t.Errorf("Validate = %v, want ErrNoColumn", err)
+	}
+}
+
+// TestLazyAggAsString is the plan, which is a projection over the aggregate. The
+// struct is gone by then, so this optimizes the way the same query written by
+// name does.
+func TestLazyAggAsString(t *testing.T) {
+	got := trades(t).Lazy().GroupBy("symbol").AggAs[Total](kuma.Sum("qty")).String()
+	want := "Project qty, symbol\n  Aggregate by symbol: Sum(qty)\n    Scan frame"
+	if got != want {
+		t.Errorf("the plan is\n%s\nwant\n%s", got, want)
+	}
+}

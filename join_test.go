@@ -28,7 +28,7 @@ func sectors(t *testing.T) *kuma.Frame[kuma.Dynamic] {
 }
 
 // rows renders a frame as one string per row, for comparing against a table.
-func rows(t *testing.T, f *kuma.Frame[kuma.Dynamic]) []string {
+func rows[S any](t *testing.T, f *kuma.Frame[S]) []string {
 	t.Helper()
 
 	out := make([]string, f.NumRows())
