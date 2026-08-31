@@ -46,8 +46,7 @@ func Bind[S any](f *Frame[Dynamic]) (*Frame[S], error) {
 			return nil, noColumn("Bind", sf.column, f.Names())
 		}
 		if dt := f.cols[i].DType(); !canReadType(sf.typ, dt) {
-			return nil, fmt.Errorf("kuma: field %s wants column %q as a %s and it is a %s: %w",
-				sf.field, sf.column, sf.typ, dt, ErrWrongType)
+			return nil, wrongField("Bind", sf, dt)
 		}
 	}
 

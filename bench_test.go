@@ -359,6 +359,43 @@ func BenchmarkBind(b *testing.B) {
 	}
 }
 
+// BenchmarkFrameSelectAs is the same check with the columns the schema does not
+// name left out, which is the step a program that reads a wide file and works on
+// three of its columns writes.
+func BenchmarkFrameSelectAs(b *testing.B) {
+	f := benchFrame(b)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.SelectAs[benchRow]()
+		if err != nil {
+			b.Fatalf("SelectAs: %v", err)
+		}
+		boundSink = out
+	}
+}
+
+// BenchmarkFrameSelectAndBind is the two steps that were the way to write the
+// one above, and the gap between them is what writing it once is worth. Both of
+// them are per column rather than per row, so both are small and the gap is the
+// second frame the first one builds.
+func BenchmarkFrameSelectAndBind(b *testing.B) {
+	f := benchFrame(b)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		sel, err := f.Select("c00", "c01", "c02")
+		if err != nil {
+			b.Fatalf("Select: %v", err)
+		}
+		out, err := kuma.Bind[benchRow](sel)
+		if err != nil {
+			b.Fatalf("Bind: %v", err)
+		}
+		boundSink = out
+	}
+}
+
 // benchRow is the schema BenchmarkBind binds to, which is three of the sixteen
 // columns benchFrame has.
 type benchRow struct {

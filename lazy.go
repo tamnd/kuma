@@ -27,7 +27,8 @@ import (
 // written for a table of trades cannot be used against a query over orders and
 // the compiler is what says so. A step that changes the columns gives back a
 // Frame[Dynamic] for the reason [Frame.WithColumn] does, and [Bind] is the way
-// back to a typed one.
+// back to a typed one. [LazyFrame.SelectAs] is the way to stay typed through a
+// projection, being a select whose column list is a struct.
 //
 // A mistake in a step is kept until Collect rather than returned there and
 // then. Writing a query is one expression and Go has no way to break out of the
@@ -111,6 +112,10 @@ func (lf *LazyFrame[S]) Filter(cond BoolValue[S]) *LazyFrame[S] {
 // It is a projection, so a name that is not there is an error at Collect, and
 // naming the same column twice is a frame with two columns of one name, which
 // is an error for the same reason.
+//
+// What comes back is a Dynamic query, since the columns are no longer the ones
+// the schema type describes. [LazyFrame.SelectAs] is the same step told by a
+// struct instead of by a list of names, and it keeps the query typed.
 func (lf *LazyFrame[S]) Select(names ...string) *LazyFrame[Dynamic] {
 	if lf.err != nil {
 		return &LazyFrame[Dynamic]{err: lf.err}
