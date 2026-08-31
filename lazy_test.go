@@ -71,17 +71,24 @@ func TestLazyCollectIsTyped(t *testing.T) {
 // the handles keep working along the chain and the frame at the end needs no
 // Bind of its own.
 func TestLazyOnATypedFrameKeepsTheType(t *testing.T) {
-	var q *kuma.LazyFrame[Trade] = typedTrades(t).Lazy().
+	out, err := typedTrades(t).Lazy().
 		Filter(tradeCols.Price.Gt(150)).
 		SortBy("price").
-		Head(1)
-
-	out, err := q.Collect(t.Context())
+		Head(1).
+		Collect(t.Context())
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if got := symbolsOf(t, out); !slices.Equal(got, []string{"AAPL"}) {
-		t.Errorf("symbols = %v, want AAPL", got)
+
+	// The frame is a Frame[Trade] rather than a Dynamic one, which is what the
+	// line below says: a handle written for another schema does not compile
+	// against it.
+	prices, err := tradeCols.Price.Series(out)
+	if err != nil {
+		t.Fatalf("Series: %v", err)
+	}
+	if got := prices.Values(); !slices.Equal(got, []float64{189.5}) {
+		t.Errorf("prices = %v, want 189.5", got)
 	}
 }
 
@@ -317,7 +324,7 @@ func TestLazyCollectStopsWhenGivenUpOn(t *testing.T) {
 
 	_, err := trades(t).Lazy().Head(1).Collect(ctx)
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("Collect with a cancelled context = %v, want context.Canceled", err)
+		t.Fatalf("Collect with a canceled context = %v, want context.Canceled", err)
 	}
 }
 

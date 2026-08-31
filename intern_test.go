@@ -102,6 +102,8 @@ type countingSource struct {
 	reads int
 }
 
+var _ source = (*countingSource)(nil)
+
 func (s *countingSource) Name() string { return "counting" }
 
 func (s *countingSource) Schema() (dtype.Schema, error) { return s.frame.schema, nil }

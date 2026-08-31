@@ -32,10 +32,15 @@ type frameSource struct {
 
 var _ source = frameSource{}
 
+// Name says what the source is in an explain, which for a frame that is
+// already in memory is nothing more than that it is one.
 func (s frameSource) Name() string { return "frame" }
 
+// Schema returns what the frame holds, which it knows without reading it.
 func (s frameSource) Schema() (dtype.Schema, error) { return s.frame.schema, nil }
 
+// read returns the frame. Nothing is copied and nothing can go wrong, which is
+// what makes a frame the cheapest leaf a plan can have.
 func (s frameSource) read(context.Context) (*Frame[Dynamic], error) { return s.frame, nil }
 
 // run works a plan out and returns what it produced.
