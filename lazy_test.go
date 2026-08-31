@@ -792,6 +792,98 @@ func TestLazyFilterOverTheRestOfThePlan(t *testing.T) {
 	}
 }
 
+// TestLazySliceOverTheRestOfThePlan is the check on the slice pushdown, which
+// is the pass most able to give a wrong answer that looks right, since almost
+// every operator it meets is one it must not move under and a plan that moved
+// under one of them still comes back with the right number of rows.
+func TestLazySliceOverTheRestOfThePlan(t *testing.T) {
+	f := trades(t)
+	dear := kuma.F64("price").Gt(150)
+
+	tests := []struct {
+		name  string
+		lazy  func() *kuma.LazyFrame[kuma.Dynamic]
+		eager func() (*kuma.Frame[kuma.Dynamic], error)
+	}{
+		{
+			name: "over a scan, which is where it ends up",
+			lazy: func() *kuma.LazyFrame[kuma.Dynamic] { return f.Lazy().Slice(1, 2) },
+			eager: func() (*kuma.Frame[kuma.Dynamic], error) {
+				return f.Slice(1, 3), nil
+			},
+		},
+		{
+			name: "over a projection, which it goes under",
+			lazy: func() *kuma.LazyFrame[kuma.Dynamic] {
+				return f.Lazy().Select("qty", "symbol").Head(2)
+			},
+			eager: func() (*kuma.Frame[kuma.Dynamic], error) {
+				some, err := f.Select("qty", "symbol")
+				if err != nil {
+					return nil, err
+				}
+				return some.Slice(0, 2), nil
+			},
+		},
+		{
+			name: "over a filter, which it stays above",
+			lazy: func() *kuma.LazyFrame[kuma.Dynamic] { return f.Lazy().Filter(dear).Head(2) },
+			eager: func() (*kuma.Frame[kuma.Dynamic], error) {
+				kept, err := f.Filter(dear)
+				if err != nil {
+					return nil, err
+				}
+				return kept.Slice(0, 2), nil
+			},
+		},
+		{
+			name: "over a sort, which it stays above",
+			lazy: func() *kuma.LazyFrame[kuma.Dynamic] { return f.Lazy().Sort(kuma.Asc("qty")).Head(2) },
+			eager: func() (*kuma.Frame[kuma.Dynamic], error) {
+				sorted, err := f.Sort(kuma.Asc("qty"))
+				if err != nil {
+					return nil, err
+				}
+				return sorted.Slice(0, 2), nil
+			},
+		},
+		{
+			name: "over a distinct, which it stays above",
+			lazy: func() *kuma.LazyFrame[kuma.Dynamic] { return f.Lazy().Distinct("symbol").Head(1) },
+			eager: func() (*kuma.Frame[kuma.Dynamic], error) {
+				one, err := f.Distinct("symbol")
+				if err != nil {
+					return nil, err
+				}
+				return one.Slice(0, 1), nil
+			},
+		},
+		{
+			name: "two of them, which become one",
+			lazy: func() *kuma.LazyFrame[kuma.Dynamic] { return f.Lazy().Slice(1, 3).Slice(1, 1) },
+			eager: func() (*kuma.Frame[kuma.Dynamic], error) {
+				return f.Slice(2, 3), nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lazy, err := tt.lazy().Collect(t.Context())
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			eager, err := tt.eager()
+			if err != nil {
+				t.Fatalf("the eager query: %v", err)
+			}
+			if lazy.String() != eager.String() {
+				t.Errorf("the lazy query gave\n%s\nand the eager one gave\n%s", lazy, eager)
+			}
+		})
+	}
+}
+
 // TestLazyCrossJoin is the seventh, which takes no keys and is the one a
 // forgotten key must not fall into.
 func TestLazyCrossJoin(t *testing.T) {

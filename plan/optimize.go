@@ -83,6 +83,7 @@ func Optimize(n *Node, passes ...Pass) (*Node, error) {
 func Passes() []Pass {
 	return []Pass{
 		{Name: "predicate pushdown", Rewrite: PushPredicate},
+		{Name: "slice pushdown", Rewrite: PushSlice},
 		{Name: "projection pushdown", Rewrite: PushProjection},
 	}
 }

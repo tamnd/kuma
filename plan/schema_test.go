@@ -102,6 +102,12 @@ func TestSchemaOfAPlan(t *testing.T) {
 			schema(field("symbol", dtype.String, false), field("qty", dtype.Int64, false)),
 		},
 		{
+			"a sliced scan is the columns the source has, since a run of rows is still every column",
+			plan.ScanSlice(trades{}, 10, 20),
+			schema(field("symbol", dtype.String, false), field("price", dtype.Float64, false),
+				field("qty", dtype.Int64, false)),
+		},
+		{
 			"a filter leaves the columns alone",
 			plan.Filter(scan, plan.Compare(kernel.OpGt, price, plan.Lit(100.0))),
 			schema(field("symbol", dtype.String, false), field("price", dtype.Float64, false),
@@ -232,6 +238,8 @@ func TestSchemaTurnsAway(t *testing.T) {
 			plan.ScanOnly(trades{}, []string{"prcie"}),
 			`column "prcie" not found in Scan`,
 		},
+		{"a scan that skips backwards", plan.ScanSlice(trades{}, -1, 20), "skips -1 rows"},
+		{"a scan of fewer than no rows", plan.ScanSlice(trades{}, 0, -20), "a scan of -20 rows"},
 		{"a filter with no condition", plan.Filter(scan, nil), "no condition"},
 		{
 			"a filter on a column that is not there",

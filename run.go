@@ -123,24 +123,50 @@ func runScan(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
 	if err != nil {
 		return nil, err
 	}
-	if n.ScanColumns() == nil {
-		return f, nil
+
+	if n.ScanColumns() != nil {
+		// A source that can leave the columns it was not asked for unread has
+		// done that already and hands back what it read. One that cannot, such
+		// as a frame that is in memory in full, hands back everything and the
+		// columns are dropped here, which is worth doing even so: every
+		// operator above this one carries the columns it is given, and the ones
+		// nothing asked for are carried for nothing.
+		//
+		// The names came from the source's own schema when the plan was
+		// checked, so the only way this can fail is a source that answers two
+		// different ways.
+		f, err = f.Select(n.ScanColumns()...)
+		if err != nil {
+			return nil, fmt.Errorf("kuma: %s read columns other than the ones it said it had: %w", n.Source().Name(), err)
+		}
 	}
 
-	// A source that can leave the columns it was not asked for unread has done
-	// that already and hands back what it read. One that cannot, such as a
-	// frame that is in memory in full, hands back everything and the columns
-	// are dropped here, which is worth doing even so: every operator above this
-	// one carries the columns it is given, and the ones nothing asked for are
-	// carried for nothing.
-	//
-	// The names came from the source's own schema when the plan was checked, so
-	// the only way this can fail is a source that answers two different ways.
-	out, err := f.Select(n.ScanColumns()...)
-	if err != nil {
-		return nil, fmt.Errorf("kuma: %s read columns other than the ones it said it had: %w", n.Source().Name(), err)
+	// The same again for the rows. A source that can stop reading has stopped,
+	// and one that cannot is cut down to the run the query asked for, so that
+	// what everything above works on is that run rather than the lot.
+	if off, count, ok := n.ScanRows(); ok {
+		f = f.Slice(rowsIn(off, count, int64(f.rows)))
 	}
-	return out, nil
+	return f, nil
+}
+
+// rowsIn turns the run of rows a scan asks for into the two positions
+// [Frame.Slice] wants, held inside a frame that may have fewer rows than the
+// query asked for. A head of twenty over a frame of three is three rows and not
+// an error, the same as it is for a limit.
+//
+// The counts are int64 because a plan says how many rows it wants without
+// knowing what is going to answer, and a frame in memory is held in an int. The
+// clamp to the frame's own row count is what makes the narrowing safe on a
+// machine where an int is 32 bits.
+func rowsIn(off, count, rows int64) (start, end int) {
+	if off > rows {
+		off = rows
+	}
+	if count > rows-off {
+		count = rows - off
+	}
+	return int(off), int(off + count)
 }
 
 func runFilter(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {

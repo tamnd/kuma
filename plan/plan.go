@@ -173,6 +173,15 @@ type Node struct {
 	off, n int64    // OpLimit
 	names  []string // OpExplode
 	read   []string // OpScan, the columns to read, and nil for all of them
+	rows   *span    // OpScan, the rows to read, and nil for all of them
+}
+
+// A span is a run of rows: how many to skip and how many to take. It is a
+// pointer on a node rather than a pair of fields because a scan that reads no
+// rows and a scan that reads every row both have to be sayable, and a zero
+// count means the first of those.
+type span struct {
+	off, n int64
 }
 
 // The constructors. Each one takes what its operator needs and nothing else,
@@ -197,6 +206,41 @@ func Scan(src Source) *Node {
 // checked, the same as a name written anywhere else.
 func ScanOnly(src Source, names []string) *Node {
 	return &Node{op: OpScan, src: src, read: slices.Clone(names)}
+}
+
+// ScanSlice reads at most n rows of a source, having skipped the first off of
+// them, and leaves the rest of them unread.
+//
+// It is what a slice pushdown builds. A source that can stop reading, such as a
+// file read in row groups, stops once it has enough, and a source that cannot
+// hands back everything and the rest is dropped here. Either way every operator
+// above the scan works on the rows the query asked for rather than on all of
+// them.
+//
+// The rows come out in the order the source has them, the same as any other
+// scan. Which rows the first n are is only a question worth asking of a source
+// that reads in a fixed order, which is why this is not something a pass will
+// put under a sort.
+func ScanSlice(src Source, off, n int64) *Node {
+	return &Node{op: OpScan, src: src, rows: &span{off: off, n: n}}
+}
+
+// withRead is the scan reading the named columns, keeping whatever rows it was
+// already reading. The passes build a narrowed scan this way rather than with
+// [ScanOnly] so that narrowing the columns of a scan does not undo a slice that
+// another pass put on it.
+func (n *Node) withRead(names []string) *Node {
+	m := *n
+	m.read = names
+	return &m
+}
+
+// withRows is the scan reading that run of rows, keeping whatever columns it
+// was already reading.
+func (n *Node) withRows(off, count int64) *Node {
+	m := *n
+	m.rows = &span{off: off, n: count}
+	return &m
 }
 
 // Filter keeps the rows the condition holds for. A row where the condition is
@@ -348,6 +392,20 @@ func (n *Node) Offset() int64 { return n.off }
 // Limit is how many rows a limit keeps, having skipped [Node.Offset] of them.
 func (n *Node) Limit() int64 { return n.n }
 
+// ScanRows is the run of rows a scan reads: how many it skips, how many it
+// takes, and whether it was narrowed to a run at all. A scan that reads every
+// row it is given answers false, and one that reads none answers true with a
+// count of zero.
+//
+// It is nothing for any operator that is not a scan, the same as
+// [Node.ScanColumns].
+func (n *Node) ScanRows() (off, count int64, ok bool) {
+	if n.rows == nil {
+		return 0, 0, false
+	}
+	return n.rows.off, n.rows.n, true
+}
+
 // String returns this one operator as an explain would show it, without its
 // inputs. It is one line, and it is the line the tree of a whole plan is built
 // out of.
@@ -362,6 +420,12 @@ func (n *Node) String() string {
 			sb.WriteString(" [")
 			sb.WriteString(strings.Join(n.read, ", "))
 			sb.WriteByte(']')
+		}
+		if n.rows != nil {
+			sb.WriteString(" rows ")
+			sb.WriteString(strconv.FormatInt(n.rows.off, 10))
+			sb.WriteString(" to ")
+			sb.WriteString(strconv.FormatInt(n.rows.off+n.rows.n, 10))
 		}
 	case OpFilter:
 		sb.WriteByte(' ')

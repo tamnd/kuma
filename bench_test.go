@@ -1093,6 +1093,49 @@ func BenchmarkLazyFilterOfAWideFrame(b *testing.B) {
 	}
 }
 
+// benchHead is how many rows of the frame the head benchmarks keep, which is a
+// sixty fourth of it and about what a page of a table is worth asking for.
+const benchHead = benchLen / 64
+
+// BenchmarkEagerHeadOfAComputedColumn is the query written out in two steps:
+// the column is worked out for all 65536 rows and then the first 1024 of them
+// are taken. There is no eager spelling of a computed column, so the first step
+// is a lazy query of its own, which is what somebody writing this by hand would
+// have to do.
+func BenchmarkEagerHeadOfAComputedColumn(b *testing.B) {
+	f := benchFrame(b)
+	amount := kuma.I64("c00").Mul(3)
+	ctx := b.Context()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.Lazy().With("amount", amount).Collect(ctx)
+		if err != nil {
+			b.Fatalf("Collect: %v", err)
+		}
+		frameSink = out.Slice(0, benchHead)
+	}
+}
+
+// BenchmarkLazyHeadOfAComputedColumn is the same query written down as one,
+// which is what the slice pushdown is worth. The head sinks under the
+// projection and into the scan, so the column is worked out for the 1024 rows
+// the query keeps rather than for all 65536 and 64512 of them thrown away.
+func BenchmarkLazyHeadOfAComputedColumn(b *testing.B) {
+	f := benchFrame(b)
+	amount := kuma.I64("c00").Mul(3)
+	ctx := b.Context()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.Lazy().With("amount", amount).Head(benchHead).Collect(ctx)
+		if err != nil {
+			b.Fatalf("Collect: %v", err)
+		}
+		frameSink = out
+	}
+}
+
 // BenchmarkEagerFilterOverAJoin is the query written out by hand: the whole
 // left side goes into the join and an eighth of what comes out of it survives
 // the filter.

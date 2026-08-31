@@ -115,6 +115,58 @@ func TestAQueryNarrowsItsOwnScan(t *testing.T) {
 	}
 }
 
+// TestRunASlicedScan is the engine half of the slice pushdown. The pass writes
+// down which rows a scan is for, and a source that cannot stop reading has the
+// rest cut off as soon as it hands them over.
+func TestRunASlicedScan(t *testing.T) {
+	cases := []struct {
+		name     string
+		off, num int64
+		want     int
+	}{
+		{"a run inside the frame", 1, 1, 1},
+		{"a run that ends where the frame does", 1, 2, 2},
+		{"more rows than there are is what there is", 0, 40, 3},
+		{"a run that starts past the end is nothing", 40, 10, 0},
+		{"no rows at all", 0, 0, 0},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			n := plan.ScanSlice(frameSource{frame: internFrame(t)}, tt.off, tt.num)
+
+			got, err := run(t.Context(), n)
+			if err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			if got.NumRows() != tt.want {
+				t.Errorf("the scan gave %d rows, want %d", got.NumRows(), tt.want)
+			}
+			if want := []string{"symbol", "qty"}; !slices.Equal(got.Names(), want) {
+				t.Errorf("the scan gave %v, want every column", got.Names())
+			}
+		})
+	}
+}
+
+// TestAQuerySlicesItsOwnScan is the pass running where it runs for real, which
+// is inside run and without the caller asking for it.
+func TestAQuerySlicesItsOwnScan(t *testing.T) {
+	src := &countingSource{frame: internFrame(t)}
+	n := plan.Limit(plan.Project(plan.Scan(src), []plan.Projection{{Expr: plan.Col("qty")}}), 0, 2)
+
+	got, err := run(t.Context(), n)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got.NumRows() != 2 {
+		t.Errorf("the query gave %d rows, want the 2 it asked for", got.NumRows())
+	}
+	if src.reads != 1 {
+		t.Errorf("the source was read %d times, want once", src.reads)
+	}
+}
+
 // countingSource is a frame source that says how many times it was read.
 type countingSource struct {
 	frame *Frame[Dynamic]

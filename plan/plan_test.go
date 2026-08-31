@@ -38,6 +38,7 @@ func TestOperatorsPrintAsTheyWereWritten(t *testing.T) {
 	}{
 		{scan, "Scan trades/*.parquet"},
 		{plan.ScanOnly(trades{}, []string{"price", "qty"}), "Scan trades/*.parquet [price, qty]"},
+		{plan.ScanSlice(trades{}, 5, 20), "Scan trades/*.parquet rows 5 to 25"},
 		{plan.Filter(scan, plan.Compare(kernel.OpGt, price, plan.Lit(100.0))), "Filter (price > 100)"},
 		{
 			plan.Project(scan, []plan.Projection{{Expr: symbol}, {Expr: notional, As: "notional"}}),
@@ -200,8 +201,20 @@ func TestAnOperatorOnlyAnswersForItself(t *testing.T) {
 	if n.ScanColumns() != nil {
 		t.Error("the filter has the columns of a scan")
 	}
+	if _, _, ok := n.ScanRows(); ok {
+		t.Error("the filter has the rows of a scan")
+	}
 	if scan.ScanColumns() != nil {
 		t.Error("a scan of everything names the columns it reads, and it reads all of them")
+	}
+	if _, _, ok := scan.ScanRows(); ok {
+		t.Error("a scan of every row says it was cut to a run of them")
+	}
+	if off, count, ok := plan.ScanSlice(trades{}, 5, 20).ScanRows(); !ok || off != 5 || count != 20 {
+		t.Errorf("the sliced scan reads %d rows from %d, ok %v, want 20 from 5", count, off, ok)
+	}
+	if off, count, ok := plan.ScanSlice(trades{}, 0, 0).ScanRows(); !ok || off != 0 || count != 0 {
+		t.Errorf("a scan of no rows reads %d rows from %d, ok %v, want a run of none", count, off, ok)
 	}
 	if scan.Source().Name() != "trades/*.parquet" {
 		t.Error("the scan reads a source other than the one it was built over")

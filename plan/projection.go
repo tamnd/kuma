@@ -226,7 +226,7 @@ func narrowScan(n *Node, need map[string]bool) (*Node, error) {
 	if slices.Equal(read, s.Names()) {
 		return n, nil
 	}
-	return ScanOnly(n.src, read), nil
+	return n.withRead(read), nil
 }
 
 // with returns the needed set with the columns of an expression added, and nil

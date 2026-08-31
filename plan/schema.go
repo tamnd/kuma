@@ -97,6 +97,17 @@ func (n *Node) scanSchema() (dtype.Schema, error) {
 	if err != nil {
 		return dtype.Schema{}, err
 	}
+
+	// A scan reading a run of rows is checked the same way a limit is, since it
+	// is a limit that a pass wrote into the read.
+	if r := n.rows; r != nil {
+		if r.off < 0 {
+			return dtype.Schema{}, fmt.Errorf("kuma: a scan that skips %d rows", r.off)
+		}
+		if r.n < 0 {
+			return dtype.Schema{}, fmt.Errorf("kuma: a scan of %d rows", r.n)
+		}
+	}
 	if n.read == nil {
 		return s, nil
 	}
