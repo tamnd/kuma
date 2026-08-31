@@ -38,6 +38,12 @@ var (
 	// ErrNoValues is returned when a column is built with nothing underneath
 	// it.
 	ErrNoValues = errors.New("no values")
+
+	// ErrNotSupported is returned for something that is written down and not
+	// built yet, such as a query using a plan operator the engine has not
+	// caught up with. It is not the error for something that will never work,
+	// which is ErrWrongType.
+	ErrNotSupported = errors.New("not supported yet")
 )
 
 // ColumnError says that a column was asked for and is not there.

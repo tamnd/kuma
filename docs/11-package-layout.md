@@ -44,6 +44,8 @@ A CI check asserts that every package has a tier line and that no tier 1 package
 github.com/tamnd/kuma
 
   kuma.go                       Frame, LazyFrame, Series, the top level functions   T1
+  lazy.go                       the query that is written down and not run yet      T1
+  run.go                        the engine that works a plan out over the frame     T1
   expr.go                       the typed expression interface, evaluation          T1
   col.go                        F64Col, I64Col, StrCol, BoolCol, TimeCol and friends T1
   agg.go                        aggregation constructors                            T1

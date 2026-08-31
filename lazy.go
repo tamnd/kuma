@@ -1,0 +1,317 @@
+package kuma
+
+import (
+	"context"
+	"strings"
+
+	"github.com/tamnd/kuma/dtype"
+	"github.com/tamnd/kuma/plan"
+)
+
+// LazyFrame is a query that has been written down and not run.
+//
+//	out, err := f.Lazy().
+//		Filter(t.Price.Gt(100)).
+//		SortDesc("price").
+//		Head(20).
+//		Collect(ctx)
+//
+// Every step returns a new LazyFrame, so a query is built up the way it reads.
+// Nothing is worked out until [LazyFrame.Collect], which is what lets the whole
+// query be looked at before any of it runs: a column that is not there is an
+// error before the first file is opened, and the optimizer passes get to see
+// what the last step wanted before deciding what the first one has to read.
+//
+// The type parameter is the schema, the same one [Frame] carries, so a handle
+// written for a table of trades cannot be used against a query over orders and
+// the compiler is what says so. A step that changes the columns gives back a
+// Frame[Dynamic] for the reason [Frame.WithColumn] does, and [Bind] is the way
+// back to a typed one.
+//
+// A mistake in a step is kept until Collect rather than returned there and
+// then. Writing a query is one expression and Go has no way to break out of the
+// middle of one, so the alternative is an error check between every step, which
+// nobody writes and everybody skips. What is kept is the first mistake, since
+// the steps after it were written against something that did not happen.
+//
+// The operators it can build today are a scan, a filter, a projection, a sort
+// and a limit. A group by, a join and an explode are the plan's already and are
+// what the engine is being taught next, and asking for one is an error saying
+// so rather than a wrong answer.
+//
+// The zero LazyFrame is not usable. Use [Frame.Lazy].
+type LazyFrame[S any] struct {
+	node *plan.Node
+
+	// err is the first thing that went wrong while the query was being written,
+	// which is reported by Collect. A frame that is carrying one builds no
+	// further, so the mistake a caller is told about is theirs rather than the
+	// one it led to.
+	err error
+}
+
+// Lazy returns a query that starts from this frame.
+//
+// The frame is the leaf of the plan, so nothing is copied and nothing is read
+// again. What it buys over working on the frame directly is that the whole
+// query is known before any of it runs, which is what the optimizer passes and
+// the plan time check need.
+func (f *Frame[S]) Lazy() *LazyFrame[S] {
+	return &LazyFrame[S]{node: plan.Scan(frameSource{frame: f.dynamic()})}
+}
+
+// Plan returns the plan the query has been built into.
+//
+// It is the tree an explain prints and the tree the optimizer passes rewrite,
+// and it is here so that a program can look at what it built. The plan is
+// immutable, so reading it cannot disturb the query it came from.
+func (lf *LazyFrame[S]) Plan() *plan.Node { return lf.node }
+
+// Schema returns the columns the query would produce, without running it.
+//
+// It is [plan.Node.Schema], which works the answer out from the source up. A
+// field is nullable when a column might have missing values in it rather than
+// when it does, since which rows arrive is what the data decides.
+func (lf *LazyFrame[S]) Schema() (dtype.Schema, error) {
+	if lf.err != nil {
+		return dtype.Schema{}, lf.err
+	}
+	return lf.node.Schema()
+}
+
+// Validate returns the first thing wrong with the query, and nil for a query
+// that will run.
+//
+// It is what Collect checks before it reads anything, on its own, for a program
+// that wants to say a query is wrong at the point it was built.
+func (lf *LazyFrame[S]) Validate() error {
+	if lf.err != nil {
+		return lf.err
+	}
+	return lf.node.Validate()
+}
+
+// Filter keeps the rows the condition holds for.
+//
+//	q := f.Lazy().Filter(t.Price.Gt(100).And(t.Side.Eq("BUY")))
+//
+// A row the condition is missing an answer for is not kept, which is the rule
+// [Frame.Filter] follows and the reason filtering on a condition and then on
+// its negation does not always give every row back.
+func (lf *LazyFrame[S]) Filter(cond BoolValue[S]) *LazyFrame[S] {
+	if lf.err != nil {
+		return lf
+	}
+	return &LazyFrame[S]{node: plan.Filter(lf.node, cond.expr())}
+}
+
+// Select keeps the named columns, in the order named.
+//
+// It is a projection, so a name that is not there is an error at Collect, and
+// naming the same column twice is a frame with two columns of one name, which
+// is an error for the same reason.
+func (lf *LazyFrame[S]) Select(names ...string) *LazyFrame[Dynamic] {
+	if lf.err != nil {
+		return &LazyFrame[Dynamic]{err: lf.err}
+	}
+
+	cols := make([]plan.Projection, len(names))
+	for i, name := range names {
+		cols[i] = plan.Projection{Expr: plan.Col(name)}
+	}
+	return &LazyFrame[Dynamic]{node: plan.Project(lf.node, cols)}
+}
+
+// With adds the result of an expression as a column called name, or replaces
+// the column of that name when there is one.
+//
+//	q := f.Lazy().With("notional", t.Price.MulExpr(t.Qty.AsF64()))
+//
+// It is [Frame.WithExpr] written as a step of a query. The result is a Dynamic
+// frame because the columns are no longer the ones the schema type describes.
+func (lf *LazyFrame[S]) With(name string, e Expr[S]) *LazyFrame[Dynamic] {
+	if lf.err != nil {
+		return &LazyFrame[Dynamic]{err: lf.err}
+	}
+
+	// A projection says which columns it produces, so the ones that are already
+	// there have to be named. That means asking the plan what it has, which is
+	// the schema check the source up to here, and it is where a mistake written
+	// earlier in the query is usually found.
+	s, err := lf.node.Schema()
+	if err != nil {
+		return &LazyFrame[Dynamic]{err: err}
+	}
+
+	cols := make([]plan.Projection, 0, len(s.Fields)+1)
+	replaced := false
+	for _, f := range s.Fields {
+		if f.Name == name {
+			cols = append(cols, plan.Projection{Expr: e.expr(), As: name})
+			replaced = true
+			continue
+		}
+		cols = append(cols, plan.Projection{Expr: plan.Col(f.Name)})
+	}
+	if !replaced {
+		cols = append(cols, plan.Projection{Expr: e.expr(), As: name})
+	}
+	return &LazyFrame[Dynamic]{node: plan.Project(lf.node, cols)}
+}
+
+// Drop leaves out the named columns and keeps the rest in the order they were
+// in. A name that is not there is an error at Collect, since dropping a column
+// that does not exist is a mistake rather than nothing to do.
+func (lf *LazyFrame[S]) Drop(names ...string) *LazyFrame[Dynamic] {
+	if lf.err != nil {
+		return &LazyFrame[Dynamic]{err: lf.err}
+	}
+
+	s, err := lf.node.Schema()
+	if err != nil {
+		return &LazyFrame[Dynamic]{err: err}
+	}
+
+	drop := make(map[string]bool, len(names))
+	for _, name := range names {
+		if _, ok := s.Field(name); !ok {
+			return &LazyFrame[Dynamic]{err: noColumn("Drop", name, s.Names())}
+		}
+		drop[name] = true
+	}
+
+	cols := make([]plan.Projection, 0, len(s.Fields))
+	for _, f := range s.Fields {
+		if !drop[f.Name] {
+			cols = append(cols, plan.Projection{Expr: plan.Col(f.Name)})
+		}
+	}
+	return &LazyFrame[Dynamic]{node: plan.Project(lf.node, cols)}
+}
+
+// Sort puts the rows in order, the first key deciding and each later one
+// breaking the ties of the one before.
+//
+// The sort is stable, for the reasons [Frame.Sort] gives, and a key can be an
+// expression rather than a column name once [LazyFrame.SortByExpr] is used.
+func (lf *LazyFrame[S]) Sort(by ...By) *LazyFrame[S] {
+	if lf.err != nil {
+		return lf
+	}
+
+	keys := make([]plan.SortKey, len(by))
+	for i, b := range by {
+		keys[i] = plan.SortKey{
+			Expr:       plan.Col(b.Name),
+			Descending: b.Descending,
+			NullsFirst: b.NullsFirst,
+		}
+	}
+	return &LazyFrame[S]{node: plan.Sort(lf.node, keys)}
+}
+
+// SortBy puts the rows in ascending order of the named columns, with the nulls
+// at the end.
+func (lf *LazyFrame[S]) SortBy(names ...string) *LazyFrame[S] {
+	return lf.Sort(names2By(names, Order{})...)
+}
+
+// SortDesc puts the rows in descending order of the named columns, with the
+// nulls at the end.
+func (lf *LazyFrame[S]) SortDesc(names ...string) *LazyFrame[S] {
+	return lf.Sort(names2By(names, Order{Descending: true})...)
+}
+
+// SortByExpr puts the rows in order of something that is worked out rather than
+// read, such as the length of a string or the day of a timestamp.
+//
+// The column it sorts by is not in the result. Sorting by an expression and
+// keeping it is [LazyFrame.With] and then a sort by its name.
+func (lf *LazyFrame[S]) SortByExpr(e Expr[S], o Order) *LazyFrame[S] {
+	if lf.err != nil {
+		return lf
+	}
+	return &LazyFrame[S]{node: plan.Sort(lf.node, []plan.SortKey{{
+		Expr:       e.expr(),
+		Descending: o.Descending,
+		NullsFirst: o.NullsFirst,
+	}})}
+}
+
+// Head keeps the first n rows, and every row of a frame with fewer than n of
+// them.
+func (lf *LazyFrame[S]) Head(n int) *LazyFrame[S] { return lf.Slice(0, n) }
+
+// Slice keeps at most n rows, having skipped the first off of them.
+//
+// It is the operator a slice pushdown sinks into a scan, so a head of twenty
+// over a directory of Parquet files reads the first row group and stops rather
+// than reading the lot and throwing it away. Neither number may be negative,
+// since there is no such thing as skipping backwards, and [Frame.Tail] has no
+// lazy spelling because how far back to start is something only the row count
+// knows.
+func (lf *LazyFrame[S]) Slice(off, n int) *LazyFrame[S] {
+	if lf.err != nil {
+		return lf
+	}
+	return &LazyFrame[S]{node: plan.Limit(lf.node, int64(off), int64(n))}
+}
+
+// Collect runs the query and returns what it produced.
+//
+// The plan is checked in full before anything is read, so a mistake anywhere in
+// the query comes back here having cost nothing. What runs after that can still
+// fail on what the data turns out to be, such as a file that is not there or a
+// value that will not fit the type it is being cast to.
+//
+// The context is checked between operators. A query that is given up on stops
+// at the next one rather than at the next row, which is a check that costs
+// nothing to make and is close enough for reads that take seconds.
+//
+// The frame that comes back is checked against the schema type the way [Bind]
+// checks one, so a typed query that produced the wrong columns is an error here
+// rather than a handle that reads the wrong data later.
+func (lf *LazyFrame[S]) Collect(ctx context.Context) (*Frame[S], error) {
+	if lf.err != nil {
+		return nil, lf.err
+	}
+
+	f, err := run(ctx, lf.node)
+	if err != nil {
+		return nil, err
+	}
+	return Bind[S](f)
+}
+
+// String returns the plan the query has been built into, one operator per line
+// with the inputs indented under it.
+//
+// It is not [LazyFrame.Explain], which is a documented format with the row
+// counts and the pushdowns in it and is a later change. This is the plan as it
+// stands, for reading in a test failure and at a prompt.
+func (lf *LazyFrame[S]) String() string {
+	if lf.err != nil {
+		return "invalid query: " + lf.err.Error()
+	}
+	var sb strings.Builder
+	planText(&sb, lf.node, 0)
+	return sb.String()
+}
+
+// planText writes the plan as a tree, the operator first and its inputs
+// indented under it, which is the shape both pandas and Polars print and the
+// shape a reader expects.
+func planText(sb *strings.Builder, n *plan.Node, depth int) {
+	if n == nil {
+		return
+	}
+
+	if depth > 0 {
+		sb.WriteByte('\n')
+	}
+	sb.WriteString(strings.Repeat("  ", depth))
+	sb.WriteString(n.String())
+
+	planText(sb, n.Input(), depth+1)
+	planText(sb, n.Right(), depth+1)
+}

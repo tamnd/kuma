@@ -1,6 +1,7 @@
 package kuma_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -1092,4 +1093,71 @@ func ExampleReadDataset() {
 	// AAPL,100,2024,01
 	// MSFT,50,2024,02
 	// GOOG,25,2025,01
+}
+
+// ExampleFrame_Lazy shows a query written down in one expression and run at the
+// end. What comes back is what the eager methods give, worked out from a plan
+// that could be printed, checked or optimized before any of it ran.
+func ExampleFrame_Lazy() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT", "AAPL", "NVDA").Column(),
+		kuma.NewSeries("price", 189.5, 411.2, 190.1, 121.0).Column(),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	q := f.Lazy().Filter(kuma.F64("price").Gt(150)).SortDesc("price").Head(2)
+	fmt.Println(q)
+
+	out, err := q.Collect(context.Background())
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(out)
+	// Output:
+	// Limit 2
+	//   Sort by price desc
+	//     Filter (price > 150)
+	//       Scan frame
+	// kuma.Frame[kuma.Dynamic] 2 rows x 2 cols
+	//
+	//   symbol |   price
+	//   string | float64
+	// ---------+--------
+	//   MSFT   |   411.2
+	//   AAPL   |   190.1
+}
+
+// ExampleLazyFrame_Schema shows what a query would produce being asked for
+// before it runs, and a query that names a column that is not there being
+// turned away without anything being read.
+func ExampleLazyFrame_Schema() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT").Column(),
+		kuma.NewSeries("price", 189.5, 411.2).Column(),
+		kuma.NewSeries("qty", int64(100), 50).Column(),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	s, err := f.Lazy().Drop("qty").With("half", kuma.F64("price").Div(2)).Schema()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(s)
+
+	_, err = f.Lazy().Filter(kuma.F64("prcie").Gt(150)).Schema()
+	fmt.Println(err)
+	fmt.Println(errors.Is(err, kuma.ErrNoColumn))
+	// Output:
+	// schema<symbol: string not null, price: float64 not null, half: float64>
+	// kuma: column "prcie" not found in Filter
+	//   available: symbol, price, qty
+	// true
 }

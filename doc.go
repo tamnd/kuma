@@ -96,6 +96,31 @@
 // that has to build anything, being the nulls that stand in for a column a
 // frame does not have.
 //
+// # Writing a query and running it later
+//
+// [Frame.Lazy] gives a [LazyFrame], which is a query that has been written
+// down and not worked out yet:
+//
+//	out, err := prices.Lazy().
+//		Filter(kuma.F64("price").Gt(150)).
+//		SortDesc("price").
+//		Head(20).
+//		Collect(ctx)
+//
+// Nothing runs until Collect, and that is the whole point. The query is known
+// before any of it happens, so a column that is not there is an error before
+// the first file is opened, [LazyFrame.Schema] says what the result will hold
+// without reading a row, and the optimizer passes get to see what the last step
+// asked for before deciding what the first one has to read. What comes back is
+// what the same query written out by hand gives, because the same kernels do
+// the work.
+//
+// The steps are Filter, Select, With, Drop, Sort, Head and Slice, a group by
+// and a join are what the engine is being taught next, and asking for one of
+// those is an error that says so rather than a wrong answer. [LazyFrame.Plan]
+// is the plan as it stands, [LazyFrame.Validate] is the check on its own, and
+// printing a query prints the tree of operators it built.
+//
 // # Reading a file
 //
 // [ReadCSV] and [ReadCSVFile] read a comma separated file into a frame, working
@@ -108,9 +133,9 @@
 // and the rest of it live. The frame is [Dynamic], because a file is not a Go
 // type and what is in it was decided by whoever wrote it.
 //
-// This reads the whole file. ScanCSV, which arrives with the lazy frame, reads
-// a chunk at a time and never holds more than one of them, which is what a file
-// larger than memory needs.
+// This reads the whole file. ScanCSV, which is the lazy frame's own way in and
+// is not written yet, reads a chunk at a time and never holds more than one of
+// them, which is what a file larger than memory needs.
 //
 // [Frame.WriteCSV] and [Frame.WriteCSVFile] go the other way, and
 // [csv.WriteOptions] is where the delimiter, the header, what a missing value
