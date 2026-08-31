@@ -168,8 +168,12 @@ func TestNewErrors(t *testing.T) {
 		{"large binary column", func() (*array.Array, error) {
 			return array.New(dtype.LargeBinary, 3, buffer.New(48), nil)
 		}, "store it as a binary"},
-		{"nested column", func() (*array.Array, error) {
+		{"list column", func() (*array.Array, error) {
 			return array.New(dtype.List{Elem: dtype.Int64}, 3, buffer.New(48), nil)
+		}, "use NewList"},
+		{"nested column", func() (*array.Array, error) {
+			return array.New(dtype.Struct{Fields: []dtype.Field{{Name: "a", Type: dtype.Int64}}},
+				3, buffer.New(48), nil)
 		}, "not supported yet"},
 		{"sub byte column", func() (*array.Array, error) {
 			return array.New(nibble{}, 8, buffer.New(8), nil)

@@ -309,7 +309,8 @@ func TestNewBuilderErrors(t *testing.T) {
 		want string
 	}{
 		{"nil dtype", nil, "nil dtype"},
-		{"nested", dtype.List{Elem: dtype.Int64}, "not supported yet"},
+		{"list", dtype.List{Elem: dtype.Int64}, "use NewList"},
+		{"nested", dtype.Struct{Fields: []dtype.Field{{Name: "a", Type: dtype.Int64}}}, "not supported yet"},
 		{"large string", dtype.LargeString, "store it as a string"},
 		{"sub byte", nibble{}, "not a whole number of bytes"},
 	}
