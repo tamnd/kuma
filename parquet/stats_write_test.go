@@ -333,7 +333,7 @@ func TestWriteSkipped(t *testing.T) {
 		},
 		func(b *array.Builder) {
 			for i := range rows {
-				b.AppendString(names[i%len(names)])
+				b.AppendString(people[i%len(people)])
 			}
 		},
 	)

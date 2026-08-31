@@ -31,7 +31,7 @@ import (
 // a fact about the data, and a plan can only say whether one might.
 func (n *Node) Schema() (dtype.Schema, error) {
 	if n == nil {
-		return dtype.Schema{}, errors.New("kuma: a plan with no operator in it")
+		return dtype.Schema{}, errNoPlan
 	}
 
 	switch n.op {
@@ -93,7 +93,33 @@ func (n *Node) scanSchema() (dtype.Schema, error) {
 	// allows it so that a reader can describe one. A frame does not, so a plan
 	// that would build a frame out of it says so here rather than at the end of
 	// the read.
-	return noDuplicates(s.Fields)
+	s, err = noDuplicates(s.Fields)
+	if err != nil {
+		return dtype.Schema{}, err
+	}
+	if n.read == nil {
+		return s, nil
+	}
+
+	// The columns come out in the order the source has them rather than the
+	// order they were named in, since a scan that is asked for two columns of a
+	// file reads the file, and a read goes forwards. A projection is what puts
+	// the columns in an order, and a pushdown that leaves one behind leaves the
+	// order to it.
+	want := make(map[string]bool, len(n.read))
+	for _, name := range n.read {
+		if s.Index(name) < 0 {
+			return dtype.Schema{}, noColumn(n.op.String(), name, s.Names())
+		}
+		want[name] = true
+	}
+	fields := make([]dtype.Field, 0, len(want))
+	for _, f := range s.Fields {
+		if want[f.Name] {
+			fields = append(fields, f)
+		}
+	}
+	return dtype.Schema{Fields: fields, Metadata: s.Metadata}, nil
 }
 
 func (n *Node) filterSchema() (dtype.Schema, error) {

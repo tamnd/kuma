@@ -28,6 +28,14 @@
 // and answers what the query produces. [Node.Validate] is that walk without the
 // answer, for a caller who only wants to know whether the query is right.
 //
+// [Optimize] is the other half of what a plan is for. It runs a list of passes
+// over a plan until none of them finds anything left to do, and each [Pass] is
+// a name and a rewrite that takes a plan and returns a plan. [Passes] is the
+// set that runs over every query. The first of them is [PushProjection], which
+// works out which columns each step of a query actually reads and writes that
+// into the scan at the bottom, so that a query over two columns of a file of
+// forty reads two.
+//
 // The two rules that everything else here depends on are that an expression
 // never changes once it has been built, and that two expressions that say the
 // same thing are the same [Expr]. Together they make finding a repeated

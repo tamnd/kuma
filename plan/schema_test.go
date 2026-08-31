@@ -97,6 +97,11 @@ func TestSchemaOfAPlan(t *testing.T) {
 				field("qty", dtype.Int64, false)),
 		},
 		{
+			"a narrowed scan is the columns it reads, in the order the source has them",
+			plan.ScanOnly(trades{}, []string{"qty", "symbol"}),
+			schema(field("symbol", dtype.String, false), field("qty", dtype.Int64, false)),
+		},
+		{
 			"a filter leaves the columns alone",
 			plan.Filter(scan, plan.Compare(kernel.OpGt, price, plan.Lit(100.0))),
 			schema(field("symbol", dtype.String, false), field("price", dtype.Float64, false),
@@ -222,6 +227,11 @@ func TestSchemaTurnsAway(t *testing.T) {
 		{"a scan with nothing to read", plan.Scan(nil), "nothing to read"},
 		{"a source that cannot say what it holds", plan.Scan(missing{}), "no such file"},
 		{"a source with two columns of one name", plan.Scan(twice{}), `two columns are called "id"`},
+		{
+			"a scan of a column the source does not have",
+			plan.ScanOnly(trades{}, []string{"prcie"}),
+			`column "prcie" not found in Scan`,
+		},
 		{"a filter with no condition", plan.Filter(scan, nil), "no condition"},
 		{
 			"a filter on a column that is not there",

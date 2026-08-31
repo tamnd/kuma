@@ -767,7 +767,7 @@ func BenchmarkWrite(b *testing.B) {
 		},
 		func(bl *array.Builder) {
 			for i := range 1 << 20 {
-				bl.AppendString(names[i%len(names)])
+				bl.AppendString(people[i%len(people)])
 			}
 		},
 	)
@@ -783,6 +783,6 @@ func BenchmarkWrite(b *testing.B) {
 	b.SetBytes(int64(buf.Len()))
 }
 
-// names is what the string column of the benchmark holds, which is a handful of
-// values repeated, since that is what a real column of names looks like.
-var names = []string{"alice", "bob", "carol", "dave", "erin", "frank", "grace"}
+// people is what the string column of the benchmark holds, which is a handful
+// of values repeated, since that is what a real column of names looks like.
+var people = []string{"alice", "bob", "carol", "dave", "erin", "frank", "grace"}
