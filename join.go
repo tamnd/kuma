@@ -80,7 +80,13 @@ func Using(names ...string) []On {
 // It reports an error if a key names a column that is not there, if the two
 // sides have different numbers of keys, if a key column is of a type there is
 // no encoding for, or if the result would have two columns of one name.
-func (f *Frame[S]) Join(other *Frame[Dynamic], on []On, how JoinType) (*Frame[Dynamic], error) {
+//
+// The frame being joined to may have any schema, since a join reads columns by
+// name and neither side's type says anything about the other's. What comes back
+// is Dynamic, because the columns are no longer the ones either schema
+// describes, and [Frame.JoinAs] is the version that takes a struct saying what
+// the result holds.
+func (f *Frame[S]) Join[R any](other *Frame[R], on []On, how JoinType) (*Frame[Dynamic], error) {
 	if other == nil {
 		return nil, fmt.Errorf("kuma: Join with no frame to join to: %w", ErrNoValues)
 	}
@@ -116,14 +122,14 @@ func sharedKeys(on []On, how JoinType) map[string]bool {
 
 // InnerJoin returns the rows of two frames put together on the named columns,
 // keeping only the pairs that matched. It is [Frame.Join] for the common case.
-func (f *Frame[S]) InnerJoin(other *Frame[Dynamic], names ...string) (*Frame[Dynamic], error) {
+func (f *Frame[S]) InnerJoin[R any](other *Frame[R], names ...string) (*Frame[Dynamic], error) {
 	return f.Join(other, Using(names...), InnerJoin)
 }
 
 // LeftJoin returns the rows of two frames put together on the named columns,
 // keeping every left row and filling the right columns with nulls where nothing
 // matched.
-func (f *Frame[S]) LeftJoin(other *Frame[Dynamic], names ...string) (*Frame[Dynamic], error) {
+func (f *Frame[S]) LeftJoin[R any](other *Frame[R], names ...string) (*Frame[Dynamic], error) {
 	return f.Join(other, Using(names...), LeftJoin)
 }
 
@@ -132,12 +138,12 @@ func (f *Frame[S]) LeftJoin(other *Frame[Dynamic], names ...string) (*Frame[Dyna
 // The result has as many rows as the two frames multiplied together, which is
 // why it is a method a caller has to name rather than something a forgotten key
 // falls into.
-func (f *Frame[S]) CrossJoin(other *Frame[Dynamic]) (*Frame[Dynamic], error) {
+func (f *Frame[S]) CrossJoin[R any](other *Frame[R]) (*Frame[Dynamic], error) {
 	return f.Join(other, nil, CrossJoin)
 }
 
 // joinKeys turns the names into the two sides the kernel wants.
-func joinKeys[S any](f *Frame[S], other *Frame[Dynamic], on []On, how JoinType) (
+func joinKeys[S, R any](f *Frame[S], other *Frame[R], on []On, how JoinType) (
 	left, right kernel.Side, err error) {
 	left = kernel.Side{Rows: f.NumRows()}
 	right = kernel.Side{Rows: other.NumRows()}
@@ -177,7 +183,7 @@ func joinKeys[S any](f *Frame[S], other *Frame[Dynamic], on []On, how JoinType) 
 // works out for the engine. The right key columns hold the same values as the
 // left ones wherever the rows matched, so keeping both would be two identical
 // columns and a name clash.
-func joinFrame[S any](f *Frame[S], other *Frame[Dynamic], shared map[string]bool, how JoinType,
+func joinFrame[S, R any](f *Frame[S], other *Frame[R], shared map[string]bool, how JoinType,
 	p kernel.Pairs) (*Frame[Dynamic], error) {
 	cols := make([]Column, 0, f.NumCols()+other.NumCols())
 	for _, c := range f.cols {

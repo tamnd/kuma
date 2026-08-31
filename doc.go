@@ -91,7 +91,7 @@
 // left blank. Output order is the left frame's row order, with the matches of
 // one left row in the right frame's order, and an outer join puts the unmatched
 // right rows at the end. Use [On] when the two sides call the key different
-// things.
+// things, and [Frame.JoinAs] when the result is a struct you have written.
 //
 // # Stacking
 //
@@ -134,6 +134,12 @@
 //	both, err := trades.Lazy().InnerJoin(sectors.Lazy(), "symbol").Collect(ctx)
 //	names, err := trades.Lazy().Select("symbol").Distinct().Collect(ctx)
 //	quotes, err := trades.Lazy().SelectAs[Quote]().Collect(ctx)
+//
+// A step that changes what the columns are gives back a Dynamic query, and each
+// of those three has a version that takes a struct saying what the result holds
+// instead. They are [LazyFrame.SelectAs], [LazyGroupBy.AggAs] and
+// [LazyFrame.JoinAs], and they are what a query written against handles rather
+// than strings uses to stay that way from the first step to the last.
 //
 // That is every operator the plan has today. A union, an explode, a pivot and a
 // window are what it grows next, and asking for one of those before the engine
