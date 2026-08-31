@@ -36,7 +36,7 @@ import (
 // the steps after it were written against something that did not happen.
 //
 // The operators it can build today are a scan, a filter, a projection, a group
-// by, a sort and a limit. A join, a distinct and an explode are the plan's
+// by, a join, a sort and a limit. A distinct and an explode are the plan's
 // already and are what the engine is being taught next, and asking for one is
 // an error saying so rather than a wrong answer.
 //
@@ -272,6 +272,62 @@ func (lg *LazyGroupBy[S]) Agg(aggs ...Aggregation) *LazyFrame[Dynamic] {
 // writes first. It counts rows and not values, so it is [Size] rather than
 // [Count].
 func (lg *LazyGroupBy[S]) Count() *LazyFrame[Dynamic] { return lg.Agg(Size()) }
+
+// Join puts the rows of two queries together where their keys match.
+//
+//	q := trades.Lazy().Join(sectors.Lazy(), kuma.Using("symbol"), kuma.InnerJoin)
+//
+// It is [Frame.Join] written as a step of a query and it keeps every rule that
+// one has: a missing key matches nothing, including another missing key, the
+// result holds one column for a key that is called the same thing on both
+// sides, and the rows come out in the left query's order. [Using] is the way to
+// write the keys when both sides call them the same thing.
+//
+// The other query is collected as part of this one, so a filter on the right
+// side runs before the join sees it and the join is over the rows that survived
+// rather than over the file they came from.
+//
+// The result is a Dynamic query, since the columns are no longer the ones
+// either schema describes. The typed join, which works the result type out from
+// the two sides, is a later change.
+func (lf *LazyFrame[S]) Join(other *LazyFrame[Dynamic], on []On, how JoinType) *LazyFrame[Dynamic] {
+	if lf.err != nil {
+		return &LazyFrame[Dynamic]{err: lf.err}
+	}
+	if other == nil {
+		return &LazyFrame[Dynamic]{err: fmt.Errorf("kuma: Join with no query to join to: %w", ErrNoValues)}
+	}
+	if other.err != nil {
+		return &LazyFrame[Dynamic]{err: other.err}
+	}
+
+	keys := make([]plan.JoinKey, len(on))
+	for i, o := range on {
+		keys[i] = plan.JoinKey{Left: plan.Col(o.Left), Right: plan.Col(o.Right)}
+	}
+	return &LazyFrame[Dynamic]{node: plan.Join(lf.node, other.node, keys, how)}
+}
+
+// InnerJoin keeps only the pairs of rows that matched, on the columns both
+// sides call by the named names. It is [LazyFrame.Join] for the common case.
+func (lf *LazyFrame[S]) InnerJoin(other *LazyFrame[Dynamic], names ...string) *LazyFrame[Dynamic] {
+	return lf.Join(other, Using(names...), InnerJoin)
+}
+
+// LeftJoin keeps every row of this query, with the other query's columns
+// missing where nothing matched.
+func (lf *LazyFrame[S]) LeftJoin(other *LazyFrame[Dynamic], names ...string) *LazyFrame[Dynamic] {
+	return lf.Join(other, Using(names...), LeftJoin)
+}
+
+// CrossJoin pairs every row of this query with every row of the other one.
+//
+// The result has as many rows as the two multiplied together, which is why it
+// is a step a caller has to name rather than something a forgotten key falls
+// into.
+func (lf *LazyFrame[S]) CrossJoin(other *LazyFrame[Dynamic]) *LazyFrame[Dynamic] {
+	return lf.Join(other, nil, CrossJoin)
+}
 
 // Sort puts the rows in order, the first key deciding and each later one
 // breaking the ties of the one before.

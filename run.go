@@ -85,6 +85,8 @@ func runNode(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
 		return runProject(ctx, n)
 	case plan.OpAggregate:
 		return runAggregate(ctx, n)
+	case plan.OpJoin:
+		return runJoin(ctx, n)
 	case plan.OpSort:
 		return runSort(ctx, n)
 	case plan.OpLimit:
@@ -221,6 +223,64 @@ func runAgg(f *Frame[Dynamic], g *kernel.Groups, a plan.Agg) (Column, error) {
 		return Column{}, err
 	}
 	return Column{name: a.Name(), data: out}, nil
+}
+
+// runJoin puts the rows of the two inputs together where their keys match.
+//
+// Both sides are read in full before anything is paired, which is the same
+// thing the eager join does. What the plan buys here is that a filter over
+// either side has already run by the time the join sees it, so the join is over
+// the rows that survived rather than over the file.
+func runJoin(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
+	l, err := runNode(ctx, n.Input())
+	if err != nil {
+		return nil, err
+	}
+	r, err := runNode(ctx, n.Right())
+	if err != nil {
+		return nil, err
+	}
+
+	left, right, err := joinSides(l, r, n.JoinKeys())
+	if err != nil {
+		return nil, err
+	}
+
+	p, err := kernel.Join(left, right, n.JoinType())
+	if err != nil {
+		return nil, err
+	}
+
+	shared := make(map[string]bool, len(n.JoinKeys()))
+	for _, name := range n.SharedKeys() {
+		shared[name] = true
+	}
+	return joinFrame(l, r, shared, n.JoinType(), p)
+}
+
+// joinSides works the keys of a join out over both inputs, so that joining on
+// something that is worked out rather than read, such as a trimmed string,
+// costs one column per side rather than a projection on each of them.
+func joinSides(l, r *Frame[Dynamic], on []plan.JoinKey) (left, right kernel.Side, err error) {
+	left = kernel.Side{Rows: l.rows}
+	right = kernel.Side{Rows: r.rows}
+	if len(on) == 0 {
+		// A cross join reads no keys, and the plan has already turned away
+		// every other join that arrived without any.
+		return left, right, nil
+	}
+
+	left.Keys = make([]*array.Chunked, len(on))
+	right.Keys = make([]*array.Chunked, len(on))
+	for i, k := range on {
+		if left.Keys[i], err = l.evalNode(k.Left, "Join"); err != nil {
+			return left, right, err
+		}
+		if right.Keys[i], err = r.evalNode(k.Right, "Join"); err != nil {
+			return left, right, err
+		}
+	}
+	return left, right, nil
 }
 
 func runSort(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {

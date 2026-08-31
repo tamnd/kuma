@@ -645,6 +645,178 @@ func TestLazyAnAggregationWithNoAnswer(t *testing.T) {
 	}
 }
 
+// TestLazyJoin runs all seven joins both ways, since a join is where a wrong
+// answer is easiest to write and hardest to notice.
+func TestLazyJoin(t *testing.T) {
+	left, right := trades(t), sectors(t)
+
+	for _, how := range []kuma.JoinType{
+		kuma.InnerJoin, kuma.LeftJoin, kuma.RightJoin, kuma.OuterJoin,
+		kuma.SemiJoin, kuma.AntiJoin,
+	} {
+		t.Run(how.String(), func(t *testing.T) {
+			lazy, err := left.Lazy().Join(right.Lazy(), kuma.Using("symbol"), how).Collect(t.Context())
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			eager, err := left.Join(right, kuma.Using("symbol"), how)
+			if err != nil {
+				t.Fatalf("Join: %v", err)
+			}
+			if lazy.String() != eager.String() {
+				t.Errorf("the lazy join gave\n%s\nand the eager one gave\n%s", lazy, eager)
+			}
+		})
+	}
+}
+
+// TestLazyCrossJoin is the seventh, which takes no keys and is the one a
+// forgotten key must not fall into.
+func TestLazyCrossJoin(t *testing.T) {
+	left := trades(t)
+	right, err := kuma.NewFrame(kuma.NewSeries("venue", "NYSE", "NASDAQ").Column())
+	if err != nil {
+		t.Fatalf("NewFrame: %v", err)
+	}
+
+	out, err := left.Lazy().CrossJoin(right.Lazy()).Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if out.NumRows() != left.NumRows()*right.NumRows() {
+		t.Fatalf("%s, want every pair of the four and the two", out)
+	}
+
+	eager, err := left.CrossJoin(right)
+	if err != nil {
+		t.Fatalf("CrossJoin: %v", err)
+	}
+	if out.String() != eager.String() {
+		t.Errorf("the lazy cross join gave\n%s\nand the eager one gave\n%s", out, eager)
+	}
+}
+
+// TestLazyJoinOnDifferentNames is the case most real data is in, where the two
+// sides call the same thing by two names and both columns are kept.
+func TestLazyJoinOnDifferentNames(t *testing.T) {
+	left := trades(t)
+
+	renamed, err := kuma.NewFrame(
+		kuma.NewSeries("ticker", "MSFT", "AAPL").Column(),
+		kuma.NewSeries("sector", "software", "hardware").Column(),
+	)
+	if err != nil {
+		t.Fatalf("NewFrame: %v", err)
+	}
+
+	out, err := left.Lazy().
+		Join(renamed.Lazy(), []kuma.On{{Left: "symbol", Right: "ticker"}}, kuma.InnerJoin).
+		Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if got := out.Names(); !slices.Equal(got, []string{"symbol", "price", "qty", "ticker", "sector"}) {
+		t.Errorf("Names() = %v, want both key columns kept", got)
+	}
+}
+
+// TestLazyJoinRunsTheOtherQueryFirst is what the lazy join is for. The right
+// side is a query rather than a frame, so the rows it contributes are the ones
+// that survived it.
+func TestLazyJoinRunsTheOtherQueryFirst(t *testing.T) {
+	left, right := trades(t), sectors(t)
+
+	out, err := left.Lazy().
+		InnerJoin(right.Lazy().Filter(kuma.Str("sector").Eq("software")), "symbol").
+		Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if got := symbolsOf(t, out); !slices.Equal(got, []string{"MSFT"}) {
+		t.Errorf("symbols = %v, want MSFT, the only one left on the right", got)
+	}
+}
+
+// TestLazyJoinString is the tree of a query with two inputs, which is the first
+// one where the printed plan has a branch in it.
+func TestLazyJoinString(t *testing.T) {
+	q := trades(t).Lazy().LeftJoin(sectors(t).Lazy(), "symbol").Head(2)
+
+	want := strings.Join([]string{
+		"Limit 2",
+		"  Join left on symbol",
+		"    Scan frame",
+		"    Scan frame",
+	}, "\n")
+	if got := q.String(); got != want {
+		t.Errorf("String() =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestLazyJoinMistakes(t *testing.T) {
+	f := trades(t)
+
+	tests := []struct {
+		name string
+		q    *kuma.LazyFrame[kuma.Dynamic]
+		want error
+	}{
+		{
+			name: "no query to join to",
+			q:    f.Lazy().InnerJoin(nil, "symbol"),
+			want: kuma.ErrNoValues,
+		},
+		{
+			name: "a key that is not there on the left",
+			q:    f.Lazy().InnerJoin(sectors(t).Lazy(), "ticker"),
+			want: kuma.ErrNoColumn,
+		},
+		{
+			name: "a key that is not there on the right",
+			q:    f.Lazy().Join(sectors(t).Lazy(), []kuma.On{{Left: "symbol", Right: "ticker"}}, kuma.InnerJoin),
+			want: kuma.ErrNoColumn,
+		},
+		{
+			name: "a column that both sides have",
+			q:    f.Lazy().InnerJoin(f.Lazy(), "symbol"),
+			want: kuma.ErrDuplicateColumn,
+		},
+		{
+			name: "a mistake written on the right",
+			q:    f.Lazy().InnerJoin(sectors(t).Lazy().Drop("sctor"), "symbol"),
+			want: kuma.ErrNoColumn,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.q.Validate(); !errors.Is(err, tt.want) {
+				t.Fatalf("Validate() = %v, want %v", err, tt.want)
+			}
+			if _, err := tt.q.Collect(t.Context()); !errors.Is(err, tt.want) {
+				t.Fatalf("Collect() = %v, want %v", err, tt.want)
+			}
+		})
+	}
+}
+
+// TestLazyJoinWithoutKeys is the pair of mistakes the plan catches on the
+// arguments alone: a join of a kind that needs keys and was given none, and a
+// cross join that was given some.
+func TestLazyJoinWithoutKeys(t *testing.T) {
+	left, right := trades(t), sectors(t)
+
+	err := left.Lazy().InnerJoin(right.Lazy()).Validate()
+	if err == nil || !strings.Contains(err.Error(), "no keys") {
+		t.Errorf("an inner join with no keys = %v, want it turned away", err)
+	}
+
+	err = left.Lazy().Join(right.Lazy(), kuma.Using("symbol"), kuma.CrossJoin).Validate()
+	if err == nil || !strings.Contains(err.Error(), "cross join") {
+		t.Errorf("a cross join with keys = %v, want it turned away", err)
+	}
+}
+
 // BenchmarkLazyCollect is the whole path: the plan is checked, then a filter, a
 // sort and a limit run one after another. What it is here to watch is the cost
 // of the plan on top of the work, which is a schema check per query and a
@@ -690,6 +862,23 @@ func BenchmarkLazyGroupByAndAgg(b *testing.B) {
 			kuma.Sum("qty").As("total"),
 			kuma.Mean("price").As("avg"),
 		).Collect(ctx)
+		if err != nil {
+			b.Fatalf("Collect: %v", err)
+		}
+		frameSink = out
+	}
+}
+
+// BenchmarkLazyInnerJoin is BenchmarkFrameInnerJoin written as a query, over
+// the same two frames and the same key, so the gap between the two is the whole
+// cost of going through the plan.
+func BenchmarkLazyInnerJoin(b *testing.B) {
+	left, right := benchJoinSides(b)
+	ctx := b.Context()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := left.Lazy().InnerJoin(right.Lazy(), "k").Collect(ctx)
 		if err != nil {
 			b.Fatalf("Collect: %v", err)
 		}

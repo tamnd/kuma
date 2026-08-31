@@ -1201,3 +1201,42 @@ func ExampleLazyGroupBy_Agg() {
 	//   MSFT   |    50 |   411.2 |     1
 	//   NVDA   |   400 |     121 |     1
 }
+
+// ExampleLazyFrame_InnerJoin shows a join where the right side is a query of
+// its own. The filter on it runs before the join sees it, so the join is over
+// the rows that survived rather than over everything the frame held.
+func ExampleLazyFrame_InnerJoin() {
+	trades, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT", "NVDA").Column(),
+		kuma.NewSeries("qty", int64(100), 50, 400).Column(),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	sectors, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT", "NVDA").Column(),
+		kuma.NewSeries("sector", "hardware", "software", "hardware").Column(),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	out, err := trades.Lazy().
+		InnerJoin(sectors.Lazy().Filter(kuma.Str("sector").Eq("hardware")), "symbol").
+		Collect(context.Background())
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(out)
+	// Output:
+	// kuma.Frame[kuma.Dynamic] 2 rows x 3 cols
+	//
+	//   symbol |   qty | sector
+	//   string | int64 | string
+	// ---------+-------+---------
+	//   AAPL   |   100 | hardware
+	//   NVDA   |   400 | hardware
+}
