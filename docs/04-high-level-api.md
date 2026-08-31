@@ -123,9 +123,36 @@ changed by predicate pushdown and slice pushdown
 
 The query as written is what the caller built, the query that runs is what the passes turned it into, and the last line names the passes that made the difference. A query no pass changes is printed once with a line saying so, because printing the same plan twice tells nobody anything. The format is documented and kept, since people will parse it whether we want them to or not.
 
-Not in it yet: a row count per operator, which needs statistics on the source, and the row groups a scan skips, which needs the page index. Both go in as the scan learns to report them, under the operator they belong to.
+Not in it yet: an estimated row count per operator, which needs statistics on the source, and the row groups a scan skips, which needs the page index. Both go in as the scan learns to report them, under the operator they belong to.
 
-`lf.Profile(ctx)` runs the query and adds wall time, rows in and out, and bytes read for each operator.
+`lf.Profile(ctx)` runs the query and returns the answer along with the same output with the numbers on.
+
+```go
+out, text, err := lf.Profile(ctx)
+```
+
+```
+the query as written
+  Limit 20
+    Project symbol, price
+      Filter (price > 100)
+        Scan trades/*.parquet
+
+the query that ran
+  Project symbol, price                         10.0us   2 rows
+    Limit 20                                    10.0us   2 rows
+      Filter (price > 100)                      50.0us   3 rows
+        Scan trades/*.parquet [symbol, price]   30.0us   4 rows
+
+changed by slice pushdown and projection pushdown
+ran in 100us
+```
+
+The time on a line is what that operator spent and not what its inputs spent, so the lines add up to the total on the last one and the largest of them is the operator to go and look at. The rows on a line are the rows it produced, which are also the rows the operator above it read, so a line and the line under it are a count in and a count out and neither needs printing twice. A join has two lines under it and reads both.
+
+The answer comes back too rather than being worked out and thrown away, because a query worth timing is usually a query somebody wanted the answer to, and running it twice to have both would be a profile of a run that is not the one the answer came from. The clock is read once per operator, not once per row or once per batch, so a profiled query is the same query and the numbers are a fact about the run rather than an estimate of one.
+
+Bytes read is not in it yet. It needs the sources to report what they read, and it goes on the scan line when they do.
 
 These are shipping features, not debugging tools, and they exist from the milestone where the optimizer lands. Two reasons. Users need to see why a query is slow, and pandas gives them nothing at all here. And internally, every optimization we claim to have made becomes something we can demonstrate in a test by asserting on the plan, rather than something we assert in a commit message.
 

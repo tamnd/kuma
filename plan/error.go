@@ -35,6 +35,11 @@ var (
 // is aimed at whoever has to work that out.
 var errNoPlan = errors.New("kuma: a plan with no operator in it")
 
+// errNoRun is what [Profile] says about a measure with no operator in it. A
+// measure is filled in by the engine as a query runs, so an empty one means a
+// profile was asked for of a query that never ran.
+var errNoRun = errors.New("kuma: a profile of a query that has not run")
+
 // ColumnError says that a column was asked for and is not there.
 //
 // It prints on several lines on purpose. A missing column name is the most
