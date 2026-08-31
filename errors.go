@@ -62,6 +62,27 @@ var (
 // caller to meet two errors that say the same thing.
 type ColumnError = plan.ColumnError
 
+// OperatorError says which operator of a query a mistake is in.
+//
+// A lazy query is built up over several calls and has no line numbers to point
+// at, so an error naming the kind of operator is not enough as soon as there is
+// more than one of that kind. This wraps the error with the query printed under
+// it and a mark against the operator the mistake is in:
+//
+//	kuma: column "sym" not found in Filter
+//	  available: symbol, price, qty
+//	  did you mean: symbol?
+//
+//	in the plan
+//	    Project symbol, price
+//	>     Filter (sym > 100)
+//	        Scan trades/*.parquet
+//
+// It is [plan.OperatorError] under this name, and it wraps whatever the check
+// reported, so errors.Is and errors.As find the same thing through it that they
+// found before.
+type OperatorError = plan.OperatorError
+
 // noColumn returns the error for a name that is not in names.
 func noColumn(op, name string, names []string) error {
 	return &ColumnError{Op: op, Name: name, Have: names}

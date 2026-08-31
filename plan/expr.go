@@ -329,6 +329,11 @@ func (e *Expr) eachStep(yield func(*Expr)) {
 
 // String returns the expression as it would be written, which is what an error
 // about it names and what a column built from it is called.
+//
+// An expression that is not there reads as a question mark rather than being a
+// panic. An operator with a hole in it is a plan the check has something to say
+// about, and the message it gives is one that prints the plan, so the printer
+// has to survive the plans it is most often asked to print.
 func (e *Expr) String() string {
 	var sb strings.Builder
 	e.write(&sb)
@@ -336,6 +341,11 @@ func (e *Expr) String() string {
 }
 
 func (e *Expr) write(sb *strings.Builder) {
+	if e == nil {
+		sb.WriteByte('?')
+		return
+	}
+
 	switch e.kind {
 	case KindColumn:
 		sb.WriteString(e.name)
