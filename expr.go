@@ -60,7 +60,7 @@ func eval(n *plan.Expr, look lookupFunc, hint dtype.DataType) (*array.Chunked, e
 	case plan.KindColumn:
 		return look(n.Name())
 	case plan.KindLiteral:
-		return plan.LiteralColumn(n.Value(), hint)
+		return plan.LiteralColumn(n.Value(), plan.LiteralHint(n, hint))
 	case plan.KindCompare:
 		a, b, err := operands(n, look)
 		if err != nil {

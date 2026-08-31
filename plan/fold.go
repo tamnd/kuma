@@ -44,144 +44,7 @@ import (
 // name down and this pass writes it there. A group key has nowhere, so the keys
 // of an aggregate are left as they were written.
 func Fold(n *Node) (*Node, error) {
-	if n.op == OpScan {
-		return n, nil
-	}
-
-	l, err := Fold(n.l)
-	if err != nil {
-		return nil, err
-	}
-	r := n.r
-	if r != nil {
-		if r, err = Fold(r); err != nil {
-			return nil, err
-		}
-	}
-
-	m := n.withInputs(l, r)
-	switch m.op {
-	case OpProject, OpFilter, OpAggregate, OpSort, OpDistinct:
-	default:
-		// A limit and an explode hold no expression, and the keys of a join are
-		// typed against a schema each rather than one, which is more machinery
-		// than a pair of column names is worth.
-		return m, nil
-	}
-
-	s, err := m.l.Schema()
-	if err != nil {
-		return nil, err
-	}
-	return foldNode(m, s), nil
-}
-
-// foldNode folds the expressions of one operator against the schema of its
-// input, and returns the operator itself when none of them moved.
-func foldNode(n *Node, s dtype.Schema) *Node {
-	switch n.op {
-	case OpProject:
-		cols, moved := n.cols, false
-		for i, p := range n.cols {
-			e := foldExpr(p.Expr, s)
-			if e == p.Expr {
-				continue
-			}
-			if !moved {
-				cols, moved = append([]Projection(nil), n.cols...), true
-			}
-			if cols[i].As == "" {
-				// A projection with no name of its own is called after the
-				// expression it holds, so folding one would rename the column
-				// it produces. Writing down the name it had keeps the fold and
-				// the name both.
-				cols[i].As = p.Expr.String()
-			}
-			cols[i].Expr = e
-		}
-		if !moved {
-			return n
-		}
-		return Project(n.l, cols)
-
-	case OpFilter:
-		pred := foldExpr(n.pred, s)
-		if pred == n.pred {
-			return n
-		}
-		return Filter(n.l, pred)
-
-	case OpAggregate:
-		// The keys are left as they were written. A group key is the one
-		// expression with no name to be given, since the column it produces is
-		// called after it, so there is nowhere to write down the name a fold
-		// would take away.
-		aggs, moved := n.aggs, false
-		for i, a := range n.aggs {
-			if a.Expr == nil {
-				// A size counts rows without reading a column, so it holds no
-				// expression to fold.
-				continue
-			}
-			e := foldExpr(a.Expr, s)
-			if e == a.Expr {
-				continue
-			}
-			if !moved {
-				aggs, moved = append([]Agg(nil), n.aggs...), true
-			}
-			if aggs[i].As == "" {
-				aggs[i].As = a.Name()
-			}
-			aggs[i].Expr = e
-		}
-		if !moved {
-			return n
-		}
-		return Aggregate(n.l, n.by, aggs)
-
-	case OpSort:
-		keys, moved := n.sort, false
-		for i, k := range n.sort {
-			e := foldExpr(k.Expr, s)
-			if e == k.Expr {
-				continue
-			}
-			if !moved {
-				keys, moved = append([]SortKey(nil), n.sort...), true
-			}
-			keys[i].Expr = e
-		}
-		if !moved {
-			return n
-		}
-		return Sort(n.l, keys)
-
-	default:
-		by, moved := foldAll(n.by, s)
-		if !moved {
-			return n
-		}
-		return Distinct(n.l, by)
-	}
-}
-
-// foldAll folds a list of expressions, and says whether any of them moved. It
-// returns the list it was given when none did, since a pass that changed nothing
-// has to hand back what it was given.
-func foldAll(exprs []*Expr, s dtype.Schema) ([]*Expr, bool) {
-	out, moved := exprs, false
-	for i, e := range exprs {
-		f := foldExpr(e, s)
-		if f == e {
-			continue
-		}
-		if !moved {
-			out, moved = append([]*Expr(nil), exprs...), true
-		}
-		out[i] = f
-	}
-	return out, moved
+	return rewriteExprs(n, foldExpr)
 }
 
 // foldExpr folds one expression and keeps the answer only when it is the same
@@ -221,7 +84,7 @@ func folded(e *Expr, s dtype.Schema) (*Expr, *array.Chunked) {
 		return e, nil
 
 	case KindLiteral:
-		c, err := LiteralColumn(e.lit, nil)
+		c, err := LiteralColumn(e.lit, LiteralHint(e, nil))
 		if err != nil {
 			return e, nil
 		}
@@ -386,6 +249,11 @@ func pair(l *Expr, lc *array.Chunked, r *Expr, rc *array.Chunked) (a, b *array.C
 // follows and the reason a literal has no type until it is used.
 func hinted(e *Expr, c *array.Chunked, dt dtype.DataType) (*array.Chunked, error) {
 	if e.kind != KindLiteral {
+		return c, nil
+	}
+	if e.dt != nil {
+		// A coerced literal was built at its own type the first time, so there
+		// is nothing to rebuild and nothing the other side can tell it.
 		return c, nil
 	}
 	return LiteralColumn(e.lit, dt)

@@ -72,12 +72,44 @@ func Col(name string) *Expr {
 // cannot hold is accepted here and refused then, so that the error names the
 // expression it came from.
 func Lit(v any) *Expr {
+	// A binary literal is the one that refers to memory the caller still holds,
+	// and [literal] copies it so that an expression cannot change under whoever
+	// built it, which is what everything else here assumes, and so that what is
+	// in the table stays equal to the key it went in under.
+	return literal(v, nil)
+}
+
+// LitAs is a value written in the query, at the type it is used at.
+//
+// It is what [Coerce] writes in place of the literal a caller wrote, once it
+// knows the column that literal is used with: 100 against a float64 column is a
+// float64, and saying so in the plan means the engine reads the answer rather
+// than working it out again for every batch it runs over. It is also how a plan
+// read back from somewhere else says what it meant, since the type a literal
+// takes is a fact about the query rather than about the value.
+//
+// The type is not checked here, since there is no schema yet to check it
+// against. A type the value cannot take, or one the column it is used with
+// cannot be compared to, is an error when the plan is checked, the same as any
+// other.
+func LitAs(dt dtype.DataType, v any) *Expr {
+	if dt == nil {
+		return Lit(v)
+	}
+	return literal(v, dt)
+}
+
+// literal builds a value written in the query, at type dt when it has one.
+func literal(v any, dt dtype.DataType) *Expr {
 	if b, ok := v.([]byte); ok {
-		// The one literal that refers to memory the caller still holds. It is
-		// copied so that an expression cannot change under whoever built it,
-		// which is what everything else here assumes, and so that what is in
-		// the table stays equal to the key it went in under.
 		v = bytes.Clone(b)
+	}
+
+	name := ""
+	if dt != nil {
+		// A type goes into the key by the name it prints, for the reason [Cast]
+		// gives.
+		name = dt.String()
 	}
 
 	lit, ok := litKey(v)
@@ -85,9 +117,9 @@ func Lit(v any) *Expr {
 		// A value that cannot be looked up again once it is stored. Leaving it
 		// out of the table costs nothing but the sharing, and putting it in
 		// would mean an entry that can never be found and never be removed.
-		return build(key{kind: KindLiteral}, nil, v)
+		return build(key{kind: KindLiteral, dt: name}, dt, v)
 	}
-	return intern(key{kind: KindLiteral, lit: lit}, nil, v)
+	return intern(key{kind: KindLiteral, lit: lit, dt: name}, dt, v)
 }
 
 // Compare is one of the six comparisons between two values.
@@ -147,10 +179,29 @@ func (e *Expr) CompareOp() kernel.CompareOp { return e.cmp }
 // ArithOp is the operator this step applies, for a step of kind [KindArith].
 func (e *Expr) ArithOp() kernel.ArithOp { return e.ari }
 
-// DType is the type this step casts to, for a step of kind [KindCast] and nil
-// for any other. It is not the type the step produces, which depends on the
-// frame and is not known until the plan is bound.
+// DType is the type this step casts to, for a step of kind [KindCast], and the
+// type a value is used at for a literal [Coerce] has been over. It is nil for
+// any other step and for a literal that has not been coerced yet, which is one
+// whose type is still whatever it turns out to be used with.
+//
+// For a cast it is not the type the step produces, which depends on the frame
+// and is not known until the plan is bound.
 func (e *Expr) DType() dtype.DataType { return e.dt }
+
+// LiteralHint returns the type a literal is to be worked out at, which is the
+// type [Coerce] wrote onto it when it has one and dt otherwise.
+//
+// It is what the engine asks before it builds the one value column a literal
+// becomes, and dt is the type the other side of the step turned out to be. A
+// literal the optimizer has been over says what it is, and one it has not takes
+// its type from what it is used with, which is the rule this exists to keep in
+// one place rather than in each of the three walks that need it.
+func LiteralHint(e *Expr, dt dtype.DataType) dtype.DataType {
+	if e.kind == KindLiteral && e.dt != nil {
+		return e.dt
+	}
+	return dt
+}
 
 // Left is the first operand, or nil for a leaf.
 func (e *Expr) Left() *Expr { return e.l }
@@ -289,7 +340,19 @@ func (e *Expr) write(sb *strings.Builder) {
 	case KindColumn:
 		sb.WriteString(e.name)
 	case KindLiteral:
+		if e.dt == nil {
+			sb.WriteString(LiteralText(e.lit))
+			break
+		}
+		// A coerced literal is written the way a cast is, because it is one:
+		// the pass has worked out the type this value is used at and the plan
+		// now says so. A plan that reads the same as the one it came from would
+		// be an explain claiming a change it cannot show.
+		sb.WriteByte('(')
 		sb.WriteString(LiteralText(e.lit))
+		sb.WriteString(" as ")
+		sb.WriteString(e.dt.String())
+		sb.WriteByte(')')
 	case KindCompare:
 		e.infix(sb, e.cmp.String())
 	case KindArith:

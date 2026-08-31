@@ -1807,5 +1807,38 @@ func TestLazyALiteralTheColumnDoesHold(t *testing.T) {
 	}
 }
 
+// TestLazyTheExplainSaysWhatTypeAComparisonHappensAt is the coercion pass from
+// where a caller stands. Writing 2 against an int8 column compares in int8, and
+// the plan that runs now says so instead of leaving it to be worked out again on
+// the way past.
+func TestLazyTheExplainSaysWhatTypeAComparisonHappensAt(t *testing.T) {
+	f, err := kuma.NewFrame(kuma.NewSeries("count", int8(1), 2, 3).Column())
+	if err != nil {
+		t.Fatalf("NewFrame: %v", err)
+	}
+	lf := f.Lazy().Filter(kuma.Dyn("count").Gt(2))
+
+	text, err := lf.Explain()
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+	if !strings.Contains(text, "(count > (2 as int8))") {
+		t.Errorf("the explain is\n%s\nwant the comparison to say it happens in int8", text)
+	}
+	if !strings.Contains(text, "type coercion") {
+		t.Errorf("the explain is\n%s\nwant it to name the pass that changed the plan", text)
+	}
+
+	// The plan says something new and asks the same question, which is the only
+	// promise a pass makes.
+	out, err := lf.Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if got := out.NumRows(); got != 1 {
+		t.Errorf("the filter kept %d rows, want the one row above two", got)
+	}
+}
+
 // planSink keeps the plan the benchmark built from being optimized away.
 var planSink *plan.Node

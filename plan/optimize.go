@@ -115,6 +115,7 @@ func Passes() []Pass {
 		{Name: "slice pushdown", Rewrite: PushSlice},
 		{Name: "common subexpression elimination", Rewrite: HoistCommon},
 		{Name: "projection pushdown", Rewrite: PushProjection},
+		{Name: "type coercion", Rewrite: Coerce},
 	}
 }
 

@@ -39,7 +39,11 @@ func typeOf(e *Expr, s dtype.Schema, hint dtype.DataType) (dtype.DataType, error
 		}
 		return f.Type, nil
 	case KindLiteral:
-		return LiteralTypeAgainst(e.Value(), hint)
+		// A literal [Coerce] has been over says what it is used at, and what it
+		// is used with no longer gets a say. That is the point of the pass: the
+		// type is worked out once and written down, and a plan that says one
+		// thing and runs as another would be worse than one that says nothing.
+		return LiteralTypeAgainst(e.Value(), LiteralHint(e, hint))
 	case KindCompare:
 		a, b, err := operandTypes(e, s)
 		if err != nil {
