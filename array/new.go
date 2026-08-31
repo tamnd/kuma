@@ -177,6 +177,10 @@ func valueBytes(dt dtype.DataType, length int) (int, error) {
 		return 0, errors.New("array: a large_string column is converted at the IPC boundary, store it as a string")
 	case dtype.LargeBinaryKind:
 		return 0, errors.New("array: a large_binary column is converted at the IPC boundary, store it as a binary")
+	case dtype.ListKind:
+		return 0, fmt.Errorf("array: a %s column is offsets into a child, use NewList or NewListBuilder", dt)
+	case dtype.LargeListKind:
+		return 0, errors.New("array: a large_list column is converted at the IPC boundary, store it as a list")
 	case dtype.BoolKind:
 		if length > math.MaxInt-7 {
 			return 0, tooWide(dt, length)

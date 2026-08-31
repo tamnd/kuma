@@ -329,3 +329,62 @@ func BenchmarkChunkedSlice(b *testing.B) {
 		chunkedSink = c.Slice(1000, 60000)
 	}
 }
+
+// benchLists returns a list column of benchLen rows of four elements each,
+// which is the shape a repeated field in a file usually has.
+func benchLists(b *testing.B) *array.Array {
+	b.Helper()
+
+	lb, err := array.NewListBuilder(dtype.List{Elem: dtype.Int64})
+	if err != nil {
+		b.Fatalf("NewListBuilder: %v", err)
+	}
+	lb.Grow(benchLen)
+	lb.Elem().Grow(benchLen * 4)
+
+	for i := range benchLen {
+		lb.Elem().AppendValues([]int64{int64(i), int64(i + 1), int64(i + 2), int64(i + 3)})
+		lb.Append()
+	}
+	return lb.Finish()
+}
+
+// BenchmarkListSum reads every element of every row one row at a time, which is
+// two offsets and a slice per row and no copying at all.
+func BenchmarkListSum(b *testing.B) {
+	a := benchLists(b)
+	b.SetBytes(benchLen * 4 * 8)
+	for b.Loop() {
+		var sum int64
+		for i := range a.Len() {
+			for _, v := range a.List(i).Values[int64]() {
+				sum += v
+			}
+		}
+		intSink = sum
+	}
+}
+
+// BenchmarkListSumChild is the same sum over the child, ignoring where the rows
+// begin, which is what a kernel that does not care about them gets to do. The
+// gap between this and the one above is the whole cost of the row boundaries.
+func BenchmarkListSumChild(b *testing.B) {
+	a := benchLists(b)
+	b.SetBytes(benchLen * 4 * 8)
+	for b.Loop() {
+		var sum int64
+		for _, v := range a.Child().Values[int64]() {
+			sum += v
+		}
+		intSink = sum
+	}
+}
+
+// BenchmarkListBuilder is building the column, which is one offset per row and
+// the elements going into an ordinary builder.
+func BenchmarkListBuilder(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		arraySink = benchLists(b)
+	}
+}

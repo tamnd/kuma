@@ -253,3 +253,35 @@ func ExampleNewDictionary() {
 	// 5 3
 	// south north north south east
 }
+
+// ExampleNewListBuilder shows a column that holds a sequence of values per row,
+// which is what a repeated field in a file is.
+func ExampleNewListBuilder() {
+	b, err := array.NewListBuilder(dtype.List{Elem: dtype.Int64})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	for _, row := range [][]int64{{1, 2, 3}, {}, {4, 5}} {
+		b.Elem().AppendValues(row)
+		b.Append()
+	}
+	b.AppendNull()
+
+	tags := b.Finish()
+	fmt.Println(tags.Len(), tags.NullCount(), tags.Child().Len())
+	for i := range tags.Len() {
+		if tags.IsNull(i) {
+			fmt.Println("null")
+			continue
+		}
+		fmt.Println(tags.List(i).Values[int64]())
+	}
+	// Output:
+	// 4 1 5
+	// [1 2 3]
+	// []
+	// [4 5]
+	// null
+}

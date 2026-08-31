@@ -67,10 +67,22 @@
 // works on one chunk at a time and a chunk is an ordinary Array, so nothing
 // below this line has to know whether the column it came from was chunked.
 //
+// # Lists
+//
+// A list column holds a sequence of values per row rather than one, which is
+// what a repeated field in a Parquet file is and what an explode takes apart.
+// It is stored as one child array holding every element of every row, one row
+// after another, and a run of offsets saying where each row begins. NewList
+// builds one out of those two and ListBuilder is the other way in.
+//
+// Reading one row is two integers and a slice of the child, which shares memory
+// rather than copying, and a kernel that does not care where the rows begin runs
+// over the child as though it were an ordinary column.
+//
 // # What is not here yet
 //
-// The nested types, meaning List, Struct and Map. They are coming and they do
-// not change the shape of what is here.
+// The rest of the nested types, meaning Struct and Map. They are coming and they
+// do not change the shape of what is here.
 //
 // Stability: tier 1, stable.
 package array
@@ -110,6 +122,12 @@ type Array struct {
 	// are the indices into it, and is nil for everything else. It is what says
 	// the values field is holding indices rather than the column itself.
 	dict *Array
+
+	// child holds the elements of a list column, whose own values are the
+	// offsets that say where each row of it begins, and is nil for everything
+	// else. It is what says the values field is holding offsets rather than the
+	// column itself.
+	child *Array
 }
 
 // DType returns the type of the values.
@@ -212,6 +230,10 @@ func (a *Array) Clone() *Array {
 		out.dt = a.dt
 		out.dict = a.dict.Clone()
 		return &out
+	}
+
+	if a.child != nil {
+		return a.cloneList()
 	}
 
 	out := &Array{dt: a.dt, length: a.length, nulls: a.nulls}
