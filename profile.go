@@ -52,7 +52,10 @@ func (r *recorder) around(n *plan.Node, op func() (*Frame[Dynamic], error)) (*Fr
 	if f != nil {
 		rows = int64(f.NumRows())
 	}
-	r.done = append(outer, plan.Measure{Node: n, Took: took, Rows: rows, Input: r.done})
+	inputs := r.done
+
+	outer = append(outer, plan.Measure{Node: n, Took: took, Rows: rows, Input: inputs})
+	r.done = outer
 	return f, err
 }
 
@@ -83,6 +86,8 @@ func withRecorder(ctx context.Context, r *recorder) context.Context {
 // recorderFrom returns the recorder a query is being timed into, or nil when it
 // is not being timed.
 func recorderFrom(ctx context.Context) *recorder {
-	r, _ := ctx.Value(recorderKey{}).(*recorder)
-	return r
+	if r, ok := ctx.Value(recorderKey{}).(*recorder); ok {
+		return r
+	}
+	return nil
 }
