@@ -439,6 +439,11 @@ func FuzzDeltaBytes(f *testing.F) {
 	f.Add([]byte{0x80, 0x01, 0x04, 0x02, 0x00})
 	f.Add(bytes.Repeat([]byte{0xff}, 32))
 
+	// A page of more values than the bounded read below gets to, all of them of
+	// no length, which is what the fuzzer found and what a page of a column of
+	// empty strings is.
+	f.Add(deltaOf(128, 4, make([]int64, 20000)...))
+
 	f.Fuzz(func(t *testing.T, data []byte) {
 		var lengths parquet.DeltaLengthDecoder
 		var prefixed parquet.DeltaByteArrayDecoder
@@ -447,10 +452,14 @@ func FuzzDeltaBytes(f *testing.F) {
 		}
 
 		// A page says how many values it holds and a few bytes can honestly say
-		// there are two billion of them, so this reads a bounded number.
+		// there are two billion of them, since a length of nought takes no bytes
+		// to stand behind. So this reads a bounded number of them.
+		const most = 1 << 14
+		total := lengths.Len()
+
 		values := make([][]byte, 97)
 		read := 0
-		for read < 1<<14 {
+		for read < most {
 			n, err := lengths.Read(values)
 			for _, v := range values[:n] {
 				if len(v) > 0 && !bytes.Contains(data, v) {
@@ -462,14 +471,20 @@ func FuzzDeltaBytes(f *testing.F) {
 				break
 			}
 		}
+		if total > most {
+			// The rest of this writes a page of as many values as the one that
+			// arrived, and a page of two billion is not one to build in a fuzz
+			// test. What the values are has been checked as far as it goes.
+			return
+		}
 
 		// The same values again with a block of noughts in front, which is what
 		// a writer that shares nothing between neighbors produces.
-		if err := prefixed.Reset(append(deltaOf(128, 4, make([]int64, read)...), data...)); err != nil {
-			t.Fatalf("a page of %d values that shares nothing: %v", read, err)
+		if err := prefixed.Reset(append(deltaOf(128, 4, make([]int64, total)...), data...)); err != nil {
+			t.Fatalf("a page of %d values that shares nothing: %v", total, err)
 		}
-		if got := prefixed.Len(); got != read {
-			t.Fatalf("%d values as lengths and %d as shared prefixes", read, got)
+		if got := prefixed.Len(); got != total {
+			t.Fatalf("%d values as lengths and %d as shared prefixes", total, got)
 		}
 	})
 }
