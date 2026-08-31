@@ -1178,3 +1178,42 @@ func BenchmarkLazyFilterOverAJoin(b *testing.B) {
 		frameSink = out
 	}
 }
+
+// BenchmarkEagerAValueWrittenThreeTimes is the query written out by hand. The
+// product of the two columns is worked out three times over every row, because
+// nothing between the expression and the kernels remembers that it has already
+// been worked out once.
+func BenchmarkEagerAValueWrittenThreeTimes(b *testing.B) {
+	f := benchFrame(b)
+	notional := kuma.I64("c00").MulExpr(kuma.I64("c01"))
+	score := notional.AddExpr(notional.MulExpr(notional))
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.WithExpr("score", score)
+		if err != nil {
+			b.Fatalf("WithExpr: %v", err)
+		}
+		frameSink = out
+	}
+}
+
+// BenchmarkLazyAValueWrittenThreeTimes is the same query written down as one,
+// which is what the common subexpression pass is worth. The product goes into a
+// projection underneath, where it is worked out once for the three places that
+// read it.
+func BenchmarkLazyAValueWrittenThreeTimes(b *testing.B) {
+	f := benchFrame(b)
+	notional := kuma.I64("c00").MulExpr(kuma.I64("c01"))
+	score := notional.AddExpr(notional.MulExpr(notional))
+	ctx := b.Context()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.Lazy().With("score", score).Collect(ctx)
+		if err != nil {
+			b.Fatalf("Collect: %v", err)
+		}
+		frameSink = out
+	}
+}

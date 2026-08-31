@@ -35,17 +35,19 @@
 // down as the query allows, so that a row is thrown away before the join that
 // would have paired it and the sort that would have ordered it. [PushSlice]
 // does the same for each limit, which almost nothing lets through, and writes
-// it into the scan when it gets there. Then [PushProjection] works out which
-// columns each step of a query actually reads and writes that into the scan
-// too, so that a query over two columns of a file of forty reads two. The
-// projection pass goes last because a filter or a limit that has moved changes
-// what the steps above it need.
+// it into the scan when it gets there. [HoistCommon] takes a value that an
+// operator writes more than once into a projection underneath, so that it is
+// worked out once for the columns that read it. Then [PushProjection] works out
+// which columns each step of a query actually reads and writes that into the
+// scan too, so that a query over two columns of a file of forty reads two. The
+// projection pass goes last because a filter, a limit or a hoisted value that
+// has moved changes what the steps above it need.
 //
 // The two rules that everything else here depends on are that an expression
 // never changes once it has been built, and that two expressions that say the
 // same thing are the same [Expr]. Together they make finding a repeated
-// subexpression a pointer comparison, which is what the optimizer wants, and
-// they make an expression safe to share between goroutines, which is what an
+// subexpression a pointer comparison, which is what [HoistCommon] is built on,
+// and they make an expression safe to share between goroutines, which is what an
 // engine that runs a plan on more than one core wants. See intern.go for how
 // that is arranged and what it costs.
 //

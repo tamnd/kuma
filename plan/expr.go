@@ -216,31 +216,64 @@ func conjuncts(e *Expr) []*Expr {
 // names in it comes back as itself, since a rebuilt expression that says the
 // same thing is the same expression.
 func substitute(e *Expr, by map[string]*Expr) *Expr {
-	switch e.kind {
-	case KindColumn:
-		if r, ok := by[e.name]; ok {
-			return r
+	return rebuilt(e, func(x *Expr) (*Expr, bool) {
+		if x.kind != KindColumn {
+			return nil, false
 		}
-		return e
-	case KindLiteral:
+		r, ok := by[x.name]
+		return r, ok
+	})
+}
+
+// rebuilt returns the expression with every step that by has an answer for
+// replaced by that answer, and every other step built again out of what its
+// operands came back as.
+//
+// It is the one walk that rewrites an expression, and the two passes that do
+// that want different things from it: one is replacing named columns and the
+// other is replacing whole subexpressions by the column that now holds them.
+// Building the same expression again gives back the expression that was there,
+// since two expressions that say the same thing are one expression, so a walk
+// that replaces nothing costs a walk and no allocation.
+func rebuilt(e *Expr, by func(*Expr) (*Expr, bool)) *Expr {
+	if r, ok := by(e); ok {
+		return r
+	}
+	switch e.kind {
+	case KindColumn, KindLiteral:
 		return e
 	case KindCompare:
-		return Compare(e.cmp, substitute(e.l, by), substitute(e.r, by))
+		return Compare(e.cmp, rebuilt(e.l, by), rebuilt(e.r, by))
 	case KindArith:
-		return Arith(e.ari, substitute(e.l, by), substitute(e.r, by))
+		return Arith(e.ari, rebuilt(e.l, by), rebuilt(e.r, by))
 	case KindAnd:
-		return And(substitute(e.l, by), substitute(e.r, by))
+		return And(rebuilt(e.l, by), rebuilt(e.r, by))
 	case KindOr:
-		return Or(substitute(e.l, by), substitute(e.r, by))
+		return Or(rebuilt(e.l, by), rebuilt(e.r, by))
 	case KindNot:
-		return Not(substitute(e.l, by))
+		return Not(rebuilt(e.l, by))
 	case KindIsNull:
-		return IsNull(substitute(e.l, by))
+		return IsNull(rebuilt(e.l, by))
 	case KindIsNotNull:
-		return IsNotNull(substitute(e.l, by))
+		return IsNotNull(rebuilt(e.l, by))
 	default:
-		return Cast(e.dt, substitute(e.l, by))
+		return Cast(e.dt, rebuilt(e.l, by))
 	}
+}
+
+// eachStep calls yield with every step of an expression, the outermost first
+// and the repeats left in.
+//
+// A step that appears twice is yielded twice, which is the whole point of it:
+// counting how often a value is written is how the pass that works each one out
+// once finds the ones worth working out at all.
+func (e *Expr) eachStep(yield func(*Expr)) {
+	if e == nil {
+		return
+	}
+	yield(e)
+	e.l.eachStep(yield)
+	e.r.eachStep(yield)
 }
 
 // String returns the expression as it would be written, which is what an error
