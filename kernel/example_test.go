@@ -105,6 +105,20 @@ func ExampleTryCast() {
 	// 3 values, 1 of them missing
 }
 
+// Fits is the range check the cast makes, asked about one value before there is
+// a column to put it in. It is what lets a query be turned away for the number
+// somebody typed in it rather than for the row that number was compared
+// against.
+func ExampleFits() {
+	fmt.Println(kernel.Fits(dtype.Int8, 100))
+	fmt.Println(kernel.Fits(dtype.Int8, 300))
+	fmt.Println(kernel.Fits(dtype.Uint32, -1))
+	// Output:
+	// <nil>
+	// kernel: 300 does not fit in int8, which holds -128 to 127
+	// kernel: -1 does not fit in uint32, which holds 0 to 4294967295
+}
+
 // SortIndex works out the order and Take applies it, which is how a sort of a
 // table is one order applied to every column.
 func ExampleSortIndex() {

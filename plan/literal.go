@@ -50,9 +50,10 @@ func LiteralColumn(v any, hint dtype.DataType) (*array.Chunked, error) {
 	if dtype.Equal(want, dt) {
 		return c, nil
 	}
-	// The cast is where a literal that does not fit the column is caught, so
-	// comparing an int8 column against 300 says so rather than comparing
-	// against 44.
+	// The cast is the conversion and nothing more. A value that does not fit
+	// the column has already been turned away by [LiteralTypeAgainst], which is
+	// the check that used to be this one and now happens while the plan is
+	// being built.
 	return kernel.Cast(c, want)
 }
 

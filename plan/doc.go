@@ -20,7 +20,10 @@
 // follows are the kernels' own rather than a second set written out here. That
 // is what lets a query be turned away while it is still being built, with the
 // column that was misspelled and the cast that would fix it, rather than
-// partway through the second file.
+// partway through the second file. The value written in a query is checked as
+// well as its type. An int8 column can be compared against an integer and 300
+// is an integer, so the pair of types is fine and the pair of a type and a
+// value is not, and the second is caught here too.
 //
 // [Node.Schema] is the same thing for a whole plan. Each operator asks its
 // input what it holds, checks its own expressions against that, and says what

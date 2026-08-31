@@ -1759,5 +1759,53 @@ func TestLazyProfileOfAQueryReadingTheSameStepTwice(t *testing.T) {
 	}
 }
 
+// TestLazyALiteralTheColumnCannotHold is where a query with a number in it too
+// big for the column it is written against stops. An int8 column can be
+// compared against an integer and 300 is an integer, so the pair of types is
+// fine and the pair of a type and a value is not, and the difference between
+// the two used to be a query that started and then failed on the first row it
+// read.
+func TestLazyALiteralTheColumnCannotHold(t *testing.T) {
+	f, err := kuma.NewFrame(kuma.NewSeries("count", int8(1), 2, 3).Column())
+	if err != nil {
+		t.Fatalf("NewFrame: %v", err)
+	}
+	q := f.Lazy().Filter(kuma.Dyn("count").Gt(300))
+
+	err = q.Validate()
+	if !errors.Is(err, kuma.ErrWrongType) {
+		t.Fatalf("Validate() = %v, want ErrWrongType", err)
+	}
+	if !strings.Contains(err.Error(), "300 does not fit in int8, which holds -128 to 127") {
+		t.Errorf("the message is %q, want it to say what the column holds", err)
+	}
+
+	// The same answer from everything that reads the plan, since a query that
+	// cannot run is one nothing should be printed about either.
+	if _, err := q.Collect(t.Context()); !errors.Is(err, kuma.ErrWrongType) {
+		t.Errorf("Collect() = %v, want ErrWrongType", err)
+	}
+	if _, err := q.Explain(); !errors.Is(err, kuma.ErrWrongType) {
+		t.Errorf("Explain() = %v, want ErrWrongType", err)
+	}
+}
+
+// TestLazyALiteralTheColumnDoesHold is the other side of it, since a check that
+// turns away the value it should is worth nothing on its own.
+func TestLazyALiteralTheColumnDoesHold(t *testing.T) {
+	f, err := kuma.NewFrame(kuma.NewSeries("count", int8(1), 2, 3).Column())
+	if err != nil {
+		t.Fatalf("NewFrame: %v", err)
+	}
+
+	out, err := f.Lazy().Filter(kuma.Dyn("count").Gt(2)).Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if got := out.NumRows(); got != 1 {
+		t.Errorf("the filter kept %d rows, want the one row above two", got)
+	}
+}
+
 // planSink keeps the plan the benchmark built from being optimized away.
 var planSink *plan.Node

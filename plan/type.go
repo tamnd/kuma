@@ -204,6 +204,13 @@ func TimeLiteralType(dt dtype.DataType) dtype.Timestamp {
 // against 1. What is allowed is [dtype.CoerceLiteral]'s decision. A time is the
 // one value with no type of its own to coerce, so it takes the column's unit
 // and zone, or nanoseconds in UTC when there is no column to take them from.
+//
+// The value is checked as well as the type. An int8 column can be compared
+// against an integer and 300 is an integer, so the pair of types is fine and
+// the pair of a type and a value is not, and the difference between the two
+// used to be a query that started and then failed on the first row it read.
+// [kernel.Fits] is the same check the cast would have made there, made here
+// instead, so a value the column cannot hold is a query that never starts.
 func LiteralTypeAgainst(v any, dt dtype.DataType) (dtype.DataType, error) {
 	lit, ok := LiteralType(v)
 	if !ok {
@@ -219,6 +226,10 @@ func LiteralTypeAgainst(v any, dt dtype.DataType) (dtype.DataType, error) {
 	want, err := dtype.CoerceLiteral(dt, lit)
 	if err != nil {
 		return nil, fmt.Errorf("kuma: %w", err)
+	}
+	if err := kernel.Fits(want, v); err != nil {
+		return nil, fmt.Errorf("kuma: %w, cast the column or write a value it holds: %w",
+			err, ErrWrongType)
 	}
 	return want, nil
 }

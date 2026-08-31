@@ -82,6 +82,12 @@ There are three kinds of failure and they surface at three different times.
 
 A malformed expression is caught when you build it and reported when you collect. A schema or type problem is caught at plan time, before any IO happens, so a query against a file with the wrong columns fails immediately rather than after reading half a terabyte. Runtime problems, meaning IO errors, memory pressure and cancellation, surface during execution wrapped with the operator that was running.
 
+A value written in a query is checked as well as its type. An int8 column can be compared against an integer and 300 is an integer, so the pair of types is fine and the pair of a type and a value is not, and the second is caught at plan time along with the first.
+
+```
+kuma: kernel: 300 does not fit in int8, which holds -128 to 127, cast the column or write a value it holds: wrong type
+```
+
 The quality of the message matters more than almost anything else in the library, because it is the thing users see most often. The bar is this:
 
 ```
