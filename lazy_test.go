@@ -1303,5 +1303,140 @@ func BenchmarkLazyAggAs(b *testing.B) {
 	}
 }
 
+// TestLazyRepeatsAValueAndGetsTheSameAnswer is the end to end check on the
+// common subexpression pass. The pass is the one most able to give a wrong
+// answer that looks right, since a hoisted value comes back under a name it
+// made up for itself and a name that came out wrong would rename a column or
+// hide one. The eager path runs no optimizer, so it is the answer to compare
+// against.
+func TestLazyRepeatsAValueAndGetsTheSameAnswer(t *testing.T) {
+	f := trades(t)
+	notional := kuma.F64("price").MulExpr(kuma.I64("qty").AsF64())
+
+	tests := []struct {
+		name string
+		expr kuma.F64Expr[kuma.Dynamic]
+	}{
+		{
+			name: "a value written twice in one expression",
+			expr: notional.AddExpr(notional),
+		},
+		{
+			name: "and three times",
+			expr: notional.AddExpr(notional.MulExpr(notional)),
+		},
+		{
+			name: "with the repeat inside a repeat",
+			expr: notional.MulExpr(notional).AddExpr(notional.MulExpr(notional)),
+		},
+		{
+			name: "and one written once, which nothing moves",
+			expr: notional.Add(1),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lazy, err := f.Lazy().With("score", tt.expr).Collect(t.Context())
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			eager, err := f.WithExpr("score", tt.expr)
+			if err != nil {
+				t.Fatalf("the eager query: %v", err)
+			}
+			if lazy.String() != eager.String() {
+				t.Errorf("the lazy query gave\n%s\nand the eager one gave\n%s", lazy, eager)
+			}
+		})
+	}
+}
+
+// TestLazyRepeatsAValueOverTheRestOfThePlan puts the repeat where the other
+// passes have something to say about it, since a hoisted projection is a new
+// operator in the middle of a plan the others have already moved things
+// through.
+func TestLazyRepeatsAValueOverTheRestOfThePlan(t *testing.T) {
+	f := trades(t)
+	notional := kuma.F64("price").MulExpr(kuma.I64("qty").AsF64())
+	score := notional.AddExpr(notional.MulExpr(notional))
+	dear := kuma.F64("price").Gt(150)
+
+	tests := []struct {
+		name  string
+		lazy  func() *kuma.LazyFrame[kuma.Dynamic]
+		eager func() (*kuma.Frame[kuma.Dynamic], error)
+	}{
+		{
+			name: "under a filter that sinks past it",
+			lazy: func() *kuma.LazyFrame[kuma.Dynamic] {
+				return f.Lazy().With("score", score).Filter(dear)
+			},
+			eager: func() (*kuma.Frame[kuma.Dynamic], error) {
+				with, err := f.WithExpr("score", score)
+				if err != nil {
+					return nil, err
+				}
+				return with.Filter(dear)
+			},
+		},
+		{
+			name: "under a head that sinks past it too",
+			lazy: func() *kuma.LazyFrame[kuma.Dynamic] {
+				return f.Lazy().With("score", score).Head(2)
+			},
+			eager: func() (*kuma.Frame[kuma.Dynamic], error) {
+				with, err := f.WithExpr("score", score)
+				if err != nil {
+					return nil, err
+				}
+				return with.Slice(0, 2), nil
+			},
+		},
+		{
+			name: "under a select, which is what leaves the scan reading two columns",
+			lazy: func() *kuma.LazyFrame[kuma.Dynamic] {
+				return f.Lazy().With("score", score).Select("score")
+			},
+			eager: func() (*kuma.Frame[kuma.Dynamic], error) {
+				with, err := f.WithExpr("score", score)
+				if err != nil {
+					return nil, err
+				}
+				return with.Select("score")
+			},
+		},
+		{
+			name: "under a sort by the value that was hoisted",
+			lazy: func() *kuma.LazyFrame[kuma.Dynamic] {
+				return f.Lazy().With("score", score).Sort(kuma.Asc("score"))
+			},
+			eager: func() (*kuma.Frame[kuma.Dynamic], error) {
+				with, err := f.WithExpr("score", score)
+				if err != nil {
+					return nil, err
+				}
+				return with.Sort(kuma.Asc("score"))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lazy, err := tt.lazy().Collect(t.Context())
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			eager, err := tt.eager()
+			if err != nil {
+				t.Fatalf("the eager query: %v", err)
+			}
+			if lazy.String() != eager.String() {
+				t.Errorf("the lazy query gave\n%s\nand the eager one gave\n%s", lazy, eager)
+			}
+		})
+	}
+}
+
 // planSink keeps the plan the benchmark built from being optimized away.
 var planSink *plan.Node

@@ -84,6 +84,7 @@ func Passes() []Pass {
 	return []Pass{
 		{Name: "predicate pushdown", Rewrite: PushPredicate},
 		{Name: "slice pushdown", Rewrite: PushSlice},
+		{Name: "common subexpression elimination", Rewrite: HoistCommon},
 		{Name: "projection pushdown", Rewrite: PushProjection},
 	}
 }
