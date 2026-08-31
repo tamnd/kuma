@@ -715,3 +715,121 @@ func oneOf(t *testing.T, dt dtype.DataType) any {
 		return nil
 	}
 }
+
+// TestFits is the range check on its own, which is what a value written in a
+// query is put to before the query runs.
+func TestFits(t *testing.T) {
+	cases := []struct {
+		name string
+		dt   dtype.DataType
+		v    any
+		want string // the part of the message that matters, or empty for a fit
+	}{
+		{"an int64 in an int64", dtype.Int64, int64(300), ""},
+		{"an int64 in an int8", dtype.Int8, int64(300), "300 does not fit in int8, which holds -128 to 127"},
+		{"the top of an int8", dtype.Int8, int64(127), ""},
+		{"one past the top of an int8", dtype.Int8, int64(128), "does not fit in int8"},
+		{"the bottom of an int8", dtype.Int8, int64(-128), ""},
+		{"one past the bottom of an int8", dtype.Int8, int64(-129), "does not fit in int8"},
+		{"a negative in a uint32", dtype.Uint32, -1, "-1 does not fit in uint32, which holds 0 to 4294967295"},
+		{"the top of a uint64", dtype.Uint64, uint64(math.MaxUint64), ""},
+		{"a uint64 above the int64 range", dtype.Int64, uint64(math.MaxInt64) + 1,
+			"9223372036854775808 does not fit in int64"},
+		{"a float in a float32", dtype.Float32, 1.5, ""},
+		{"a float too big for a float32", dtype.Float32, 1e300, "1e+300 does not fit in float32"},
+		{"a float in a float64", dtype.Float64, 1e300, ""},
+		{"an int in a float32", dtype.Float32, int64(1) << 60, ""},
+
+		// Two to the sixty three is the first float past the int64 range and it
+		// is also what float64(math.MaxInt64) rounds to, so a bound written as
+		// the top of the range instead of the power of two past it lets this
+		// one through. The same holds one width up for the unsigned side.
+		{"the largest float that is an int64", dtype.Int64, math.Ldexp(1, 63) - 1024, ""},
+		{"the first float past the int64 range", dtype.Int64, math.Ldexp(1, 63),
+			"9.223372036854776e+18 does not fit in int64"},
+		{"the largest float that is a uint64", dtype.Uint64, math.Ldexp(1, 64) - 2048, ""},
+		{"the first float past the uint64 range", dtype.Uint64, math.Ldexp(1, 64),
+			"does not fit in uint64"},
+
+		// The pairs this check has no answer for, which are the ones another
+		// layer has already decided about.
+		{"a string in a string", dtype.String, "AAPL", ""},
+		{"a string in an int8", dtype.Int8, "300", ""},
+		{"nothing in an int8", dtype.Int8, nil, ""},
+		{"a bool in a bool", dtype.Bool, true, ""},
+		{"an int64 in a timestamp", dtype.Timestamp{Unit: dtype.Second}, int64(1), ""},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := kernel.Fits(c.dt, c.v)
+			if c.want == "" {
+				if err != nil {
+					t.Fatalf("Fits(%s, %v) = %v, want it to fit", c.dt, c.v, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Fits(%s, %v) = nil, want %q", c.dt, c.v, c.want)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("Fits(%s, %v) = %v, want it to say %q", c.dt, c.v, err, c.want)
+			}
+		})
+	}
+}
+
+// TestFitsAgreesWithCast is the reason the check is here rather than in the
+// package that asks it. A value the check accepts has to be one the cast
+// accepts, or a query that passes at plan time fails on its first row, which is
+// the whole thing this is meant to stop. The two share the arithmetic, and this
+// is what says they still do.
+func TestFitsAgreesWithCast(t *testing.T) {
+	types := []dtype.DataType{
+		dtype.Int8, dtype.Int16, dtype.Int32, dtype.Int64,
+		dtype.Uint8, dtype.Uint16, dtype.Uint32, dtype.Uint64,
+		dtype.Float32, dtype.Float64,
+	}
+	values := []any{
+		int64(0), int64(1), int64(-1), int64(127), int64(128), int64(-128), int64(-129),
+		int64(255), int64(256), int64(65535), int64(65536), int64(math.MaxInt32),
+		int64(math.MinInt32), int64(math.MaxInt64), int64(math.MinInt64),
+		uint64(math.MaxUint64), uint64(math.MaxInt64) + 1,
+		1.0, -1.0, 1e300, -1e300, float32(1.5),
+		math.Ldexp(1, 63), math.Ldexp(1, 63) - 1024,
+		math.Ldexp(1, 64), math.Ldexp(1, 64) - 2048,
+	}
+
+	for _, dt := range types {
+		for _, v := range values {
+			from := naturalType(t, v)
+			if !dtype.CanCast(from, dt) {
+				continue
+			}
+			_, err := kernel.Cast(col(t, from, []any{v}), dt)
+			if fits := kernel.Fits(dt, v); (fits == nil) != (err == nil) {
+				t.Errorf("Fits(%s, %v) = %v and the cast said %v, they have to agree",
+					dt, v, fits, err)
+			}
+		}
+	}
+}
+
+// naturalType is the type a value has on its own, which is the column the cast
+// half of the test above has to start from.
+func naturalType(t *testing.T, v any) dtype.DataType {
+	t.Helper()
+	switch v.(type) {
+	case int64:
+		return dtype.Int64
+	case uint64:
+		return dtype.Uint64
+	case float32:
+		return dtype.Float32
+	case float64:
+		return dtype.Float64
+	default:
+		t.Fatalf("no natural type for a %T", v)
+		return nil
+	}
+}

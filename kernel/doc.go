@@ -36,8 +36,10 @@
 // encodings that hold more than one thing per row cost about what the values
 // underneath them cost.
 //
-// [Cast], which turns the values of a column into another type, and [SortIndex],
-// which works out the order rows go in and leaves the moving to Take.
+// [Cast], which turns the values of a column into another type, [Fits], which
+// is the range check the cast makes asked about one value before there is a
+// column to put it in, and [SortIndex], which works out the order rows go in
+// and leaves the moving to Take.
 //
 // [Compare], which is the six comparisons, [Arith], which is the five
 // arithmetic operators, and [And], [Or] and [Not], which are the three valued

@@ -92,6 +92,46 @@ func TestALiteralTakesTheColumnType(t *testing.T) {
 	}
 }
 
+// TestALiteralHasToFitTheColumnAndNotJustItsType is the other half of the rule
+// above. Taking the column's type is what makes the comparison cheap, and it is
+// also what a value outside that type falls foul of, so the value is checked
+// here rather than on the first row of the first file.
+func TestALiteralHasToFitTheColumnAndNotJustItsType(t *testing.T) {
+	cases := []struct {
+		name string
+		expr *plan.Expr
+		fits bool
+	}{
+		{"the top of the column type", plan.Compare(kernel.OpGt, small, plan.Lit(4294967295)), true},
+		{"one past the top", plan.Compare(kernel.OpGt, small, plan.Lit(4294967296)), false},
+		{"below the bottom", plan.Compare(kernel.OpGt, small, plan.Lit(-1)), false},
+		{"the literal on the left", plan.Compare(kernel.OpLt, plan.Lit(-1), small), false},
+		{"under arithmetic", plan.Arith(kernel.OpAdd, small, plan.Lit(-1)), false},
+		{"a number the int64 column holds", plan.Compare(kernel.OpGt, qty, plan.Lit(-1)), true},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := plan.TypeOf(c.expr, typed)
+			if c.fits {
+				if err != nil {
+					t.Fatalf("%s: %v", c.expr, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("%s was checked and passed", c.expr)
+			}
+			if !errors.Is(err, plan.ErrWrongType) {
+				t.Errorf("the error is %v, want one errors.Is finds ErrWrongType through", err)
+			}
+			if !strings.Contains(err.Error(), "cast the column or write a value it holds") {
+				t.Errorf("the error is %q, want it to say what to do about it", err)
+			}
+		})
+	}
+}
+
 // TestATimeLiteralTakesTheColumnUnit is the same rule for a time, which is the
 // one value with no column type of its own to coerce.
 func TestATimeLiteralTakesTheColumnUnit(t *testing.T) {
@@ -149,6 +189,11 @@ func TestTypeOfRefuses(t *testing.T) {
 			"a fractional literal against an integer column",
 			plan.Compare(kernel.OpGt, qty, plan.Lit(1.5)),
 			"cannot use a float64 literal with a int64 column",
+		},
+		{
+			"a value the column cannot hold",
+			plan.Compare(kernel.OpGt, small, plan.Lit(-1)),
+			"-1 does not fit in uint32, which holds 0 to 4294967295",
 		},
 		{
 			"a filter on something that is not a condition",

@@ -869,3 +869,31 @@ func mustCompare(b *testing.B, x, y *array.Chunked) *array.Chunked {
 	}
 	return out
 }
+
+// BenchmarkFits is what asking whether a value fits a column costs. A query
+// pays it once for each value written in it, against every row it goes on to
+// read, so what matters is that it is not on the way to being free.
+func BenchmarkFits(b *testing.B) {
+	cases := []struct {
+		name string
+		dt   dtype.DataType
+		v    any
+	}{
+		{"an integer that fits", dtype.Int8, 100},
+		{"an integer that does not", dtype.Int8, 300},
+		{"a float against a float column", dtype.Float64, 100.0},
+		{"text, which has no range", dtype.String, "AAPL"},
+	}
+
+	for _, c := range cases {
+		b.Run(c.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				errSink = kernel.Fits(c.dt, c.v)
+			}
+		})
+	}
+}
+
+// errSink keeps the benchmark above from being optimized away.
+var errSink error
