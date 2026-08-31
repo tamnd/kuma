@@ -12,6 +12,11 @@ import (
 // read: which name it offers when the one they typed is not there. The rule is
 // that a suggestion has to be close, since a wrong suggestion is worse than
 // none at all.
+//
+// Two letters the wrong way round count as one edit rather than two, which is
+// what lets a short name find its match without the limit being loosened for
+// everything else. The pair has to be next to each other, so "irpce" is still
+// two edits from "price" and still gets nothing.
 func TestColumnErrorSuggestions(t *testing.T) {
 	have := []string{"symbol", "price", "qty", "side", "ts"}
 
@@ -26,10 +31,15 @@ func TestColumnErrorSuggestions(t *testing.T) {
 		{"SYMBOL", "symbol"},
 		{"Price", "price"},
 		{"prices", "price"},
+		{"prcie", "price"},
 		{"qt", "qty"},
+		{"qyt", "qty"},
 		{"sid", "side"},
+		{"sdie", "side"},
 		{"t", "ts"},
+		{"st", "ts"},
 		{"volume", ""},
+		{"irpce", ""},
 		{"", ""},
 	}
 
@@ -110,3 +120,28 @@ func TestErrorsAreDistinct(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkColumnErrorMessage is the cost of building the message for a name
+// that is not there, on a frame wide enough that the search for something to
+// suggest is most of the work. Every name gets an edit distance worked out
+// against the one that was typed, so the cost is per column of the frame rather
+// than per query.
+//
+// It is an error path and it runs once for a query that failed, so what this is
+// here for is to notice a change that turns once into once per row.
+func BenchmarkColumnErrorMessage(b *testing.B) {
+	have := []string{
+		"symbol", "price", "qty", "side", "ts", "exchange", "venue", "seq",
+		"bid", "ask", "bid_size", "ask_size", "trade_id", "session", "flags",
+		"currency",
+	}
+	err := &kuma.ColumnError{Op: "Filter", Name: "prcie", Have: have}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		msgSink = err.Error()
+	}
+}
+
+// msgSink keeps the benchmark above from being optimized away.
+var msgSink string

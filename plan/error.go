@@ -97,10 +97,17 @@ func noColumn(op, name string, names []string) error {
 //
 // Close enough means one of three things. The same name in another case, which
 // is the most common miss of all. An edit distance of at most a third of the
-// length of the name and at most three whatever the length, which covers a
-// transposition, a missing letter and an extra one. Or the name being the start
-// of one that is there, which is what makes "sym" suggest "symbol" even though
-// three edits apart is nowhere near close for a name that short.
+// length of the name and at most three whatever the length, where two letters
+// the wrong way round count as one edit rather than two. Or the name being the
+// start of one that is there, which is what makes "sym" suggest "symbol" even
+// though three edits apart is nowhere near close for a name that short.
+//
+// Counting a swap as one edit is what makes "prcie" suggest "price". Two
+// letters the wrong way round is the typo people make most often after getting
+// the case wrong, and a plain edit distance charges two substitutions for it,
+// which is over the limit for every name shorter than six letters. Raising the
+// limit to let it in would have let in every unrelated name that happens to be
+// two edits away as well.
 //
 // Everything else gets no suggestion. A wrong suggestion is worse than none,
 // because it sends the reader looking at the wrong column, so "volume" does not
@@ -134,17 +141,27 @@ func nearest(name string, have []string) (string, bool) {
 	return prefix, prefix != ""
 }
 
-// distance returns the Levenshtein distance between a and b, giving up and
-// returning limit as soon as it is clear the answer is at least that, since the
-// caller only cares about short distances.
+// distance returns the edit distance between a and b, counting two letters the
+// wrong way round as one edit rather than as the two substitutions a plain
+// Levenshtein distance charges for it. It gives up and returns limit as soon as
+// it is clear the answer is at least that, since the caller only cares about
+// short distances.
+//
+// The swap is counted the restricted way, meaning a pair of letters is swapped
+// at most once and a stretch of text is never edited and then swapped again.
+// That is the cheaper of the two ways to count it and it gives the same answer
+// for anything anyone types by mistake, since the two only part company on
+// strings mangled in several overlapping ways.
 func distance(a, b string, limit int) int {
 	if abs(len(a)-len(b)) > limit {
 		return limit
 	}
 
-	// One row of the matrix, holding the distance from the prefix of a to the
+	// Three rows of the matrix, holding the distance from a prefix of a to a
 	// prefix of b. The full matrix is not needed because each cell depends only
-	// on the row above and the cell to its left.
+	// on the row above, the cell to its left, and for the swap the row above
+	// that one.
+	prev2 := make([]int, len(b)+1)
 	prev := make([]int, len(b)+1)
 	curr := make([]int, len(b)+1)
 	for j := range prev {
@@ -160,12 +177,20 @@ func distance(a, b string, limit int) int {
 				cost = 0
 			}
 			curr[j] = min(prev[j]+1, curr[j-1]+1, prev[j-1]+cost)
+			if i > 1 && j > 1 && a[i-1] == b[j-2] && a[i-2] == b[j-1] {
+				curr[j] = min(curr[j], prev2[j-2]+1)
+			}
 			row = min(row, curr[j])
 		}
+		// A row that is all at the limit means nothing below it can be under the
+		// limit either. The smallest number in a row never falls as the rows go
+		// down and never climbs by more than one, so the row two above the next
+		// one is at least one short of the limit, and the swap, which is the only
+		// thing reaching back that far, adds one to it.
 		if row >= limit {
 			return limit
 		}
-		prev, curr = curr, prev
+		prev2, prev, curr = prev, curr, prev2
 	}
 	return min(prev[len(b)], limit)
 }
