@@ -47,6 +47,10 @@
 // [NUnique]. An aggregation over a whole column is an aggregation over
 // [OneGroup], so there is one of each rather than two.
 //
+// [DistinctIndex], which is the same division of the rows with the answer a
+// drop duplicates wants taken out of it, which is the first row of each set of
+// equal ones. Like a sort it returns positions and leaves the moving to Take.
+//
 // Beside the kernels that can turn a column away are the rules that say the
 // same thing about a type on its own: [ArithType], [CompareType],
 // [IsCondition], [HasOrder], [GroupKeyType], [SumType], [MeanType],

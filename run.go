@@ -91,10 +91,12 @@ func runNode(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
 		return runSort(ctx, n)
 	case plan.OpLimit:
 		return runLimit(ctx, n)
+	case plan.OpDistinct:
+		return runDistinct(ctx, n)
 	default:
-		// The plan has operators the engine has not caught up with yet. Saying
-		// so is better than a wrong answer, and the ones that are missing are
-		// named in the doc comment of the lazy frame.
+		// Every operator the plan has is above. The next one the plan grows
+		// arrives here until the engine is taught it, and saying so is better
+		// than a wrong answer.
 		return nil, fmt.Errorf("kuma: %s is not something the engine runs yet: %w", n.Op(), ErrNotSupported)
 	}
 }
@@ -164,7 +166,7 @@ func runAggregate(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
 			ErrNotSupported)
 	}
 
-	keys, err := groupKeys(f, by)
+	keys, err := evalKeys(f, by, "GroupBy")
 	if err != nil {
 		return nil, err
 	}
@@ -191,13 +193,14 @@ func runAggregate(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
 	return NewFrame(cols...)
 }
 
-// groupKeys works the keys of a group by out as columns of their own, so that
-// grouping by something that is not a column, such as the month of a date,
-// costs one column rather than a projection the caller has to write.
-func groupKeys(f *Frame[Dynamic], by []*plan.Expr) ([]*array.Chunked, error) {
+// evalKeys works the keys of a group by or a distinct out as columns of their
+// own, so that grouping by something that is not a column, such as the month of
+// a date, costs one column rather than a projection the caller has to write.
+// The op is the step to name in an error.
+func evalKeys(f *Frame[Dynamic], by []*plan.Expr, op string) ([]*array.Chunked, error) {
 	keys := make([]*array.Chunked, len(by))
 	for i, e := range by {
-		data, err := f.evalNode(e, "GroupBy")
+		data, err := f.evalNode(e, op)
 		if err != nil {
 			return nil, err
 		}
@@ -330,6 +333,31 @@ func runLimit(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
 		end = off + int(n.Limit())
 	}
 	return f.Slice(off, end), nil
+}
+
+// runDistinct keeps the first row of each set of rows the keys agree on.
+//
+// It is the eager [Frame.Distinct] over keys that are worked out rather than
+// read, so a distinct by the day of a timestamp is a step of a query rather than
+// a column somebody has to add and then drop again.
+func runDistinct(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
+	f, err := runNode(ctx, n.Input())
+	if err != nil {
+		return nil, err
+	}
+
+	// With nothing to compare by, every column is compared, which is what the
+	// eager Distinct does with no names and what a select distinct means.
+	by := n.By()
+	if len(by) == 0 {
+		return distinct(f, columnData(f.cols))
+	}
+
+	keys, err := evalKeys(f, by, "Distinct")
+	if err != nil {
+		return nil, err
+	}
+	return distinct(f, keys)
 }
 
 // evalNode works an expression out over the frame, and checks that what came

@@ -36,9 +36,9 @@ import (
 // the steps after it were written against something that did not happen.
 //
 // The operators it can build today are a scan, a filter, a projection, a group
-// by, a join, a sort and a limit. A distinct and an explode are the plan's
-// already and are what the engine is being taught next, and asking for one is
-// an error saying so rather than a wrong answer.
+// by, a join, a distinct, a sort and a limit, which is every operator the plan
+// has and every one the engine runs. A union, an explode, a pivot and a window
+// are the ones the three of them grow next, together.
 //
 // The zero LazyFrame is not usable. Use [Frame.Lazy].
 type LazyFrame[S any] struct {
@@ -327,6 +327,33 @@ func (lf *LazyFrame[S]) LeftJoin(other *LazyFrame[Dynamic], names ...string) *La
 // into.
 func (lf *LazyFrame[S]) CrossJoin(other *LazyFrame[Dynamic]) *LazyFrame[Dynamic] {
 	return lf.Join(other, nil, CrossJoin)
+}
+
+// Distinct keeps the first row of each set of rows that agree on the named
+// columns, and with no names it compares every column.
+//
+//	q := f.Lazy().Select("symbol", "sector").Distinct()
+//
+// It is [Frame.Distinct] written as a step of a query, so the rows come out in
+// the order they were already in and the one kept out of a set of equal rows is
+// the first of them. A name that is not there is an error at
+// [LazyFrame.Collect].
+//
+// Naming the columns is worth doing when there are any that make a row unique,
+// since it is what a projection pushdown will have to read. Selecting the
+// columns first and then asking for the distinct rows of what is left, which is
+// the query above, is the other way to say the same thing and the one that says
+// what the answer holds as well.
+func (lf *LazyFrame[S]) Distinct(names ...string) *LazyFrame[S] {
+	if lf.err != nil {
+		return lf
+	}
+
+	by := make([]*plan.Expr, len(names))
+	for i, name := range names {
+		by[i] = plan.Col(name)
+	}
+	return &LazyFrame[S]{node: plan.Distinct(lf.node, by)}
 }
 
 // Sort puts the rows in order, the first key deciding and each later one

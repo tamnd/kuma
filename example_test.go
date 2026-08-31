@@ -1240,3 +1240,82 @@ func ExampleLazyFrame_InnerJoin() {
 	//   AAPL   |   100 | hardware
 	//   NVDA   |   400 | hardware
 }
+
+// ExampleFrame_Distinct shows a drop duplicates over one column, which keeps
+// the first row of each symbol and the values that row carried.
+func ExampleFrame_Distinct() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT", "AAPL", "MSFT").Column(),
+		kuma.NewSeries("venue", "NYSE", "NASDAQ", "NASDAQ", "NASDAQ").Column(),
+		kuma.NewSeries("qty", int64(100), 50, 25, 400).Column(),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	once, err := f.Distinct("symbol")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(once)
+
+	pairs, err := f.Distinct("symbol", "venue")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(pairs)
+	// Output:
+	// kuma.Frame[kuma.Dynamic] 2 rows x 3 cols
+	//
+	//   symbol | venue  |   qty
+	//   string | string | int64
+	// ---------+--------+------
+	//   AAPL   | NYSE   |   100
+	//   MSFT   | NASDAQ |    50
+	// kuma.Frame[kuma.Dynamic] 3 rows x 3 cols
+	//
+	//   symbol | venue  |   qty
+	//   string | string | int64
+	// ---------+--------+------
+	//   AAPL   | NYSE   |   100
+	//   MSFT   | NASDAQ |    50
+	//   AAPL   | NASDAQ |    25
+}
+
+// ExampleLazyFrame_Distinct shows the same thing written as a query, over the
+// columns that were selected rather than over all of them.
+func ExampleLazyFrame_Distinct() {
+	f, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT", "AAPL", "NVDA").Column(),
+		kuma.NewSeries("qty", int64(100), 50, 25, 400).Column(),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	q := f.Lazy().Select("symbol").Distinct()
+	fmt.Println(q)
+
+	out, err := q.Collect(context.Background())
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(out)
+	// Output:
+	// Distinct
+	//   Project symbol
+	//     Scan frame
+	// kuma.Frame[kuma.Dynamic] 3 rows x 1 cols
+	//
+	//   symbol
+	//   string
+	// --------
+	//   AAPL
+	//   MSFT
+	//   NVDA
+}

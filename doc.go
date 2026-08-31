@@ -66,6 +66,14 @@
 // the groups come out in the order they first appear, which is deterministic
 // without being sorted. Sort the result when the order matters.
 //
+// [Frame.Distinct] is the same division of the rows with only the first row of
+// each set kept, which is what pandas calls drop_duplicates:
+//
+//	once, err := prices.Distinct("symbol", "day")
+//
+// With no names it compares every column, and naming the ones that make a row
+// unique is what makes it read three columns rather than forty.
+//
 // # Joining
 //
 // [Frame.Join] puts two frames together on the columns they share, in all seven
@@ -115,14 +123,16 @@
 // what the same query written out by hand gives, because the same kernels do
 // the work.
 //
-// The steps are Filter, Select, With, Drop, GroupBy, Join, Sort, Head and
-// Slice, and a group by and a join are written the way the eager ones are:
+// The steps are Filter, Select, With, Drop, GroupBy, Join, Distinct, Sort, Head
+// and Slice, and each of them is written the way the eager one is:
 //
 //	totals, err := prices.Lazy().GroupBy("symbol").Agg(kuma.Sum("qty")).Collect(ctx)
 //	both, err := trades.Lazy().InnerJoin(sectors.Lazy(), "symbol").Collect(ctx)
+//	names, err := trades.Lazy().Select("symbol").Distinct().Collect(ctx)
 //
-// A distinct and an explode are what the engine is being taught next, and
-// asking for one of those is an error that says so rather than a wrong answer.
+// That is every operator the plan has today. A union, an explode, a pivot and a
+// window are what it grows next, and asking for one of those before the engine
+// has it is an error that says so rather than a wrong answer.
 // [LazyFrame.Plan] is the plan as it stands, [LazyFrame.Validate] is the check
 // on its own, and printing a query prints the tree of operators it built.
 //

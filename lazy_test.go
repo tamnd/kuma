@@ -817,6 +817,133 @@ func TestLazyJoinWithoutKeys(t *testing.T) {
 	}
 }
 
+// TestLazyDistinct asks for the distinct rows both ways, since the two share a
+// kernel and the point of the test is that they share a rule as well.
+func TestLazyDistinct(t *testing.T) {
+	f := repeats(t)
+
+	for _, names := range [][]string{nil, {"symbol"}, {"symbol", "day"}, {"day"}} {
+		t.Run(strings.Join(append([]string{"by"}, names...), " "), func(t *testing.T) {
+			lazy, err := f.Lazy().Distinct(names...).Collect(t.Context())
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			eager, err := f.Distinct(names...)
+			if err != nil {
+				t.Fatalf("Distinct: %v", err)
+			}
+			if lazy.String() != eager.String() {
+				t.Errorf("the lazy distinct gave\n%s\nand the eager one gave\n%s", lazy, eager)
+			}
+		})
+	}
+}
+
+// TestLazyDistinctIsAStepLikeAnyOther is a distinct in the middle of a query
+// rather than at the end of one, which is where the rows it takes out are worth
+// the most: everything after it works on fewer of them.
+func TestLazyDistinctIsAStepLikeAnyOther(t *testing.T) {
+	out, err := repeats(t).Lazy().
+		Distinct("symbol", "day").
+		Filter(kuma.Str("symbol").Eq("AAPL")).
+		SortDesc("day").
+		Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if want := []string{"AAPL 2 100", "AAPL 1 100"}; !slices.Equal(rows(t, out), want) {
+		t.Errorf("the query gave %v, want %v", rows(t, out), want)
+	}
+}
+
+// TestLazyDistinctKeepsTheSchemaType is what makes a distinct a step a typed
+// query can take without giving up its handles, since it changes no columns.
+func TestLazyDistinctKeepsTheSchemaType(t *testing.T) {
+	out, err := typedTrades(t).Lazy().Distinct("symbol").Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if got := symbolsOf(t, out); !slices.Equal(got, []string{"AAPL", "MSFT", "NVDA"}) {
+		t.Errorf("symbols = %v, want each of them once", got)
+	}
+}
+
+// TestLazyDistinctSchema is the columns of the result worked out without
+// reading anything, which a distinct leaves exactly as they arrived.
+func TestLazyDistinctSchema(t *testing.T) {
+	q := repeats(t).Lazy().Distinct("symbol")
+
+	s, err := q.Schema()
+	if err != nil {
+		t.Fatalf("Schema: %v", err)
+	}
+	if want := []string{"symbol", "day", "qty"}; !slices.Equal(s.Names(), want) {
+		t.Errorf("Schema() = %v, want %v", s.Names(), want)
+	}
+}
+
+// TestLazyDistinctString is the operator as an explain shows it, with the keys
+// after a by and nothing at all when every column is compared.
+func TestLazyDistinctString(t *testing.T) {
+	f := repeats(t)
+
+	want := strings.Join([]string{"Distinct by symbol, day", "  Scan frame"}, "\n")
+	if got := f.Lazy().Distinct("symbol", "day").String(); got != want {
+		t.Errorf("String() =\n%s\nwant\n%s", got, want)
+	}
+
+	want = strings.Join([]string{"Distinct", "  Scan frame"}, "\n")
+	if got := f.Lazy().Distinct().String(); got != want {
+		t.Errorf("String() =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestLazyDistinctOfNoColumns is the query that compares nothing, which is what
+// selecting no columns and then asking for the distinct rows gives. A frame
+// with no columns has no rows either, so the answer is the empty frame rather
+// than a division by nothing.
+func TestLazyDistinctOfNoColumns(t *testing.T) {
+	out, err := repeats(t).Lazy().Select().Distinct().Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if out.NumRows() != 0 || out.NumCols() != 0 {
+		t.Errorf("the query gave %d rows and %d columns, want none of either", out.NumRows(), out.NumCols())
+	}
+}
+
+func TestLazyDistinctMistakes(t *testing.T) {
+	f := repeats(t)
+
+	tests := []struct {
+		name string
+		q    *kuma.LazyFrame[kuma.Dynamic]
+		want error
+	}{
+		{
+			name: "a column that is not there",
+			q:    f.Lazy().Distinct("smybol"),
+			want: kuma.ErrNoColumn,
+		},
+		{
+			name: "a mistake written before it",
+			q:    f.Lazy().Drop("smybol").Distinct(),
+			want: kuma.ErrNoColumn,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.q.Validate(); !errors.Is(err, tt.want) {
+				t.Fatalf("Validate() = %v, want %v", err, tt.want)
+			}
+			if _, err := tt.q.Collect(t.Context()); !errors.Is(err, tt.want) {
+				t.Fatalf("Collect() = %v, want %v", err, tt.want)
+			}
+		})
+	}
+}
+
 // BenchmarkLazyCollect is the whole path: the plan is checked, then a filter, a
 // sort and a limit run one after another. What it is here to watch is the cost
 // of the plan on top of the work, which is a schema check per query and a
@@ -879,6 +1006,23 @@ func BenchmarkLazyInnerJoin(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		out, err := left.Lazy().InnerJoin(right.Lazy(), "k").Collect(ctx)
+		if err != nil {
+			b.Fatalf("Collect: %v", err)
+		}
+		frameSink = out
+	}
+}
+
+// BenchmarkLazyDistinct is BenchmarkFrameDistinct written as a query, over the
+// same frame and the same column, so the gap between the two is the whole cost
+// of going through the plan.
+func BenchmarkLazyDistinct(b *testing.B) {
+	f := benchGrouped(b).Frame()
+	ctx := b.Context()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.Lazy().Distinct("k").Collect(ctx)
 		if err != nil {
 			b.Fatalf("Collect: %v", err)
 		}

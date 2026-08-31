@@ -90,27 +90,9 @@ func (g *Groups) Keys() []*array.Chunked { return g.keys }
 // the same length, since all three are a mistake in the program rather than
 // something the data did.
 func GroupBy(keys ...*array.Chunked) (*Groups, error) {
-	if len(keys) == 0 {
-		panic("kernel: group by with no keys")
-	}
-
-	n := -1
-	ks := make([]*key, len(keys))
-	for i, c := range keys {
-		if c == nil {
-			panic(fmt.Sprintf("kernel: group by key %d is a nil column", i))
-		}
-		if n < 0 {
-			n = c.Len()
-		} else if c.Len() != n {
-			panic(fmt.Sprintf("kernel: group by key %d has %d rows, key 0 has %d",
-				i, c.Len(), n))
-		}
-		k, err := newKey(c)
-		if err != nil {
-			return nil, err
-		}
-		ks[i] = k
+	ks, n, err := rowKeys("group by", keys)
+	if err != nil {
+		return nil, err
 	}
 
 	g := &Groups{ids: make([]int, n)}
@@ -143,6 +125,84 @@ func GroupBy(keys ...*array.Chunked) (*Groups, error) {
 		g.keys[i] = Take(c, g.first)
 	}
 	return g, nil
+}
+
+// DistinctIndex returns the first row of each set of rows whose keys all agree,
+// in the order those rows appear.
+//
+// Gathering the columns at these positions with [Take] is what a drop
+// duplicates is, and it is why this returns positions rather than a table: the
+// caller knows which columns it wants back, and the ones that were not compared
+// come along for the same price as the ones that were.
+//
+// Two rows agree by the rule [GroupBy] uses, so a missing value agrees with a
+// missing value and a dictionary encoded column is compared by the value behind
+// the index rather than by the index. It reports an error for the same reason
+// that one does, which is a column of a type there is no way to compare, and it
+// panics on the same three mistakes in the program.
+//
+// This is [GroupBy] with everything the aggregations need left out. A grouping
+// works out which group every row is in and gathers the key values, and a
+// distinct wants neither, so a wide drop duplicates over columns that are
+// mostly already distinct costs one pass and one slice rather than a set of key
+// columns nobody reads.
+func DistinctIndex(keys ...*array.Chunked) ([]int, error) {
+	ks, n, err := rowKeys("distinct", keys)
+	if err != nil {
+		return nil, err
+	}
+
+	var first []int
+	seen := make(map[string]struct{})
+	var scratch []byte
+	for i := range n {
+		scratch = scratch[:0]
+		for _, k := range ks {
+			scratch = k.appendRow(scratch, i)
+		}
+
+		// Looking a byte slice up in a map keyed by strings does not copy it,
+		// so a row that is a duplicate of one already seen costs a hash and a
+		// compare and nothing else.
+		if _, ok := seen[string(scratch)]; ok {
+			continue
+		}
+		seen[string(scratch)] = struct{}{}
+		first = append(first, i)
+	}
+	return first, nil
+}
+
+// rowKeys builds the row encoder of every key column and returns them with the
+// number of rows they hold.
+//
+// It is the part [GroupBy] and [DistinctIndex] have in common, which is every
+// check either of them makes before it reads a row. The op is what to call the
+// operation in the messages it panics with.
+func rowKeys(op string, keys []*array.Chunked) ([]*key, int, error) {
+	if len(keys) == 0 {
+		panic("kernel: " + op + " with no keys")
+	}
+
+	n := -1
+	ks := make([]*key, len(keys))
+	for i, c := range keys {
+		if c == nil {
+			panic(fmt.Sprintf("kernel: %s key %d is a nil column", op, i))
+		}
+		if n < 0 {
+			n = c.Len()
+		} else if c.Len() != n {
+			panic(fmt.Sprintf("kernel: %s key %d has %d rows, key 0 has %d",
+				op, i, c.Len(), n))
+		}
+		k, err := newKey(c)
+		if err != nil {
+			return nil, 0, err
+		}
+		ks[i] = k
+	}
+	return ks, n, nil
 }
 
 // OneGroup returns n rows in a single group.
