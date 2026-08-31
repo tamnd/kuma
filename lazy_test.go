@@ -1185,9 +1185,17 @@ func BenchmarkLazyCollect(b *testing.B) {
 
 // BenchmarkLazyCollectOfChainedColumns is a value built up over several steps
 // and then asked for on its own, which is how anyone writes a calculation that
-// does not fit on one line. Written that way it is four projections and three
-// whole columns worked out to be thrown away, and the fusion pass turns it into
-// one projection over the one column of the source it reads.
+// does not fit on one line. Written that way it is four projections, and the
+// fusion pass turns it into one projection over the one column of the source it
+// reads.
+//
+// It is here to hold that cost rather than to show a win. Collapsing the
+// projections does not on its own make the query faster, because the same
+// arithmetic is done either way and only the operator it sits in changes. What
+// it buys is the shape the kernel half of fusion needs, which is the part that
+// turns the one expression into a single loop over the chunk. Until that lands
+// this should measure about what it measured before the pass existed, and a
+// number that walks up is a regression worth looking at.
 func BenchmarkLazyCollectOfChainedColumns(b *testing.B) {
 	f := benchFrame(b)
 	c := kuma.I64("c00")
