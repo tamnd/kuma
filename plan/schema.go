@@ -67,6 +67,13 @@ func (n *Node) schema() (dtype.Schema, error) {
 		return n.limitSchema()
 	case OpDistinct:
 		return n.distinctSchema()
+	case OpPoison:
+		// A step that could not be built produces nothing, and what it has to
+		// say is the mistake it is holding rather than anything about columns.
+		// The earliest such step is the one that says it, since a step written
+		// after one of them was written against something that did not happen
+		// and whatever went wrong with it follows from that.
+		return dtype.Schema{}, poisoned(n).carried()
 	default:
 		return n.explodeSchema()
 	}

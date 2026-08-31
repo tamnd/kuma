@@ -194,13 +194,9 @@ func (f *Frame[S]) JoinAs[Out, R any](other *Frame[R], on []On, how JoinType) (*
 // query carries from here. Every other step has nothing to compare against until
 // the plan is walked.
 func (lf *LazyFrame[S]) SelectAs[R any]() *LazyFrame[R] {
-	if lf.err != nil {
-		return &LazyFrame[R]{err: lf.err}
-	}
-
 	n, err := projectAs[R](lf.node, "SelectAs")
 	if err != nil {
-		return &LazyFrame[R]{err: err}
+		return &LazyFrame[R]{node: plan.Poison(lf.node, asStep[R]("SelectAs"), err)}
 	}
 	return &LazyFrame[R]{node: n}
 }
@@ -220,13 +216,9 @@ func (lf *LazyFrame[S]) SelectAs[R any]() *LazyFrame[R] {
 // error from that line rather than at [LazyFrame.Collect].
 func (lg *LazyGroupBy[S]) AggAs[R any](aggs ...Aggregation) *LazyFrame[R] {
 	q := lg.Agg(aggs...)
-	if q.err != nil {
-		return &LazyFrame[R]{err: q.err}
-	}
-
 	n, err := projectAs[R](q.node, "AggAs")
 	if err != nil {
-		return &LazyFrame[R]{err: err}
+		return &LazyFrame[R]{node: plan.Poison(q.node, asStep[R]("AggAs"), err)}
 	}
 	return &LazyFrame[R]{node: n}
 }
@@ -248,15 +240,20 @@ func (lg *LazyGroupBy[S]) AggAs[R any](aggs ...Aggregation) *LazyFrame[R] {
 // wrong is easy.
 func (lf *LazyFrame[S]) JoinAs[Out, R any](other *LazyFrame[R], on []On, how JoinType) *LazyFrame[Out] {
 	q := lf.Join(other, on, how)
-	if q.err != nil {
-		return &LazyFrame[Out]{err: q.err}
-	}
-
 	n, err := projectAs[Out](q.node, "JoinAs")
 	if err != nil {
-		return &LazyFrame[Out]{err: err}
+		return &LazyFrame[Out]{node: plan.Poison(q.node, asStep[Out]("JoinAs"), err)}
 	}
 	return &LazyFrame[Out]{node: n}
+}
+
+// asStep is how a step that takes its result type as a type parameter is
+// written in a plan that could not be built, which is the way it is written in
+// the caller's code with the type spelled out in full. The package is part of
+// it because two structs called Quote in two packages is the sort of thing that
+// happens in the code a query is written in.
+func asStep[R any](who string) string {
+	return fmt.Sprintf("%s[%s]", who, reflect.TypeFor[R]())
 }
 
 // projectAs returns the plan that keeps the columns the struct R names, in the
@@ -309,13 +306,9 @@ func projectAs[R any](n *plan.Node, who string) (*plan.Node, error) {
 // produces without reading anything, which is what makes that possible.
 func (lf *LazyFrame[S]) ExplodeAs[R any](names ...string) *LazyFrame[R] {
 	q := lf.Explode(names...)
-	if q.err != nil {
-		return &LazyFrame[R]{err: q.err}
-	}
-
 	n, err := projectAs[R](q.node, "ExplodeAs")
 	if err != nil {
-		return &LazyFrame[R]{err: err}
+		return &LazyFrame[R]{node: plan.Poison(q.node, asStep[R]("ExplodeAs"), err)}
 	}
 	return &LazyFrame[R]{node: n}
 }

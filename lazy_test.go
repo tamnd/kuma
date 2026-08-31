@@ -269,8 +269,10 @@ func TestLazyColumnThatIsNotThere(t *testing.T) {
 }
 
 // TestLazyKeepsTheFirstMistake is the rule that lets a query be one expression:
-// a step that went wrong is remembered rather than reported, and the steps
-// after it build nothing.
+// a step that went wrong is written down rather than reported, and the steps
+// after it are written down on top of it. The mistake that comes back is the
+// first one, since the steps after it were written against a step that did not
+// happen and whatever they have to say about it is not worth hearing.
 func TestLazyKeepsTheFirstMistake(t *testing.T) {
 	q := trades(t).Lazy().Drop("nope").Select("symbol").Drop("symbol")
 
@@ -293,11 +295,76 @@ func TestLazyKeepsTheFirstMistake(t *testing.T) {
 	if _, err := q.Collect(t.Context()); !errors.Is(err, kuma.ErrNoColumn) {
 		t.Errorf("Collect = %v, want the same error Validate gave", err)
 	}
-	if got := q.String(); !strings.HasPrefix(got, "invalid query: ") {
-		t.Errorf("String() = %q, want it to say the query is not one", got)
-	}
 	if _, err := q.Explain(); !errors.Is(err, kuma.ErrNoColumn) {
 		t.Errorf("Explain = %v, want the same error Validate gave", err)
+	}
+
+	// All three steps are in the plan, written the way they were asked for. The
+	// two that could not be built are the ones that had to work out what their
+	// input holds, and a step that could not be built is still a step the caller
+	// wrote and is still worth showing them.
+	want := "Drop symbol\n" +
+		"  Project symbol\n" +
+		"    Drop nope\n" +
+		"      Scan frame"
+	if got := q.String(); got != want {
+		t.Errorf("String() =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestLazyReportsTheWholeQueryAndNotJustTheStepsUpToTheMistake is what the
+// first mistake being written down rather than thrown away buys. A query has no
+// line numbers, so the plan in the error is the only thing that says which of
+// the calls the mistake is near, and a query that stopped building at the
+// mistake reported a two line plan for a five line query.
+func TestLazyReportsTheWholeQueryAndNotJustTheStepsUpToTheMistake(t *testing.T) {
+	q := trades(t).Lazy().
+		Select("nope").
+		With("x", kuma.F64("price").Mul(2)).
+		SortBy("x").
+		Head(3)
+
+	if q.Plan() == nil {
+		t.Fatal("a query with a mistake in the first step has no plan")
+	}
+
+	_, err := q.Collect(t.Context())
+	if !errors.Is(err, kuma.ErrNoColumn) {
+		t.Fatalf("Collect = %v, want ErrNoColumn", err)
+	}
+
+	want := "kuma: column \"nope\" not found in Project\n" +
+		"  available: symbol, price, qty\n" +
+		"\n" +
+		"in the plan\n" +
+		"  Limit 3\n" +
+		"    Sort by x\n" +
+		"      With x\n" +
+		">       Project nope\n" +
+		"          Scan frame"
+	if got := err.Error(); got != want {
+		t.Errorf("the error reads\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestLazyStepsThatTakeATypeWriteTheTypeDown is the one thing a poisoned step
+// has to get right that the others do not. A step named only SelectAs in a
+// query with two of them in it says nothing about which of the two it is.
+func TestLazyStepsThatTakeATypeWriteTheTypeDown(t *testing.T) {
+	type Quote struct {
+		Nope string
+	}
+
+	q := trades(t).Lazy().SelectAs[Quote]().Head(3)
+	if err := q.Validate(); !errors.Is(err, kuma.ErrNoColumn) {
+		t.Fatalf("Validate = %v, want ErrNoColumn", err)
+	}
+
+	want := "Limit 3\n" +
+		"  SelectAs[kuma_test.Quote]\n" +
+		"    Scan frame"
+	if got := q.String(); got != want {
+		t.Errorf("the plan reads\n%s\nwant\n%s", got, want)
 	}
 }
 

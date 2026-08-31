@@ -24,7 +24,7 @@ bars, err := kuma.ScanParquet[Trade]("trades/*.parquet").
 
 Four things about that are deliberate answers to specific pandas problems.
 
-There is one error return, at the end. Errors that happen while you are building the query get attached to the expression node that caused them and carried along, so a bad expression poisons everything downstream of it and surfaces once, when you collect. You do not write `if err != nil` between the steps of a query, because there is nothing sensible to do with an error at that point anyway.
+There is one error return, at the end. A step that cannot be built goes into the plan as a step that could not be built, holding the reason, and the steps after it are built on top of it as though nothing had happened, so the mistake surfaces once, when you collect. You do not write `if err != nil` between the steps of a query, because there is nothing sensible to do with an error at that point anyway. Keeping the later steps is what makes the message worth reading: a query has no line numbers of its own, so the plan drawn in the error is the only thing that says which of the calls the mistake is near, and a query that stopped building at the mistake would report a two line plan for a five line query.
 
 There is a `context.Context`. A long running group by can be cancelled. pandas has never had this and it is one of the honest reasons to reach for Go for this kind of work: a query that is part of an HTTP request should die when the request does.
 

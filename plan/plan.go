@@ -25,6 +25,7 @@ const (
 	OpLimit               // keep a run of rows
 	OpDistinct            // keep one row of each set of equal ones
 	OpExplode             // turn each element of a list column into a row
+	OpPoison              // a step that could not be built, holding why
 )
 
 // String returns the name of the operator, which is the word an explain uses.
@@ -46,6 +47,8 @@ func (o Op) String() string {
 		return "Limit"
 	case OpDistinct:
 		return "Distinct"
+	case OpPoison:
+		return "Poison"
 	default:
 		return "Explode"
 	}
@@ -174,6 +177,7 @@ type Node struct {
 	names  []string // OpExplode
 	read   []string // OpScan, the columns to read, and nil for all of them
 	rows   *span    // OpScan, the rows to read, and nil for all of them
+	bad    *poison  // OpPoison, the step and why it could not be built
 }
 
 // A span is a run of rows: how many to skip and how many to take. It is a
@@ -410,6 +414,13 @@ func (n *Node) ScanRows() (off, count int64, ok bool) {
 // inputs. It is one line, and it is the line the tree of a whole plan is built
 // out of.
 func (n *Node) String() string {
+	if n.op == OpPoison {
+		// A step that could not be built is written as the caller wrote it,
+		// since the operator it would have become is the thing that could not be
+		// worked out.
+		return n.bad.step
+	}
+
 	var sb strings.Builder
 	sb.WriteString(n.op.String())
 	switch n.op {
