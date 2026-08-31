@@ -981,3 +981,57 @@ func BenchmarkFrameRender(b *testing.B) {
 		stringSink = f.Render(opts)
 	}
 }
+
+// benchExplode returns a frame of benchLen elements held as rows of eight, with
+// an ordinary column beside the list one so the gather of the rest is measured
+// along with the taking apart.
+func benchExplode(b *testing.B) *kuma.Frame[kuma.Dynamic] {
+	b.Helper()
+
+	const width = 8
+
+	dt := dtype.List{Elem: dtype.Int64}
+	lb, err := array.NewListBuilder(dt)
+	if err != nil {
+		b.Fatalf("NewListBuilder: %v", err)
+	}
+	for i := range benchLen / width {
+		for e := range width {
+			lb.Elem().Append(int64(i*width + e))
+		}
+		lb.Append()
+	}
+
+	data, err := array.NewChunked(dt, lb.Finish())
+	if err != nil {
+		b.Fatalf("NewChunked: %v", err)
+	}
+	col, err := kuma.NewColumn("sizes", data)
+	if err != nil {
+		b.Fatalf("NewColumn: %v", err)
+	}
+
+	prices := make([]float64, benchLen/width)
+	for i := range prices {
+		prices[i] = float64(i) / 8
+	}
+
+	f, err := kuma.NewFrame(kuma.NewSeries("price", prices...).Column(), col)
+	if err != nil {
+		b.Fatalf("NewFrame: %v", err)
+	}
+	return f
+}
+
+func BenchmarkFrameExplode(b *testing.B) {
+	f := benchExplode(b)
+
+	b.SetBytes(benchLen * 8)
+	for b.Loop() {
+		out, err := f.Explode("sizes")
+		if err != nil {
+			b.Fatalf("Explode: %v", err)
+		}
+		frameSink = out
+	}
+}
