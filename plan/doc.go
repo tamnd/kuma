@@ -33,11 +33,13 @@
 // a name and a rewrite that takes a plan and returns a plan. [Passes] is the
 // set that runs over every query. [PushPredicate] moves each filter as far
 // down as the query allows, so that a row is thrown away before the join that
-// would have paired it and the sort that would have ordered it. Then
-// [PushProjection] works out which columns each step of a query actually reads
-// and writes that into the scan at the bottom, so that a query over two columns
-// of a file of forty reads two. The predicate goes first because a filter that
-// has moved down changes which columns the steps above it need.
+// would have paired it and the sort that would have ordered it. [PushSlice]
+// does the same for each limit, which almost nothing lets through, and writes
+// it into the scan when it gets there. Then [PushProjection] works out which
+// columns each step of a query actually reads and writes that into the scan
+// too, so that a query over two columns of a file of forty reads two. The
+// projection pass goes last because a filter or a limit that has moved changes
+// what the steps above it need.
 //
 // The two rules that everything else here depends on are that an expression
 // never changes once it has been built, and that two expressions that say the
