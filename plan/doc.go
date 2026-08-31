@@ -31,9 +31,12 @@
 // [Optimize] is the other half of what a plan is for. It runs a list of passes
 // over a plan until none of them finds anything left to do, and each [Pass] is
 // a name and a rewrite that takes a plan and returns a plan. [Passes] is the
-// set that runs over every query. [PushPredicate] moves each filter as far
-// down as the query allows, so that a row is thrown away before the join that
-// would have paired it and the sort that would have ordered it. [PushSlice]
+// set that runs over every query. [Fold] works out the parts of an expression
+// that the data does not decide, so that a step written as a hundred with a
+// tenth on top of it is a 110 by the time the query runs and a condition that
+// always holds is not a condition at all. [PushPredicate] moves each filter as
+// far down as the query allows, so that a row is thrown away before the join
+// that would have paired it and the sort that would have ordered it. [PushSlice]
 // does the same for each limit, which almost nothing lets through, and writes
 // it into the scan when it gets there. [HoistCommon] takes a value that an
 // operator writes more than once into a projection underneath, so that it is

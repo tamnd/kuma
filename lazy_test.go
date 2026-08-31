@@ -1438,5 +1438,94 @@ func TestLazyRepeatsAValueOverTheRestOfThePlan(t *testing.T) {
 	}
 }
 
+// TestLazyWorksOutAValueTheDataDoesNotDecide is the constant folding pass from
+// the outside. The lazy query is the one the optimizer shortened and the eager
+// one is the query exactly as it was written, so the two agreeing is the pass
+// having changed how the answer is reached and not what it is.
+func TestLazyWorksOutAValueTheDataDoesNotDecide(t *testing.T) {
+	f := trades(t)
+
+	// A hundred and a tenth of it, which is a limit written the way it was
+	// meant rather than as the 110 it comes to.
+	limit := kuma.Lit(100.0).Mul(1.1)
+
+	tests := []struct {
+		name string
+		cond kuma.BoolExpr[kuma.Dynamic]
+	}{
+		{
+			name: "a limit written as a sum",
+			cond: kuma.Dyn("price").GtExpr(limit),
+		},
+		{
+			name: "a condition that holds whatever the data says",
+			cond: kuma.F64("price").Gt(150).And(kuma.Lit(1).Lt(2)),
+		},
+		{
+			name: "a condition that never holds, which is the case the pass leaves alone",
+			cond: kuma.F64("price").Gt(150).And(kuma.Lit(1).Gt(2)),
+		},
+		{
+			name: "a negation of a negation",
+			cond: kuma.F64("price").Gt(150).Not().Not(),
+		},
+		{
+			name: "a value inside a value",
+			cond: kuma.Dyn("price").GtExpr(limit.Mul(2.0)),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lazy, err := f.Lazy().Filter(tt.cond).Collect(t.Context())
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			eager, err := f.Filter(tt.cond)
+			if err != nil {
+				t.Fatalf("the eager query: %v", err)
+			}
+			if lazy.String() != eager.String() {
+				t.Errorf("the lazy query gave\n%s\nand the eager one gave\n%s", lazy, eager)
+			}
+		})
+	}
+}
+
+// TestLazyDropsACastAColumnDoesNotNeed is the one folding rule that is about a
+// column rather than about a value written down, and the one that pays for
+// itself on a big frame, since the cast it takes away would have read the
+// column and written another one the same size.
+func TestLazyDropsACastAColumnDoesNotNeed(t *testing.T) {
+	f := trades(t)
+
+	// The handle says the column is an int64 and the column is a float64, which
+	// is what a query written against a frame whose types the caller was not
+	// sure of looks like. The cast reads the whole column and writes another one
+	// the same size to arrive back where it started.
+	same := kuma.I64("price").AsF64()
+
+	q := f.Lazy().With("notional", same)
+	ran, err := plan.Optimize(q.Plan(), plan.Passes()...)
+	if err != nil {
+		t.Fatalf("Optimize: %v", err)
+	}
+	if strings.Contains(ran.String(), "as float64") {
+		t.Errorf("the cast is still in the plan that runs: %s", ran)
+	}
+
+	out, err := q.Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	eager, err := f.WithExpr("notional", same)
+	if err != nil {
+		t.Fatalf("the eager query: %v", err)
+	}
+	if out.String() != eager.String() {
+		t.Errorf("the lazy query gave\n%s\nand the eager one gave\n%s", out, eager)
+	}
+}
+
 // planSink keeps the plan the benchmark built from being optimized away.
 var planSink *plan.Node

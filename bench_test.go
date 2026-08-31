@@ -1217,3 +1217,39 @@ func BenchmarkLazyAValueWrittenThreeTimes(b *testing.B) {
 		frameSink = out
 	}
 }
+
+// BenchmarkEagerAConditionThatAlwaysHolds is the query a generator writes when
+// the part that varied was not filled in: a condition, and a condition that is
+// true whatever the data says. The eager path works out both and takes the and
+// of them over every row.
+func BenchmarkEagerAConditionThatAlwaysHolds(b *testing.B) {
+	f := benchFrame(b)
+	cond := kuma.I64("c00").Gt(benchLen / 2).And(kuma.Lit(1).Lt(2))
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.Filter(cond)
+		if err != nil {
+			b.Fatalf("Filter: %v", err)
+		}
+		frameSink = out
+	}
+}
+
+// BenchmarkLazyAConditionThatAlwaysHolds is the same query with the optimizer
+// in front of it, which works out the second condition at plan time and drops
+// the and along with it.
+func BenchmarkLazyAConditionThatAlwaysHolds(b *testing.B) {
+	f := benchFrame(b)
+	cond := kuma.I64("c00").Gt(benchLen / 2).And(kuma.Lit(1).Lt(2))
+	ctx := b.Context()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.Lazy().Filter(cond).Collect(ctx)
+		if err != nil {
+			b.Fatalf("Collect: %v", err)
+		}
+		frameSink = out
+	}
+}
