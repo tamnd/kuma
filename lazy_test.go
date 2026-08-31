@@ -1183,6 +1183,39 @@ func BenchmarkLazyCollect(b *testing.B) {
 	}
 }
 
+// BenchmarkLazyCollectOfChainedColumns is a value built up over several steps
+// and then asked for on its own, which is how anyone writes a calculation that
+// does not fit on one line. Written that way it is four projections, and the
+// fusion pass turns it into one projection over the one column of the source it
+// reads.
+//
+// It is here to hold that cost rather than to show a win. Collapsing the
+// projections does not on its own make the query faster, because the same
+// arithmetic is done either way and only the operator it sits in changes. What
+// it buys is the shape the kernel half of fusion needs, which is the part that
+// turns the one expression into a single loop over the chunk. Until that lands
+// this should measure about what it measured before the pass existed, and a
+// number that walks up is a regression worth looking at.
+func BenchmarkLazyCollectOfChainedColumns(b *testing.B) {
+	f := benchFrame(b)
+	c := kuma.I64("c00")
+	ctx := b.Context()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.Lazy().
+			With("doubled", c.Mul(2)).
+			With("quadrupled", kuma.I64("doubled").Mul(2)).
+			With("octupled", kuma.I64("quadrupled").Mul(2)).
+			Select("octupled").
+			Collect(ctx)
+		if err != nil {
+			b.Fatalf("Collect: %v", err)
+		}
+		frameSink = out
+	}
+}
+
 // BenchmarkLazyPlan is the query being written and not run, which is what a
 // program does once per report and an optimizer pass does per rewrite.
 func BenchmarkLazyPlan(b *testing.B) {
@@ -1837,6 +1870,49 @@ func TestLazyTheExplainSaysWhatTypeAComparisonHappensAt(t *testing.T) {
 	}
 	if got := out.NumRows(); got != 1 {
 		t.Errorf("the filter kept %d rows, want the one row above two", got)
+	}
+}
+
+// TestLazyTheExplainSaysAValueIsWorkedOutInOneStep is the fusion pass from where
+// a caller stands. Adding a column and then adding another one out of it is two
+// steps to write and there is no reason for it to be two passes over the data,
+// so the plan that runs has one projection in it where the query as written has
+// three.
+func TestLazyTheExplainSaysAValueIsWorkedOutInOneStep(t *testing.T) {
+	f := trades(t)
+
+	lf := f.Lazy().
+		With("notional", kuma.F64("price").Mul(2)).
+		With("doubled", kuma.F64("notional").Mul(2)).
+		Select("doubled")
+
+	text, err := lf.Explain()
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+	if !strings.Contains(text, "((price * 2) * 2) as doubled") {
+		t.Errorf("the explain is\n%s\nwant the two steps worked out as one", text)
+	}
+	if !strings.Contains(text, "expression fusion") {
+		t.Errorf("the explain is\n%s\nwant it to name the pass that changed the plan", text)
+	}
+
+	// The plan says something new and asks the same question, which is the only
+	// promise a pass makes.
+	out, err := lf.Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if got := out.Names(); !slices.Equal(got, []string{"doubled"}) {
+		t.Errorf("Names() = %v, want the one column the query asked for", got)
+	}
+	got, err := kuma.F64("doubled").Series(out)
+	if err != nil {
+		t.Fatalf("Series: %v", err)
+	}
+	want := []float64{758, 1644.8, 760.4, 484}
+	if !slices.Equal(got.Values(), want) {
+		t.Errorf("the fused query gave %v, want %v", got.Values(), want)
 	}
 }
 

@@ -131,6 +131,21 @@ The query as written is what the caller built, the query that runs is what the p
 
 The `as float64` on the filter is worth a word. A value written in a query has no type of its own, and 100 against a float64 column is a float64 rather than dragging the column up to an int64. That rule used to live only in the engine, so the plan said `price > 100` and what happened was something you had to know. The type coercion pass works it out once and writes it into the plan, which means the comparison you can read is the comparison that runs. A value already at the type it is used with is left plain, so a float written against a float column reads exactly as it was written and only the conversions show up.
 
+The other thing an explain will show you is that the steps you wrote are not the steps that run. Adding a column and then adding another one out of it is two calls to write and there is no reason for it to be two passes over the data, so a query written as
+
+```go
+lf.With("notional", t.Price.Mul(2)).With("doubled", kuma.F64("notional").Mul(2)).Select("doubled")
+```
+
+runs as one projection over a scan of one column:
+
+```
+Project ((price * 2) * 2) as doubled
+  Scan frame [price]
+```
+
+The rule the fusion pass follows is that a value is only brought up into the step that reads it if that step reads it once. A value read twice stays where it is and stays worked out once, because working it out twice would cost more than the operator it saves. That is the same rule the common subexpression pass follows from the other direction, which is why a query can be written either way and end up in the same place.
+
 Not in it yet: an estimated row count per operator, which needs statistics on the source, and the row groups a scan skips, which needs the page index. Both go in as the scan learns to report them, under the operator they belong to.
 
 `lf.Profile(ctx)` runs the query and returns the answer along with the same output with the numbers on.
