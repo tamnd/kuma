@@ -32,6 +32,7 @@ func TestTheErrorMarksTheOperatorTheMistakeIsIn(t *testing.T) {
 
 	want := "kuma: column \"prcie\" not found in Filter\n" +
 		"  available: symbol, price, qty\n" +
+		"  did you mean: price?\n" +
 		"\n" +
 		"in the plan\n" +
 		"  Project symbol\n" +

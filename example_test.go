@@ -1160,6 +1160,7 @@ func ExampleLazyFrame_Schema() {
 	// schema<symbol: string not null, price: float64 not null, half: float64>
 	// kuma: column "prcie" not found in Filter
 	//   available: symbol, price, qty
+	//   did you mean: price?
 	//
 	// in the plan
 	// > Filter (prcie > 150)
