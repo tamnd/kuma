@@ -91,6 +91,18 @@ func newFrame[S any](cols []Column) (*Frame[S], error) {
 	return f, nil
 }
 
+// dynamic returns the same frame with its schema type forgotten.
+//
+// It is the other direction from [Bind], and it needs no check because every
+// schema type is a promise about the columns and Dynamic is the promise that
+// there is none. Nothing is copied. It is unexported because a caller who wants
+// this can say Bind[Dynamic] and get the same frame back, and because the
+// engine works in dynamic frames and would otherwise carry a type parameter
+// through every operator for nothing.
+func (f *Frame[S]) dynamic() *Frame[Dynamic] {
+	return &Frame[Dynamic]{cols: f.cols, schema: f.schema, rows: f.rows, index: f.index}
+}
+
 // Schema returns the fields of the frame, in column order.
 //
 // It describes the data rather than a declaration about it, so a field is
