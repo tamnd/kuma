@@ -24,7 +24,7 @@ func gaps(t *testing.T) *kuma.Frame[kuma.Dynamic] {
 
 	f, err := kuma.NewFrame(
 		nullKeys(t, "", "b", "c", "").Rename("sym"),
-		nullInts(t, "qty", 1, 0, 3, 0),
+		nullInts(t, 1, 0, 3, 0),
 		kuma.NewSeries("px", 1.5, 2.5, 3.5, 4.5).Column(),
 	)
 	if err != nil {
@@ -33,8 +33,9 @@ func gaps(t *testing.T) *kuma.Frame[kuma.Dynamic] {
 	return f
 }
 
-// nullInts builds an int64 column where a zero means the value is missing.
-func nullInts(t *testing.T, name string, vals ...int64) kuma.Column {
+// nullInts returns an int64 column called qty where a zero means the value is
+// missing. Rename it when a test wants it called something else.
+func nullInts(t *testing.T, vals ...int64) kuma.Column {
 	t.Helper()
 
 	b, err := array.NewBuilder(dtype.Int64)
@@ -53,7 +54,7 @@ func nullInts(t *testing.T, name string, vals ...int64) kuma.Column {
 	if err != nil {
 		t.Fatalf("NewChunked: %v", err)
 	}
-	c, err := kuma.NewColumn(name, data)
+	c, err := kuma.NewColumn("qty", data)
 	if err != nil {
 		t.Fatalf("NewColumn: %v", err)
 	}
@@ -478,8 +479,8 @@ func TestFrameDropNullsErrors(t *testing.T) {
 // column it is reading is in more than one piece, since a chunked column counts
 // its nulls per chunk and the row numbers do not restart.
 func TestDropNullsChunkedColumn(t *testing.T) {
-	head := nullInts(t, "qty", 1, 0)
-	tail := nullInts(t, "qty", 0, 4)
+	head := nullInts(t, 1, 0)
+	tail := nullInts(t, 0, 4)
 
 	both, err := array.NewChunked(dtype.Int64, append(head.Data().Chunks(), tail.Data().Chunks()...)...)
 	if err != nil {

@@ -95,7 +95,7 @@ func TestDistinctKeepsTheFirstRow(t *testing.T) {
 func TestDistinctNullsAgree(t *testing.T) {
 	f := mustFrame(t,
 		nullKeys(t, "a", "", "a", "").Rename("sym"),
-		nullInts(t, "qty", 1, 0, 1, 0),
+		nullInts(t, 1, 0, 1, 0),
 	)
 
 	got, err := f.Distinct()
