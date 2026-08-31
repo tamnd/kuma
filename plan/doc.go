@@ -41,9 +41,14 @@
 // far down as the query allows, so that a row is thrown away before the join
 // that would have paired it and the sort that would have ordered it. [PushSlice]
 // does the same for each limit, which almost nothing lets through, and writes
-// it into the scan when it gets there. [HoistCommon] takes a value that an
-// operator writes more than once into a projection underneath, so that it is
-// worked out once for the columns that read it. Then [PushProjection] works out
+// it into the scan when it gets there. [Fuse] brings a projection written over
+// another projection into one, so that a value worked out in one step and used
+// in the next is one pass over the data rather than two with a column held in
+// between. [HoistCommon] takes a value that an operator writes more than once
+// into a projection underneath, so that it is worked out once for the columns
+// that read it. Those two are the same rule from either end and neither undoes
+// the other: fusion takes up a value that is read once and hoisting puts down a
+// value that is read more than once. Then [PushProjection] works out
 // which columns each step of a query actually reads and writes that into the
 // scan too, so that a query over two columns of a file of forty reads two. The
 // projection pass goes last of those because a filter, a limit or a hoisted

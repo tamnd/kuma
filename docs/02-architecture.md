@@ -107,7 +107,7 @@ The passes below run to fixpoint.
 | Join reordering | Driven by cardinality estimates, so the smaller side builds the hash table. |
 | Partition pruning | On Hive partitioned scans, prune by path and pre partition group bys and joins on the partition keys. The metadata is carried from M2, the pass lands at M9. |
 | Aggregate pushdown | A count over a Parquet scan is answered from file metadata without reading anything. |
-| Fusion | Adjacent elementwise expressions compile into one pass over the chunk. |
+| Fusion | Adjacent elementwise expressions compile into one pass over the chunk. The plan half brings a projection written over another projection into one, so long as that does not mean working a value out twice. The kernel half, turning the one expression that is left into a single loop, needs the plan half first. |
 
 `Explain` prints the optimized plan and `Profile` adds per operator wall time, rows in and out, and bytes read.
 

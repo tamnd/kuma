@@ -113,6 +113,7 @@ func Passes() []Pass {
 		{Name: "constant folding", Rewrite: Fold},
 		{Name: "predicate pushdown", Rewrite: PushPredicate},
 		{Name: "slice pushdown", Rewrite: PushSlice},
+		{Name: "expression fusion", Rewrite: Fuse},
 		{Name: "common subexpression elimination", Rewrite: HoistCommon},
 		{Name: "projection pushdown", Rewrite: PushProjection},
 		{Name: "type coercion", Rewrite: Coerce},

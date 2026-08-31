@@ -1840,5 +1840,48 @@ func TestLazyTheExplainSaysWhatTypeAComparisonHappensAt(t *testing.T) {
 	}
 }
 
+// TestLazyTheExplainSaysAValueIsWorkedOutInOneStep is the fusion pass from where
+// a caller stands. Adding a column and then adding another one out of it is two
+// steps to write and there is no reason for it to be two passes over the data,
+// so the plan that runs has one projection in it where the query as written has
+// three.
+func TestLazyTheExplainSaysAValueIsWorkedOutInOneStep(t *testing.T) {
+	f := trades(t)
+
+	lf := f.Lazy().
+		With("notional", kuma.F64("price").Mul(2)).
+		With("doubled", kuma.F64("notional").Mul(2)).
+		Select("doubled")
+
+	text, err := lf.Explain()
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+	if !strings.Contains(text, "((price * 2) * 2) as doubled") {
+		t.Errorf("the explain is\n%s\nwant the two steps worked out as one", text)
+	}
+	if !strings.Contains(text, "expression fusion") {
+		t.Errorf("the explain is\n%s\nwant it to name the pass that changed the plan", text)
+	}
+
+	// The plan says something new and asks the same question, which is the only
+	// promise a pass makes.
+	out, err := lf.Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if got := out.Names(); !slices.Equal(got, []string{"doubled"}) {
+		t.Errorf("Names() = %v, want the one column the query asked for", got)
+	}
+	got, err := kuma.F64("doubled").Series(out)
+	if err != nil {
+		t.Fatalf("Series: %v", err)
+	}
+	want := []float64{758, 1644.8, 760.4, 484}
+	if !slices.Equal(got.Values(), want) {
+		t.Errorf("the fused query gave %v, want %v", got.Values(), want)
+	}
+}
+
 // planSink keeps the plan the benchmark built from being optimized away.
 var planSink *plan.Node
