@@ -27,23 +27,7 @@ import (
 // list of lists works and so does a list of dictionary encoded strings. Each of
 // those does whatever it does one level down and this does not have to know.
 func takeList(c *array.Chunked, dt dtype.List, idx []int) *array.Chunked {
-	chunks := c.Chunks()
-
-	kids := make([]*array.Array, len(chunks))
-	base := make([]int, len(chunks))
-	n, held := 0, 0
-	for k, a := range chunks {
-		kids[k] = a.Child()
-		base[k] = n
-		n += a.Child().Len()
-		held += chunkElems(a)
-	}
-	elems, err := array.NewChunked(dt.Elem, kids...)
-	if err != nil {
-		// Every chunk of a list column of this type has a child of the element
-		// type, which is what NewList makes true.
-		panic("kernel: " + err.Error())
-	}
+	elems, base, held := listElems(c, dt)
 
 	off, take, valid := listRows(c, elemHint(held, c.Len(), len(idx)), base, idx)
 	out, err := array.NewListFrom(dt, off, gatherElems(elems, dt.Elem, take), valid)
@@ -56,6 +40,38 @@ func takeList(c *array.Chunked, dt dtype.List, idx []int) *array.Chunked {
 		panic("kernel: " + err.Error())
 	}
 	return col
+}
+
+// listElems lays the children of the chunks of a list column end to end as one
+// column, so that an element has one position however many chunks the column
+// arrived in.
+//
+// It returns that column, the position each chunk's child begins at, and how
+// many elements the rows of the column hold between them. The last of those is
+// what the rows hold rather than what the children are long, which are different
+// numbers for a column sliced out of a longer one.
+//
+// Laying the children out copies nothing, being a list of arrays.
+func listElems(c *array.Chunked, dt dtype.List) (elems *array.Chunked, base []int, held int) {
+	chunks := c.Chunks()
+
+	kids := make([]*array.Array, len(chunks))
+	base = make([]int, len(chunks))
+	n := 0
+	for k, a := range chunks {
+		kids[k] = a.Child()
+		base[k] = n
+		n += a.Child().Len()
+		held += chunkElems(a)
+	}
+
+	elems, err := array.NewChunked(dt.Elem, kids...)
+	if err != nil {
+		// Every chunk of a list column of this type has a child of the element
+		// type, which is what NewList makes true.
+		panic("kernel: " + err.Error())
+	}
+	return elems, base, held
 }
 
 // gatherElems gathers the elements at the given positions into the one array a

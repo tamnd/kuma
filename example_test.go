@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tamnd/kuma"
+	"github.com/tamnd/kuma/array"
 	"github.com/tamnd/kuma/dtype"
 )
 
@@ -1472,4 +1473,52 @@ func ExampleFrame_JoinAs() {
 	// ---------+---------+---------
 	//   AAPL   |   189.5 | hardware
 	//   MSFT   |   411.2 | software
+}
+
+func ExampleFrame_Explode() {
+	dt := dtype.List{Elem: dtype.Int64}
+	b, err := array.NewListBuilder(dt)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	b.Elem().AppendValues([]int64{100, 50})
+	b.Append()
+	b.AppendNull()
+	b.Elem().AppendValues([]int64{25})
+	b.Append()
+
+	sizes, err := array.NewChunked(dt, b.Finish())
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	col, err := kuma.NewColumn("sizes", sizes)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	f, err := kuma.NewFrame(kuma.NewSeries("symbol", "AAPL", "MSFT", "GOOG").Column(), col)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	rows, err := f.Explode("sizes")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(rows)
+	// Output:
+	// kuma.Frame[kuma.Dynamic] 4 rows x 2 cols
+	//
+	//   symbol | sizes
+	//   string | int64
+	// ---------+------
+	//   AAPL   |   100
+	//   AAPL   |    50
+	//   MSFT   |  null
+	//   GOOG   |    25
 }
