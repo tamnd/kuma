@@ -3,6 +3,7 @@ package kuma_test
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -118,6 +119,9 @@ func TestExplode(t *testing.T) {
 	wantFrame(t, got, []string{"AAPL 1", "AAPL 2", "AAPL 3", "MSFT 7"})
 	if dt := dtypeOf(t, got, "sizes"); !dtype.Equal(dt, dtype.Int64) {
 		t.Errorf("the exploded column is %s, want int64", dt)
+	}
+	if dt := dtypeOf(t, got, "symbol"); !dtype.Equal(dt, dtype.String) {
+		t.Errorf("the column beside it is %s, want the string it was", dt)
 	}
 	if names := got.Names(); len(names) != 2 || names[0] != "symbol" || names[1] != "sizes" {
 		t.Errorf("the columns are %v, want symbol and sizes in that order", names)
@@ -261,6 +265,223 @@ func TestExplodeMistakes(t *testing.T) {
 				t.Errorf("error is %q, want it to mention %q", err, tt.says)
 			}
 		})
+	}
+}
+
+// tag is the result of exploding the sizes of tagged, which is the struct the
+// typed steps below are told. A list column cannot be bound to a field today,
+// so this is a struct that only means anything after the explode, which is the
+// reason ExplodeAs is worth having at all.
+type tag struct {
+	Symbol string `kuma:"symbol"`
+	Sizes  int64  `kuma:"sizes"`
+}
+
+// tagCols is what kumagen writes for tag.
+var tagCols = struct {
+	Symbol kuma.StrCol[tag]
+	Sizes  kuma.I64Col[tag]
+}{
+	Symbol: kuma.NewStrCol[tag]("symbol"),
+	Sizes:  kuma.NewI64Col[tag]("sizes"),
+}
+
+func TestLazyExplode(t *testing.T) {
+	got, err := tagged(t).Lazy().Explode("sizes").Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	wantFrame(t, got, []string{"AAPL 1", "AAPL 2", "AAPL 3", "MSFT 7"})
+	if dt := dtypeOf(t, got, "sizes"); !dtype.Equal(dt, dtype.Int64) {
+		t.Errorf("the exploded column is %s, want int64", dt)
+	}
+}
+
+// TestLazyExplodeIsTheSameAsEager is the rule the whole lazy API rests on,
+// checked on the step that changes the shape of a frame most.
+func TestLazyExplodeIsTheSameAsEager(t *testing.T) {
+	f := mustFrame(t,
+		kuma.NewSeries("symbol", "AAPL", "MSFT", "GOOG").Column(),
+		listColumn(t, "sizes", []int64{1, 2}, nil, []int64{3}),
+	)
+
+	lazy, err := f.Lazy().Explode("sizes").Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	eager, err := f.Explode("sizes")
+	if err != nil {
+		t.Fatalf("Explode: %v", err)
+	}
+
+	if lazy.String() != eager.String() {
+		t.Errorf("the lazy query gave\n%s\nand the eager one gave\n%s", lazy, eager)
+	}
+}
+
+// TestLazyExplodeSchema is what the query says it will produce before it runs,
+// which is the half of an explode a plan can work out on its own.
+func TestLazyExplodeSchema(t *testing.T) {
+	s, err := tagged(t).Lazy().Explode("sizes").Schema()
+	if err != nil {
+		t.Fatalf("Schema: %v", err)
+	}
+
+	f, ok := s.Field("sizes")
+	if !ok {
+		t.Fatal("the exploded column is not in the schema")
+	}
+	if !dtype.Equal(f.Type, dtype.Int64) {
+		t.Errorf("the schema says sizes is a %s, want int64", f.Type)
+	}
+	if !f.Nullable {
+		t.Error("the schema says sizes cannot be missing, and an empty row becomes a missing value")
+	}
+}
+
+func TestLazyExplodeString(t *testing.T) {
+	q := tagged(t).Lazy().Explode("sizes").Head(2)
+
+	want := strings.Join([]string{
+		"Limit 2",
+		"  Explode sizes",
+		"    Scan frame",
+	}, "\n")
+	if got := q.String(); got != want {
+		t.Errorf("String() =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestLazyExplodeMistakes are the errors the plan finds before anything is
+// read, which is every one of them except two columns that disagree.
+func TestLazyExplodeMistakes(t *testing.T) {
+	f := tagged(t)
+
+	tests := []struct {
+		name  string
+		names []string
+		want  error
+		says  string
+	}{
+		{"no column at all", nil, kuma.ErrNoColumn, "no column to take apart"},
+		{"a column that is not there", []string{"size"}, kuma.ErrNoColumn, "did you mean: sizes?"},
+		{"a column that holds one value per row", []string{"symbol"}, kuma.ErrWrongType, "one value per row"},
+		{"a column named twice", []string{"sizes", "sizes"}, kuma.ErrDuplicateColumn, "names sizes twice"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := f.Lazy().Explode(tt.names...).Collect(t.Context())
+			if err == nil {
+				t.Fatalf("Explode(%v) was allowed", tt.names)
+			}
+			if !errors.Is(err, tt.want) {
+				t.Errorf("error is %v, want one that is %v", err, tt.want)
+			}
+			if !strings.Contains(err.Error(), tt.says) {
+				t.Errorf("error is %q, want it to mention %q", err, tt.says)
+			}
+		})
+	}
+}
+
+// TestLazyExplodeOfTwoColumnsThatDisagree is the one mistake the plan cannot
+// find, since how many elements a row holds is what the data decides.
+func TestLazyExplodeOfTwoColumnsThatDisagree(t *testing.T) {
+	f := mustFrame(t,
+		kuma.NewSeries("symbol", "AAPL").Column(),
+		listColumn(t, "sizes", []int64{1, 2}),
+		listColumn(t, "prices", []int64{10}),
+	)
+
+	q := f.Lazy().Explode("sizes", "prices")
+	if err := q.Validate(); err != nil {
+		t.Fatalf("the query was turned away before it ran: %v", err)
+	}
+
+	_, err := q.Collect(t.Context())
+	if !errors.Is(err, kuma.ErrLength) {
+		t.Errorf("error is %v, want one that is ErrLength", err)
+	}
+}
+
+func TestExplodeAs(t *testing.T) {
+	got, err := tagged(t).ExplodeAs[tag]("sizes")
+	if err != nil {
+		t.Fatalf("ExplodeAs: %v", err)
+	}
+
+	if got.NumRows() != 4 || got.NumCols() != 2 {
+		t.Fatalf("the frame is %d by %d, want 4 by 2", got.NumRows(), got.NumCols())
+	}
+	if names := got.Names(); !slices.Equal(names, []string{"symbol", "sizes"}) {
+		t.Errorf("the columns are %v, want symbol and sizes", names)
+	}
+
+	// The frame is typed, so a handle written for tag reads it.
+	sizes, err := tagCols.Sizes.Series(got)
+	if err != nil {
+		t.Fatalf("Series: %v", err)
+	}
+	if want := []int64{1, 2, 3, 7}; !slices.Equal(sizes.Values(), want) {
+		t.Errorf("the sizes are %v, want %v", sizes.Values(), want)
+	}
+}
+
+func TestLazyExplodeAs(t *testing.T) {
+	got, err := tagged(t).Lazy().ExplodeAs[tag]("sizes").Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	symbols, err := tagCols.Symbol.Series(got)
+	if err != nil {
+		t.Fatalf("Series: %v", err)
+	}
+	if want := []string{"AAPL", "AAPL", "AAPL", "MSFT"}; !slices.Equal(symbols.Values(), want) {
+		t.Errorf("the symbols are %v, want %v", symbols.Values(), want)
+	}
+}
+
+// TestLazyExplodeAsIsCheckedWhereItIsWritten is what the typed steps buy over a
+// collect and a bind: the struct is compared against what the plan produces at
+// the line it was written, so a field that reads the column as the list it used
+// to be is an error from there.
+func TestLazyExplodeAsIsCheckedWhereItIsWritten(t *testing.T) {
+	type listy struct {
+		Sizes []int64 `kuma:"sizes"`
+	}
+
+	q := tagged(t).Lazy().ExplodeAs[listy]("sizes")
+	if err := q.Validate(); err == nil {
+		t.Fatal("a struct that reads the exploded column as a list was allowed")
+	}
+
+	// The same struct against the column before the explode is the same
+	// mistake, since a field cannot read a list column either way.
+	if _, err := tagged(t).SelectAs[listy](); err == nil {
+		t.Error("a struct that reads a list column was allowed")
+	}
+}
+
+func TestExplodeAsMistakes(t *testing.T) {
+	f := tagged(t)
+
+	if _, err := f.ExplodeAs[tag]("symbol"); !errors.Is(err, kuma.ErrWrongType) {
+		t.Errorf("exploding a column of values gives %v, want ErrWrongType", err)
+	}
+	if _, err := f.ExplodeAs[tag]("nope"); !errors.Is(err, kuma.ErrNoColumn) {
+		t.Errorf("exploding a column that is not there gives %v, want ErrNoColumn", err)
+	}
+
+	// The struct names a column the explode did not produce, which is the
+	// mistake the As steps exist to report and the one they report late.
+	type other struct {
+		Volume int64 `kuma:"volume"`
+	}
+	if _, err := f.ExplodeAs[other]("sizes"); !errors.Is(err, kuma.ErrNoColumn) {
+		t.Errorf("a struct naming a column that is not there gives %v, want ErrNoColumn", err)
 	}
 }
 

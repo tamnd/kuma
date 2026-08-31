@@ -1035,3 +1035,20 @@ func BenchmarkFrameExplode(b *testing.B) {
 		frameSink = out
 	}
 }
+
+// BenchmarkLazyExplode is the same work through the plan, so the difference
+// between the two is what a query pays for being written down and checked
+// before it runs rather than being called.
+func BenchmarkLazyExplode(b *testing.B) {
+	f := benchExplode(b)
+	ctx := b.Context()
+
+	b.SetBytes(benchLen * 8)
+	for b.Loop() {
+		out, err := f.Lazy().Explode("sizes").Collect(ctx)
+		if err != nil {
+			b.Fatalf("Collect: %v", err)
+		}
+		frameSink = out
+	}
+}

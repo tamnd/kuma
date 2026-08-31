@@ -37,9 +37,9 @@ import (
 // the steps after it were written against something that did not happen.
 //
 // The operators it can build today are a scan, a filter, a projection, a group
-// by, a join, a distinct, a sort and a limit, which is every operator the plan
-// has and every one the engine runs. A union, an explode, a pivot and a window
-// are the ones the three of them grow next, together.
+// by, a join, a distinct, a sort, a limit and an explode, which is every
+// operator the plan has and every one the engine runs. A union, a pivot and a
+// window are the ones the three of them grow next, together.
 //
 // The zero LazyFrame is not usable. Use [Frame.Lazy].
 type LazyFrame[S any] struct {
@@ -364,6 +364,33 @@ func (lf *LazyFrame[S]) Distinct(names ...string) *LazyFrame[S] {
 		by[i] = plan.Col(name)
 	}
 	return &LazyFrame[S]{node: plan.Distinct(lf.node, by)}
+}
+
+// Explode turns each element of the named list columns into a row of its own,
+// repeating the other columns of the row it came from.
+//
+//	q := f.Lazy().Explode("tags").GroupBy("tags").Count()
+//
+// It is [Frame.Explode] written as a step of a query and it keeps every rule
+// that one has: a row holding nothing becomes one row holding a missing value,
+// several columns taken apart together have to agree about how many elements
+// each row holds, and the columns stay where they were, holding the element
+// type rather than a list of it.
+//
+// The result is a Dynamic query, since a column that held a list of strings
+// holds a string afterwards and the schema type says otherwise.
+// [LazyFrame.ExplodeAs] is the same step with a struct saying what the result
+// holds, which is how a query stays typed across it.
+//
+// A name that is not there, a name that is not a list column, and no name at
+// all are all errors at [LazyFrame.Collect]. Which column to take apart is not
+// something this can work out on its own, since a query with two list columns
+// in it has two answers and they are different frames.
+func (lf *LazyFrame[S]) Explode(names ...string) *LazyFrame[Dynamic] {
+	if lf.err != nil {
+		return &LazyFrame[Dynamic]{err: lf.err}
+	}
+	return &LazyFrame[Dynamic]{node: plan.Explode(lf.node, names)}
 }
 
 // Sort puts the rows in order, the first key deciding and each later one

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/tamnd/kuma/dtype"
 	"github.com/tamnd/kuma/kernel"
@@ -48,8 +49,10 @@ func (n *Node) Schema() (dtype.Schema, error) {
 		return n.sortSchema()
 	case OpLimit:
 		return n.limitSchema()
-	default:
+	case OpDistinct:
 		return n.distinctSchema()
+	default:
+		return n.explodeSchema()
 	}
 }
 
@@ -331,6 +334,50 @@ func (n *Node) distinctSchema() (dtype.Schema, error) {
 		}
 	}
 	return s, nil
+}
+
+// explodeSchema is the input with each named column holding what its lists held
+// rather than the lists themselves.
+//
+// The columns keep their names and their places, since an explode changes what
+// is in a column and not which columns there are. Every one it touches comes out
+// nullable whatever the lists said, because a row holding nothing becomes a row
+// holding a missing value, and a column with no lists in it at all still has
+// that rule over it.
+func (n *Node) explodeSchema() (dtype.Schema, error) {
+	s, err := n.l.Schema()
+	if err != nil {
+		return dtype.Schema{}, err
+	}
+	// Wrapped rather than plain, unlike the other operators that arrive with a
+	// part missing, because this one is a mistake a caller makes rather than a
+	// plan that was built wrong: the eager Explode reports the same thing for
+	// the same call and one errors.Is has to cover both.
+	if len(n.names) == 0 {
+		return dtype.Schema{}, fmt.Errorf("kuma: an explode with no column to take apart: %w", ErrNoColumn)
+	}
+
+	fields := slices.Clone(s.Fields)
+	done := make(map[string]bool, len(n.names))
+	for _, name := range n.names {
+		i := s.Index(name)
+		if i < 0 {
+			return dtype.Schema{}, noColumn(n.op.String(), name, s.Names())
+		}
+		if done[name] {
+			return dtype.Schema{}, fmt.Errorf("kuma: an explode names %s twice, "+
+				"and a column that has been taken apart is not a list any more: %w", name, ErrDuplicateColumn)
+		}
+		list, ok := fields[i].Type.(dtype.List)
+		if !ok {
+			return dtype.Schema{}, fmt.Errorf("kuma: cannot explode %s, which is a %s and holds one value per row: %w",
+				name, fields[i].Type, ErrWrongType)
+		}
+		fields[i].Type = list.Elem
+		fields[i].Nullable = true
+		done[name] = true
+	}
+	return noDuplicates(fields)
 }
 
 // fieldOf is the column an expression produces, under the name it is given.

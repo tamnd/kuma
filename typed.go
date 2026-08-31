@@ -23,10 +23,11 @@ import (
 // different type parameters. Select and SelectAs are the same step told two
 // ways, the first by naming the columns and the second by naming the struct.
 //
-// There are three of them, which are the three steps that change what the
-// columns are: a projection, an aggregation and a join. Every other step either
-// keeps the columns or takes rows out, and those keep the schema type without
-// being told anything.
+// There are four of them. Three change which columns there are, being a
+// projection, an aggregation and a join, and the fourth is an explode, which
+// keeps every column and changes what the ones it takes apart hold. Every
+// other step either keeps the columns as they are or takes rows out, and those
+// keep the schema type without being told anything.
 
 // SelectAs keeps the columns the struct R names, in the order R names them, and
 // returns a frame whose schema type is R.
@@ -113,6 +114,35 @@ func selectAs[R, S any](f *Frame[S], who string) (*Frame[R], error) {
 		cols[i] = c
 	}
 	return newFrame[R](cols)
+}
+
+// ExplodeAs turns each element of the named list columns into a row of its own
+// and keeps the columns the struct R names, as a frame whose schema type is R.
+//
+//	type Tagged struct {
+//		Symbol string `kuma:"symbol"`
+//		Tag    string `kuma:"tag"`
+//	}
+//
+//	out, err := f.ExplodeAs[Tagged]("tag")
+//
+// It is [Frame.Explode] and [Frame.SelectAs] in one step, and it is the way an
+// explode over a typed frame stays typed. It is worth more here than anywhere
+// else, because a struct cannot name a list column today, so without this the
+// frame on either side of an explode is Dynamic and the struct that describes
+// the result is the only one there is to write.
+//
+// The exploded columns are nullable whatever the lists held, since a row
+// holding nothing becomes a row holding a missing value, and a Go field that
+// reads one of those reads the zero value. That is a fact about the data rather
+// than about the type, which is why it is not an error, and it is the reason
+// worth filtering the missing rows out before this step rather than after.
+func (f *Frame[S]) ExplodeAs[R any](names ...string) (*Frame[R], error) {
+	out, err := f.Explode(names...)
+	if err != nil {
+		return nil, err
+	}
+	return selectAs[R](out, "ExplodeAs")
 }
 
 // JoinAs puts the rows of two frames together where their keys match and keeps
@@ -262,6 +292,32 @@ func projectAs[R any](n *plan.Node, who string) (*plan.Node, error) {
 		cols[i] = plan.Projection{Expr: plan.Col(sf.column)}
 	}
 	return plan.Project(n, cols), nil
+}
+
+// ExplodeAs turns each element of the named list columns into a row of its own
+// and keeps the columns the struct R names, giving back a query whose schema
+// type is R.
+//
+//	q := f.Lazy().ExplodeAs[Tagged]("tag")
+//
+// It is [Frame.ExplodeAs] written as a step of a query, and it is the last of
+// the steps that lets a typed query stay typed.
+//
+// Like [LazyFrame.SelectAs] this is checked where it is written, so a struct
+// that reads an exploded column as the list it used to be is an error from that
+// line rather than at [LazyFrame.Collect]. The plan works out what an explode
+// produces without reading anything, which is what makes that possible.
+func (lf *LazyFrame[S]) ExplodeAs[R any](names ...string) *LazyFrame[R] {
+	q := lf.Explode(names...)
+	if q.err != nil {
+		return &LazyFrame[R]{err: q.err}
+	}
+
+	n, err := projectAs[R](q.node, "ExplodeAs")
+	if err != nil {
+		return &LazyFrame[R]{err: err}
+	}
+	return &LazyFrame[R]{node: n}
 }
 
 // noFields is the error for a schema struct that names no columns, which is one

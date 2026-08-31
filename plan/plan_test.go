@@ -66,6 +66,8 @@ func TestOperatorsPrintAsTheyWereWritten(t *testing.T) {
 		{plan.Limit(scan, 5, 20), "Limit 20 offset 5"},
 		{plan.Distinct(scan, nil), "Distinct"},
 		{plan.Distinct(scan, []*plan.Expr{symbol}), "Distinct by symbol"},
+		{plan.Explode(scan, []string{"tags"}), "Explode tags"},
+		{plan.Explode(scan, []string{"tags", "sizes"}), "Explode tags, sizes"},
 	}
 
 	for _, c := range cases {
@@ -127,6 +129,14 @@ func TestBuildingAPlanCopiesWhatItWasGiven(t *testing.T) {
 	if got, want := sort.String(), "Sort by price"; got != want {
 		t.Errorf("after writing to the slice the sort reads %q, want %q", got, want)
 	}
+
+	names := []string{"tags"}
+	explode := plan.Explode(scan, names)
+	names[0] = "sizes"
+
+	if got, want := explode.String(), "Explode tags"; got != want {
+		t.Errorf("after writing to the slice the explode reads %q, want %q", got, want)
+	}
 }
 
 // TestAnOperatorOnlyAnswersForItself checks that a field belonging to another
@@ -150,6 +160,9 @@ func TestAnOperatorOnlyAnswersForItself(t *testing.T) {
 	}
 	if n.Offset() != 0 || n.Limit() != 0 {
 		t.Error("the filter has the bounds of a limit")
+	}
+	if n.ExplodeNames() != nil {
+		t.Error("the filter has the columns of an explode")
 	}
 	if scan.Source().Name() != "trades/*.parquet" {
 		t.Error("the scan reads a source other than the one it was built over")
@@ -181,9 +194,9 @@ var sink *plan.Node
 func TestTheOperatorsAreNamed(t *testing.T) {
 	ops := []plan.Op{
 		plan.OpScan, plan.OpFilter, plan.OpProject, plan.OpAggregate,
-		plan.OpJoin, plan.OpSort, plan.OpLimit, plan.OpDistinct,
+		plan.OpJoin, plan.OpSort, plan.OpLimit, plan.OpDistinct, plan.OpExplode,
 	}
-	want := []string{"Scan", "Filter", "Project", "Aggregate", "Join", "Sort", "Limit", "Distinct"}
+	want := []string{"Scan", "Filter", "Project", "Aggregate", "Join", "Sort", "Limit", "Distinct", "Explode"}
 
 	for i, op := range ops {
 		if got := op.String(); got != want[i] {

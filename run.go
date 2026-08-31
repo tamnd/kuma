@@ -93,6 +93,8 @@ func runNode(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
 		return runLimit(ctx, n)
 	case plan.OpDistinct:
 		return runDistinct(ctx, n)
+	case plan.OpExplode:
+		return runExplode(ctx, n)
 	default:
 		// Every operator the plan has is above. The next one the plan grows
 		// arrives here until the engine is taught it, and saying so is better
@@ -358,6 +360,29 @@ func runDistinct(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
 		return nil, err
 	}
 	return distinct(f, keys)
+}
+
+// runExplode turns each element of the named list columns into a row of its
+// own, repeating the other columns of the row it came from.
+//
+// It is the eager [Frame.Explode] over columns the plan has already checked, so
+// the only thing that can go wrong here is the one thing the data decides: two
+// columns being taken apart together that turn out to disagree about how many
+// elements a row holds.
+func runExplode(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
+	f, err := runNode(ctx, n.Input())
+	if err != nil {
+		return nil, err
+	}
+
+	// The names are known to be columns of the input and known to be lists,
+	// since the plan was checked before any of this ran, so the lookup here
+	// cannot fail and the positions are all it is for.
+	cols := make([]int, len(n.ExplodeNames()))
+	for i, name := range n.ExplodeNames() {
+		cols[i] = f.index[name]
+	}
+	return explode(f, cols)
 }
 
 // evalNode works an expression out over the frame, and checks that what came
