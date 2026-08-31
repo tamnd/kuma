@@ -34,13 +34,16 @@ import (
 // of one against every element of the other, and is written as two calls.
 //
 // The result is dynamic whatever the frame it came from, because a Trade whose
-// tags are a list is not a Trade once the list is gone. [Bind] is the way back
-// to a typed frame.
+// tags are a list is not a Trade once the list is gone. [Frame.ExplodeAs] is
+// the same step with a struct saying what the result holds, which is how a
+// typed frame stays typed across it, and [Bind] is the way back from one that
+// did not. [LazyFrame.Explode] is this step written as part of a query.
 //
 // It reports an error if a name is not a column of the frame, if a named column
-// is not a list column, or if no name is given at all. Which column to take
-// apart is not something this can work out on its own: a frame with two list
-// columns has two answers and they are different frames.
+// is not a list column, if a name is given twice, since a column that has been
+// taken apart is not a list any more, or if no name is given at all. Which
+// column to take apart is not something this can work out on its own: a frame
+// with two list columns has two answers and they are different frames.
 func (f *Frame[S]) Explode(names ...string) (*Frame[Dynamic], error) {
 	if len(names) == 0 {
 		return nil, fmt.Errorf("kuma: Explode needs the name of a column to take apart: %w", ErrNoColumn)
@@ -55,6 +58,10 @@ func (f *Frame[S]) Explode(names ...string) (*Frame[Dynamic], error) {
 		if _, ok := f.cols[k].DType().(dtype.List); !ok {
 			return nil, fmt.Errorf("kuma: Explode on column %q, which is %s and holds one value per row: %w",
 				name, f.cols[k].DType(), ErrWrongType)
+		}
+		if slices.Contains(cols[:i], k) {
+			return nil, fmt.Errorf("kuma: Explode names %q twice, "+
+				"and a column that has been taken apart is not a list any more: %w", name, ErrDuplicateColumn)
 		}
 		cols[i] = k
 	}

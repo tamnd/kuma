@@ -1522,3 +1522,87 @@ func ExampleFrame_Explode() {
 	//   MSFT   |  null
 	//   GOOG   |    25
 }
+
+// sizeFrame is the frame the explode examples take apart, being three symbols
+// with a list of sizes against each of them and one of the lists missing.
+func sizeFrame() (*kuma.Frame[kuma.Dynamic], error) {
+	dt := dtype.List{Elem: dtype.Int64}
+	b, err := array.NewListBuilder(dt)
+	if err != nil {
+		return nil, err
+	}
+	b.Elem().AppendValues([]int64{100, 50})
+	b.Append()
+	b.AppendNull()
+	b.Elem().AppendValues([]int64{25})
+	b.Append()
+
+	sizes, err := array.NewChunked(dt, b.Finish())
+	if err != nil {
+		return nil, err
+	}
+	col, err := kuma.NewColumn("sizes", sizes)
+	if err != nil {
+		return nil, err
+	}
+	return kuma.NewFrame(kuma.NewSeries("symbol", "AAPL", "MSFT", "GOOG").Column(), col)
+}
+
+func ExampleLazyFrame_Explode() {
+	f, err := sizeFrame()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	// The rows the missing list became are dropped by the filter rather than by
+	// the explode, which is what having them there in the first place is for.
+	out, err := f.Lazy().
+		Explode("sizes").
+		Filter(kuma.I64("sizes").Gt(30)).
+		SortDesc("sizes").
+		Collect(context.Background())
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(out)
+	// Output:
+	// kuma.Frame[kuma.Dynamic] 2 rows x 2 cols
+	//
+	//   symbol | sizes
+	//   string | int64
+	// ---------+------
+	//   AAPL   |   100
+	//   AAPL   |    50
+}
+
+func ExampleFrame_ExplodeAs() {
+	type Fill struct {
+		Symbol string `kuma:"symbol"`
+		Size   int64  `kuma:"sizes"`
+	}
+
+	f, err := sizeFrame()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fills, err := f.ExplodeAs[Fill]("sizes")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(fills)
+	// Output:
+	// kuma.Frame[kuma_test.Fill] 4 rows x 2 cols
+	//
+	//   symbol | sizes
+	//   string | int64
+	// ---------+------
+	//   AAPL   |   100
+	//   AAPL   |    50
+	//   MSFT   |  null
+	//   GOOG   |    25
+}

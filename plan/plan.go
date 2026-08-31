@@ -13,8 +13,8 @@ import (
 type Op uint8
 
 // The operators. They are the ones the eager frame already has, and the list
-// grows as the engine does: a union, an explode, a pivot, a window and a sink
-// are all operators here eventually.
+// grows as the engine does: a union, a pivot, a window and a sink are all
+// operators here eventually.
 const (
 	OpScan      Op = iota // read a source
 	OpFilter              // keep the rows a condition holds for
@@ -24,6 +24,7 @@ const (
 	OpSort                // put the rows in order
 	OpLimit               // keep a run of rows
 	OpDistinct            // keep one row of each set of equal ones
+	OpExplode             // turn each element of a list column into a row
 )
 
 // String returns the name of the operator, which is the word an explain uses.
@@ -43,8 +44,10 @@ func (o Op) String() string {
 		return "Sort"
 	case OpLimit:
 		return "Limit"
-	default:
+	case OpDistinct:
 		return "Distinct"
+	default:
+		return "Explode"
 	}
 }
 
@@ -167,7 +170,8 @@ type Node struct {
 	sort   []SortKey    // OpSort
 	on     []JoinKey    // OpJoin
 	how    kernel.JoinType
-	off, n int64 // OpLimit
+	off, n int64    // OpLimit
+	names  []string // OpExplode
 }
 
 // The constructors. Each one takes what its operator needs and nothing else,
@@ -224,6 +228,20 @@ func Limit(in *Node, off, n int64) *Node {
 // calls drop_duplicates.
 func Distinct(in *Node, by []*Expr) *Node {
 	return &Node{op: OpDistinct, l: in, by: slices.Clone(by)}
+}
+
+// Explode turns each element of the named list columns into a row of its own,
+// repeating the other columns of the row it came from. It is what pandas calls
+// explode and what SQL writes as an unnest.
+//
+// The columns stay where they are and under the names they had, holding the
+// element type rather than a list of it, which is why this takes names rather
+// than expressions: it changes columns in place and there is no place to put
+// the result of an expression that is not one of them. Naming several takes
+// them apart together, and then every row has to hold the same number of
+// elements in all of them.
+func Explode(in *Node, names []string) *Node {
+	return &Node{op: OpExplode, l: in, names: slices.Clone(names)}
 }
 
 // The accessors. The slices they return are the node's own, so read them and do
@@ -300,6 +318,10 @@ func (n *Node) SharedKeys() []string {
 	return names
 }
 
+// ExplodeNames is the columns an explode takes apart, and nil for every other
+// operator.
+func (n *Node) ExplodeNames() []string { return n.names }
+
 // Offset is how many rows a limit skips before it starts keeping them.
 func (n *Node) Offset() int64 { return n.off }
 
@@ -342,8 +364,11 @@ func (n *Node) String() string {
 			sb.WriteString(" offset ")
 			sb.WriteString(strconv.FormatInt(n.off, 10))
 		}
-	default:
+	case OpDistinct:
 		writeBy(&sb, n.by)
+	default:
+		sb.WriteByte(' ')
+		sb.WriteString(strings.Join(n.names, ", "))
 	}
 	return sb.String()
 }

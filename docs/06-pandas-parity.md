@@ -220,7 +220,7 @@ a.Add(b)                       // still positional, never aligned behind your ba
 - [ ] `sort_index` -> `SortByIndex`, requires an explicit index (M7)
 - [ ] `stack` `unstack` -> `Stack` `Unstack` (M7)
 - [ ] `swaplevel` `reorder_levels` `droplevel` -> `SwapKeys` `ReorderKeys` `DropKey` over compound index keys (M7)
-- [x] `explode` -> `Explode` (M3, earlier than planned since list columns landed with the nested types). It takes one column or several, and several have to agree about how many values each row holds. `ignore_index` has nothing to do here, since there is no index to keep.
+- [x] `explode` -> `Explode` (M3, earlier than planned since list columns landed with the nested types). It takes one column or several, and several have to agree about how many values each row holds. `ignore_index` has nothing to do here, since there is no index to keep. It is a step of a query as well as a call on a frame, and `ExplodeAs` is the typed spelling of both.
 - [ ] `squeeze` -> `Squeeze` (M7)
 - [ ] `transpose` and `T` -> `Transpose` (M7)
 - [ ] `swapaxes` -> deprecated in pandas, use `Transpose` (adapted)
