@@ -296,6 +296,10 @@ func appendUnsigned[T array.Numeric](b *array.Builder, n number, hi uint64) bool
 // against a limit that rounded the wrong way lets one value through that does
 // not fit. The power of two is exact in a float64 for every width up to and
 // including 64, so the comparison is exact.
+//
+// That is also why the bound is worked out into past first. Written inline it
+// reads like a longer way of saying t > float64(hi), which is the version that
+// has the bug in it.
 func toSigned(n number, lo, hi int64) (int64, bool) {
 	switch n.k {
 	case numInt:
@@ -310,7 +314,8 @@ func toSigned(n number, lo, hi int64) (int64, bool) {
 		return int64(n.u), true
 	default:
 		t := math.Trunc(n.f)
-		if math.IsNaN(t) || t < float64(lo) || t >= float64(hi)+1 {
+		past := float64(hi) + 1
+		if math.IsNaN(t) || t < float64(lo) || t >= past {
 			return 0, false
 		}
 		return int64(t), true
@@ -334,7 +339,8 @@ func toUnsigned(n number, hi uint64) (uint64, bool) {
 		return n.u, true
 	default:
 		t := math.Trunc(n.f)
-		if math.IsNaN(t) || t < 0 || t >= float64(hi)+1 {
+		past := float64(hi) + 1
+		if math.IsNaN(t) || t < 0 || t >= past {
 			return 0, false
 		}
 		return uint64(t), true

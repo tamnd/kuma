@@ -740,6 +740,17 @@ func TestFits(t *testing.T) {
 		{"a float in a float64", dtype.Float64, 1e300, ""},
 		{"an int in a float32", dtype.Float32, int64(1) << 60, ""},
 
+		// Two to the sixty three is the first float past the int64 range and it
+		// is also what float64(math.MaxInt64) rounds to, so a bound written as
+		// the top of the range instead of the power of two past it lets this
+		// one through. The same holds one width up for the unsigned side.
+		{"the largest float that is an int64", dtype.Int64, math.Ldexp(1, 63) - 1024, ""},
+		{"the first float past the int64 range", dtype.Int64, math.Ldexp(1, 63),
+			"9.223372036854776e+18 does not fit in int64"},
+		{"the largest float that is a uint64", dtype.Uint64, math.Ldexp(1, 64) - 2048, ""},
+		{"the first float past the uint64 range", dtype.Uint64, math.Ldexp(1, 64),
+			"does not fit in uint64"},
+
 		// The pairs this check has no answer for, which are the ones another
 		// layer has already decided about.
 		{"a string in a string", dtype.String, "AAPL", ""},
@@ -785,6 +796,8 @@ func TestFitsAgreesWithCast(t *testing.T) {
 		int64(math.MinInt32), int64(math.MaxInt64), int64(math.MinInt64),
 		uint64(math.MaxUint64), uint64(math.MaxInt64) + 1,
 		1.0, -1.0, 1e300, -1e300, float32(1.5),
+		math.Ldexp(1, 63), math.Ldexp(1, 63) - 1024,
+		math.Ldexp(1, 64), math.Ldexp(1, 64) - 2048,
 	}
 
 	for _, dt := range types {
