@@ -416,6 +416,235 @@ func TestLazyOverAnEmptyFrame(t *testing.T) {
 	}
 }
 
+// TestLazyGroupBy is the group by written both ways, which is the rule that
+// matters: the plan is there to be optimized and not to answer differently.
+func TestLazyGroupBy(t *testing.T) {
+	f := trades(t)
+
+	lazy, err := f.Lazy().GroupBy("symbol").Agg(
+		kuma.Sum("qty").As("total"),
+		kuma.Mean("price").As("avg"),
+		kuma.Size(),
+	).Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	g, err := f.GroupBy("symbol")
+	if err != nil {
+		t.Fatalf("GroupBy: %v", err)
+	}
+	eager, err := g.Agg(
+		kuma.Sum("qty").As("total"),
+		kuma.Mean("price").As("avg"),
+		kuma.Size(),
+	)
+	if err != nil {
+		t.Fatalf("Agg: %v", err)
+	}
+
+	if lazy.String() != eager.String() {
+		t.Errorf("the lazy group by gave\n%s\nand the eager one gave\n%s", lazy, eager)
+	}
+	if got := lazy.Names(); !slices.Equal(got, []string{"symbol", "total", "avg", "size"}) {
+		t.Errorf("Names() = %v, want the key and then the aggregations", got)
+	}
+	if got := symbolsOf(t, lazy); !slices.Equal(got, []string{"AAPL", "MSFT", "NVDA"}) {
+		t.Errorf("symbols = %v, want the groups in the order they first appear", got)
+	}
+}
+
+// TestLazyEveryAggregation runs the lot of them against the eager answer, since
+// the two now share one switch and the way to know it is wired up right is to
+// ask for every arm.
+func TestLazyEveryAggregation(t *testing.T) {
+	aggs := []kuma.Aggregation{
+		kuma.Sum("qty"),
+		kuma.Mean("qty"),
+		kuma.Min("qty"),
+		kuma.Max("qty"),
+		kuma.Count("qty"),
+		kuma.Size(),
+		kuma.First("qty"),
+		kuma.Last("qty"),
+		kuma.Var("qty", 1),
+		kuma.Std("qty", 1),
+		kuma.Median("qty"),
+		kuma.Quantile("qty", 0.9, kuma.Linear),
+		kuma.NUnique("qty"),
+	}
+
+	f := trades(t)
+	for _, a := range aggs {
+		t.Run(a.String(), func(t *testing.T) {
+			named := a.As("answer")
+
+			lazy, err := f.Lazy().GroupBy("symbol").Agg(named).Collect(t.Context())
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+
+			g, err := f.GroupBy("symbol")
+			if err != nil {
+				t.Fatalf("GroupBy: %v", err)
+			}
+			eager, err := g.Agg(named)
+			if err != nil {
+				t.Fatalf("Agg: %v", err)
+			}
+
+			if lazy.String() != eager.String() {
+				t.Errorf("lazy gave\n%s\nand eager gave\n%s", lazy, eager)
+			}
+		})
+	}
+}
+
+// TestLazyGroupByCount is the group by anybody writes first.
+func TestLazyGroupByCount(t *testing.T) {
+	out, err := trades(t).Lazy().GroupBy("symbol").Count().Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	s, err := out.Series[int64]("size")
+	if err != nil {
+		t.Fatalf("Series: %v", err)
+	}
+	if got := s.Values(); !slices.Equal(got, []int64{2, 1, 1}) {
+		t.Errorf("sizes = %v, want 2, 1, 1", got)
+	}
+}
+
+// TestLazyGroupByTwoKeys checks that a row is in a group only when every key
+// agrees, which here splits the two AAPL rows apart.
+func TestLazyGroupByTwoKeys(t *testing.T) {
+	out, err := trades(t).Lazy().GroupBy("symbol", "qty").Count().Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if out.NumRows() != 4 {
+		t.Fatalf("%s, want one group per row", out)
+	}
+	if got := out.Names(); !slices.Equal(got, []string{"symbol", "qty", "size"}) {
+		t.Errorf("Names() = %v, want both keys and then the count", got)
+	}
+}
+
+// TestLazyGroupByIsAStepLikeAnyOther is what the lazy API buys over the eager
+// one here, which is that the frame a group by produces is a query and can be
+// gone on with.
+func TestLazyGroupByIsAStepLikeAnyOther(t *testing.T) {
+	out, err := trades(t).Lazy().
+		Filter(kuma.F64("price").Gt(150)).
+		GroupBy("symbol").
+		Agg(kuma.Sum("qty").As("total")).
+		SortDesc("total").
+		Head(1).
+		Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	if got := symbolsOf(t, out); !slices.Equal(got, []string{"AAPL"}) {
+		t.Errorf("symbols = %v, want AAPL, whose two dear rows total 125", got)
+	}
+}
+
+// TestLazyGroupBySchema is the schema of a group by worked out without reading
+// anything, which is what a program checking a report before it runs asks for.
+func TestLazyGroupBySchema(t *testing.T) {
+	s, err := trades(t).Lazy().GroupBy("symbol").Agg(
+		kuma.Sum("qty").As("total"),
+		kuma.Size(),
+	).Schema()
+	if err != nil {
+		t.Fatalf("Schema: %v", err)
+	}
+	if got := s.Names(); !slices.Equal(got, []string{"symbol", "total", "size"}) {
+		t.Errorf("Names() = %v, want the key and then the aggregations", got)
+	}
+}
+
+// TestLazyGroupByString is the operator as an explain shows it, with the keys
+// before the colon and the aggregations after.
+func TestLazyGroupByString(t *testing.T) {
+	q := trades(t).Lazy().GroupBy("symbol").Agg(kuma.Sum("qty").As("total"), kuma.Size())
+
+	want := strings.Join([]string{
+		"Aggregate by symbol: Sum(qty) as total, Size() as size",
+		"  Scan frame",
+	}, "\n")
+	if got := q.String(); got != want {
+		t.Errorf("String() =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestLazyGroupByMistakes(t *testing.T) {
+	f := trades(t)
+
+	tests := []struct {
+		name string
+		q    *kuma.LazyFrame[kuma.Dynamic]
+		want error
+	}{
+		{
+			name: "no keys",
+			q:    f.Lazy().GroupBy().Agg(kuma.Size()),
+			want: kuma.ErrLength,
+		},
+		{
+			name: "no aggregations",
+			q:    f.Lazy().GroupBy("symbol").Agg(),
+			want: kuma.ErrLength,
+		},
+		{
+			name: "a key that is not there",
+			q:    f.Lazy().GroupBy("sybmol").Agg(kuma.Size()),
+			want: kuma.ErrNoColumn,
+		},
+		{
+			name: "a column that is not there",
+			q:    f.Lazy().GroupBy("symbol").Agg(kuma.Sum("qtty")),
+			want: kuma.ErrNoColumn,
+		},
+		{
+			name: "two aggregations of one name",
+			q:    f.Lazy().GroupBy("symbol").Agg(kuma.Sum("qty"), kuma.Mean("qty")),
+			want: kuma.ErrDuplicateColumn,
+		},
+		{
+			name: "a mistake written before the group by",
+			q:    f.Lazy().Drop("prices").GroupBy("symbol").Agg(kuma.Size()),
+			want: kuma.ErrNoColumn,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.q.Validate(); !errors.Is(err, tt.want) {
+				t.Fatalf("Validate() = %v, want %v", err, tt.want)
+			}
+			if _, err := tt.q.Collect(t.Context()); !errors.Is(err, tt.want) {
+				t.Fatalf("Collect() = %v, want %v", err, tt.want)
+			}
+		})
+	}
+}
+
+// TestLazyAnAggregationWithNoAnswer is the check that costs nothing, since the
+// sum of a column of strings is a mistake that can be found before a row is
+// read rather than after the grouping has been paid for.
+func TestLazyAnAggregationWithNoAnswer(t *testing.T) {
+	err := trades(t).Lazy().GroupBy("qty").Agg(kuma.Sum("symbol")).Validate()
+	if err == nil {
+		t.Fatal("Validate() = nil, want the sum of a string turned away")
+	}
+	if !strings.Contains(err.Error(), "no sum of a string") {
+		t.Errorf("the message is %q, want it to say there is no sum of a string", err)
+	}
+}
+
 // BenchmarkLazyCollect is the whole path: the plan is checked, then a filter, a
 // sort and a limit run one after another. What it is here to watch is the cost
 // of the plan on top of the work, which is a schema check per query and a
@@ -444,6 +673,27 @@ func BenchmarkLazyPlan(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		planSink = f.Lazy().Filter(qty.Gt(benchLen / 2)).SortDesc("c01").Head(64).Plan()
+	}
+}
+
+// BenchmarkLazyGroupByAndAgg is BenchmarkFrameGroupByAndAgg written as a query,
+// over the same frame and asking for the same two things. The gap between the
+// two is the whole cost of going through the plan, since the grouping and the
+// aggregations underneath are the same kernels on the same data.
+func BenchmarkLazyGroupByAndAgg(b *testing.B) {
+	f := benchGrouped(b).Frame()
+	ctx := b.Context()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := f.Lazy().GroupBy("k").Agg(
+			kuma.Sum("qty").As("total"),
+			kuma.Mean("price").As("avg"),
+		).Collect(ctx)
+		if err != nil {
+			b.Fatalf("Collect: %v", err)
+		}
+		frameSink = out
 	}
 }
 

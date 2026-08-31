@@ -40,9 +40,11 @@ func TestRunAnOperatorTheEngineDoesNotHaveYet(t *testing.T) {
 	}{
 		{name: "distinct", node: plan.Distinct(scan, nil)},
 		{
-			name: "aggregate",
-			node: plan.Aggregate(scan, []*plan.Expr{plan.Col("symbol")},
-				[]plan.Agg{{Func: plan.AggSum, Expr: plan.Col("qty")}}),
+			// An aggregate of the whole input is a plan the lazy frame has no
+			// way to write, since GroupBy takes at least one column, and the
+			// engine has nowhere to put the answer for an input with no rows.
+			name: "aggregate with no keys",
+			node: plan.Aggregate(scan, nil, []plan.Agg{{Func: plan.AggSum, Expr: plan.Col("qty")}}),
 		},
 		{
 			// The right side is the symbols on their own, since a join of a plan

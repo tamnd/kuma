@@ -197,6 +197,19 @@ func (a Aggregation) String() string {
 	return s
 }
 
+// plan returns the aggregation as the plan writes one, which is the same thing
+// over an expression rather than over the name of a column.
+//
+// It is how the lazy [LazyGroupBy.Agg] takes what a caller wrote for the eager
+// one, so that there is one set of constructors to learn rather than two.
+func (a Aggregation) plan() plan.Agg {
+	p := plan.Agg{Func: a.op, As: a.as, DDoF: a.ddof, Q: a.q, How: a.how}
+	if a.op != opSize {
+		p.Expr = plan.Col(a.col)
+	}
+	return p
+}
+
 // run works the aggregation out over a grouping and returns the result column.
 func (a Aggregation) run[S any](g *GroupedFrame[S]) (Column, error) {
 	if a.op == opSize {
@@ -207,43 +220,48 @@ func (a Aggregation) run[S any](g *GroupedFrame[S]) (Column, error) {
 	if !ok {
 		return Column{}, noColumn(a.op.String(), a.col, g.frame.Names())
 	}
-	c := g.frame.cols[k].data
 
-	var (
-		out *array.Chunked
-		err error
-	)
-	switch a.op {
-	case opSum:
-		out, err = kernel.Sum(c, g.group)
-	case opMean:
-		out, err = kernel.Mean(c, g.group)
-	case opMin:
-		out, err = kernel.Min(c, g.group)
-	case opMax:
-		out, err = kernel.Max(c, g.group)
-	case opCount:
-		out = kernel.Count(c, g.group)
-	case opFirst:
-		out = kernel.First(c, g.group)
-	case opLast:
-		out = kernel.Last(c, g.group)
-	case opVar:
-		out, err = kernel.Var(c, g.group, a.ddof)
-	case opStd:
-		out, err = kernel.Std(c, g.group, a.ddof)
-	case opMedian:
-		out, err = kernel.Median(c, g.group)
-	case opQuantile:
-		out, err = kernel.Quantile(c, g.group, a.q, a.how)
-	case opNUnique:
-		out, err = kernel.NUnique(c, g.group)
-	default:
-		// opSize is handled above and there is nothing else.
-		panic(fmt.Sprintf("kuma: aggregation %d has no implementation", a.op))
-	}
+	out, err := aggregate(a.plan(), g.frame.cols[k].data, g.group)
 	if err != nil {
 		return Column{}, err
 	}
 	return Column{name: a.Name(), data: out}, nil
+}
+
+// aggregate works one aggregation out over a column that has already been read
+// and a grouping that has already been worked out.
+//
+// It is the one place the aggregations turn into kernel calls. The eager Agg
+// arrives here with a column of the frame and the engine arrives here with
+// whatever the expression produced, which is what keeps the two from drifting
+// apart as the list grows.
+func aggregate(a plan.Agg, c *array.Chunked, g *kernel.Groups) (*array.Chunked, error) {
+	switch a.Func {
+	case plan.AggSum:
+		return kernel.Sum(c, g)
+	case plan.AggMean:
+		return kernel.Mean(c, g)
+	case plan.AggMin:
+		return kernel.Min(c, g)
+	case plan.AggMax:
+		return kernel.Max(c, g)
+	case plan.AggCount:
+		return kernel.Count(c, g), nil
+	case plan.AggSize:
+		return kernel.Size(g), nil
+	case plan.AggFirst:
+		return kernel.First(c, g), nil
+	case plan.AggLast:
+		return kernel.Last(c, g), nil
+	case plan.AggVar:
+		return kernel.Var(c, g, a.DDoF)
+	case plan.AggStd:
+		return kernel.Std(c, g, a.DDoF)
+	case plan.AggMedian:
+		return kernel.Median(c, g)
+	case plan.AggQuantile:
+		return kernel.Quantile(c, g, a.Q, a.How)
+	default:
+		return kernel.NUnique(c, g)
+	}
 }

@@ -83,6 +83,8 @@ func runNode(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
 		return runFilter(ctx, n)
 	case plan.OpProject:
 		return runProject(ctx, n)
+	case plan.OpAggregate:
+		return runAggregate(ctx, n)
 	case plan.OpSort:
 		return runSort(ctx, n)
 	case plan.OpLimit:
@@ -134,6 +136,91 @@ func runProject(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
 		cols[i] = Column{name: p.Name(), data: data}
 	}
 	return NewFrame(cols...)
+}
+
+// runAggregate divides the rows up by the keys and works out one column for
+// every aggregation.
+//
+// The keys come first and the aggregations after, in the order they were
+// written, which is what the plan says the result holds and what the eager
+// [GroupedFrame.Agg] produces. The grouping is worked out once and handed to
+// every aggregation, so a query asking for a sum, a mean and a count over the
+// same keys divides the rows up once.
+func runAggregate(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
+	f, err := runNode(ctx, n.Input())
+	if err != nil {
+		return nil, err
+	}
+
+	// An aggregate with no keys is one row about the whole input, which is what
+	// SQL gives for a select of a sum with no group by. It is not the same
+	// operation: the answer for an empty input is one row of nothing rather
+	// than no rows, so it needs a grouping the kernels cannot make yet.
+	by := n.By()
+	if len(by) == 0 {
+		return nil, fmt.Errorf("kuma: an aggregate of the whole input, with nothing to group by, is not something the engine runs yet: %w",
+			ErrNotSupported)
+	}
+
+	keys, err := groupKeys(f, by)
+	if err != nil {
+		return nil, err
+	}
+
+	g, err := kernel.GroupBy(keys...)
+	if err != nil {
+		return nil, err
+	}
+
+	cols := make([]Column, 0, len(by)+len(n.Aggs()))
+	for i, k := range g.Keys() {
+		// A key is called what it was written as, so grouping by a column is a
+		// column of that name and grouping by an expression is a column of the
+		// expression's own text. That is the name the plan promised.
+		cols = append(cols, Column{name: by[i].String(), data: k})
+	}
+	for _, a := range n.Aggs() {
+		c, err := runAgg(f, g, a)
+		if err != nil {
+			return nil, err
+		}
+		cols = append(cols, c)
+	}
+	return NewFrame(cols...)
+}
+
+// groupKeys works the keys of a group by out as columns of their own, so that
+// grouping by something that is not a column, such as the month of a date,
+// costs one column rather than a projection the caller has to write.
+func groupKeys(f *Frame[Dynamic], by []*plan.Expr) ([]*array.Chunked, error) {
+	keys := make([]*array.Chunked, len(by))
+	for i, e := range by {
+		data, err := f.evalNode(e, "GroupBy")
+		if err != nil {
+			return nil, err
+		}
+		keys[i] = data
+	}
+	return keys, nil
+}
+
+// runAgg works one aggregation out, having first worked out the column it
+// reads. A size reads no column, which is why it is not one line.
+func runAgg(f *Frame[Dynamic], g *kernel.Groups, a plan.Agg) (Column, error) {
+	if a.Func == plan.AggSize {
+		return Column{name: a.Name(), data: kernel.Size(g)}, nil
+	}
+
+	data, err := f.evalNode(a.Expr, a.Func.String())
+	if err != nil {
+		return Column{}, err
+	}
+
+	out, err := aggregate(a, data, g)
+	if err != nil {
+		return Column{}, err
+	}
+	return Column{name: a.Name(), data: out}, nil
 }
 
 func runSort(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
