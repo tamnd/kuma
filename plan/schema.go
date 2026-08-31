@@ -34,6 +34,22 @@ func (n *Node) Schema() (dtype.Schema, error) {
 		return dtype.Schema{}, errNoPlan
 	}
 
+	s, err := n.schema()
+	if err != nil {
+		return dtype.Schema{}, found(n, err)
+	}
+	return s, nil
+}
+
+// schema is [Node.Schema] for one operator, without the part that says where in
+// the plan the answer came from.
+//
+// The two are split because the recursion runs through the exported one, so an
+// operator that reports something has it written down at the operator that
+// found it, and every operator it comes back up through only widens the plan
+// there is to print. Doing that here instead would name whichever operator was
+// asked last.
+func (n *Node) schema() (dtype.Schema, error) {
 	switch n.op {
 	case OpScan:
 		return n.scanSchema()
@@ -74,6 +90,12 @@ func (n *Node) Schema() (dtype.Schema, error) {
 // operator that make no sense on their own, such as a negative limit or a
 // quantile at two. What it does not catch is anything the data decides, such as
 // a file that turns out not to be there or a total that overflows.
+//
+// What comes back says where it is as well as what it is. The error is an
+// [OperatorError] holding the plan with a mark against the operator the mistake
+// is in, which is the part that matters once a query has two filters in it and
+// the message can only name one of them. It wraps what the check reported, so
+// errors.Is and errors.As reach through it.
 func (n *Node) Validate() error {
 	_, err := n.Schema()
 	return err

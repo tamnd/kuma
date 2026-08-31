@@ -94,10 +94,14 @@ The quality of the message matters more than almost anything else in the library
 kuma: column "sym" not found in Filter
   available: symbol, price, qty, side, ts
   did you mean: symbol?
-  in plan:
-    Filter [col("sym") > 100]      <- here
-    Scan parquet trades/*.parquet
+
+in the plan
+    Project symbol, price
+>     Filter (sym > 100)
+        Scan trades/*.parquet
 ```
+
+The plan is there because a lazy query is built over several calls and has no line numbers to point at, so naming the kind of operator stops being enough the moment a query has two filters in it. The mark sits in a gutter rather than in the line so that the operators stay lined up under each other and the plan reads the same as it does everywhere else it is printed. A plan of one operator is printed without the tree, since drawing one line to point at the only line there is tells nobody anything.
 
 Note that with typed columns this particular error mostly stops happening, because the compiler catches it first. It still exists for the dynamic path and for the case where the file schema does not match the struct, which is the more common failure once the typed layer is in place.
 
