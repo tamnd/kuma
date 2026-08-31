@@ -101,6 +101,48 @@ func NewNull(length int) *Array {
 	return &Array{dt: dtype.Null, length: length, nulls: length}
 }
 
+// Empty returns an array of type dt holding no values.
+//
+// It is for the operation that produced nothing and still has a type to hand
+// back, such as a gather that kept no rows out of a column that is the same type
+// either way. The nested types have one too, and their children are empty in the
+// same way, since a list of no rows still points at a child.
+func Empty(dt dtype.DataType) (*Array, error) {
+	if dt == nil {
+		return nil, errNilDType
+	}
+
+	switch t := dt.(type) {
+	case dtype.List:
+		child, err := Empty(t.Elem)
+		if err != nil {
+			return nil, err
+		}
+		// One offset, being where the first row would begin if there were one.
+		return NewListFrom(dt, []int32{0}, child, nil)
+	case dtype.Dictionary:
+		indices, err := Empty(t.Index)
+		if err != nil {
+			return nil, err
+		}
+		values, err := Empty(t.Value)
+		if err != nil {
+			return nil, err
+		}
+		return NewDictionary(indices, values)
+	}
+
+	if dt.Kind() == dtype.NullKind {
+		return NewNull(0), nil
+	}
+
+	b, err := NewBuilder(dt)
+	if err != nil {
+		return nil, err
+	}
+	return b.Finish(), nil
+}
+
 // Of returns an array of the given values, with no nulls, of the dtype that
 // matches T. It is for tests, examples and the odd literal column, not for
 // loading data, which goes through a builder.

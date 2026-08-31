@@ -1,6 +1,7 @@
 package array
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"unsafe"
@@ -114,8 +115,35 @@ func (a *Array) Offsets() []int32 {
 	return offsetsOf(a.values, a.offset, a.length)
 }
 
+// ListRange returns where row i of a list column begins and ends in the child.
+// It panics if the column is not a list or if i is out of range.
+//
+// This is what a loop over the rows wants. It is two integers and it allocates
+// nothing, so reading a column row by row through it and the child costs what
+// reading an ordinary column costs. List is the same row handed back as an
+// array, which is more convenient and builds one per row.
+//
+// A null row comes back as an empty range, which is what its offsets say. Ask
+// IsValid to tell that from a row that is present and has nothing in it, the
+// same as for any other type.
+func (a *Array) ListRange(i int) (start, end int) {
+	if a.child == nil {
+		panic(fmt.Sprintf("array: ListRange on a %s column", a.dt))
+	}
+	if uint(i) >= uint(a.length) {
+		panic("array: index out of range")
+	}
+	off := a.Offsets()
+	return int(off[i]), int(off[i+1])
+}
+
 // List returns the elements of row i of a list column, as an array sharing the
 // child's memory. It panics if the column is not a list or if i is out of range.
+//
+// It allocates the array it hands back, which over a column read row by row is
+// one allocation per row for something that is two integers underneath. Use
+// ListRange and read the child directly when that shows up in a profile, which
+// over a few million rows it does.
 //
 // A null row comes back empty, which is what its offsets say. Ask IsValid to
 // tell that from a row that is present and has nothing in it, the same as for
@@ -124,11 +152,27 @@ func (a *Array) List(i int) *Array {
 	if a.child == nil {
 		panic(fmt.Sprintf("array: List on a %s column", a.dt))
 	}
-	if uint(i) >= uint(a.length) {
-		panic("array: index out of range")
+	start, end := a.ListRange(i)
+	return a.child.Slice(start, end)
+}
+
+// NewListFrom returns a List array over child with the rows marked out by off,
+// which is one more offset than there are rows.
+//
+// It is [NewList] for a caller that worked the offsets out in Go rather than
+// reading them as bytes, which a kernel does and a file reader does not. The
+// offsets are copied into a buffer of their own, so off may be reused; child and
+// valid are taken over the way NewList takes them over.
+//
+// Everything NewList checks is checked here.
+func NewListFrom(dt dtype.DataType, off []int32, child *Array, valid *bitmap.Bitmap) (*Array, error) {
+	if len(off) == 0 {
+		return nil, errors.New("array: a list column needs at least one offset, being where its first row starts")
 	}
-	off := a.Offsets()
-	return a.child.Slice(int(off[i]), int(off[i+1]))
+
+	buf := buffer.New(len(off) * offsetWidth)
+	copy(buf.Bytes(), unsafe.Slice((*byte)(unsafe.Pointer(&off[0])), len(off)*offsetWidth))
+	return NewList(dt, len(off)-1, buf, child, valid)
 }
 
 // ListBuilder accumulates rows into a List array.

@@ -249,6 +249,53 @@ func TestNewNullNegative(t *testing.T) {
 	array.NewNull(-1)
 }
 
+func TestEmpty(t *testing.T) {
+	types := []dtype.DataType{
+		dtype.Int64,
+		dtype.Float64,
+		dtype.Bool,
+		dtype.String,
+		dtype.Binary,
+		dtype.Null,
+		dtype.Timestamp{Unit: dtype.Microsecond},
+		dtype.List{Elem: dtype.Int64},
+		dtype.List{Elem: dtype.List{Elem: dtype.String}},
+		dtype.Dictionary{Index: dtype.Int32, Value: dtype.String},
+	}
+
+	for _, dt := range types {
+		a, err := array.Empty(dt)
+		if err != nil {
+			t.Errorf("Empty(%s) = %v", dt, err)
+			continue
+		}
+		if !dtype.Equal(a.DType(), dt) {
+			t.Errorf("Empty(%s) has type %s", dt, a.DType())
+		}
+		if a.Len() != 0 || a.NullCount() != 0 {
+			t.Errorf("Empty(%s) has %d values and %d nulls, want none of either", dt, a.Len(), a.NullCount())
+		}
+		// An empty list still points at a child, since the offsets have nowhere
+		// else to point and a row appended to it later has to land somewhere.
+		if _, ok := dt.(dtype.List); ok && a.Child() == nil {
+			t.Errorf("Empty(%s) has no child", dt)
+		}
+	}
+}
+
+func TestEmptyMistakes(t *testing.T) {
+	if _, err := array.Empty(nil); err == nil {
+		t.Error("Empty(nil) was allowed")
+	}
+
+	nested := dtype.Struct{Fields: []dtype.Field{{Name: "a", Type: dtype.Int64}}}
+	for _, dt := range []dtype.DataType{nested, dtype.List{Elem: nested}} {
+		if _, err := array.Empty(dt); err == nil {
+			t.Errorf("Empty(%s) was allowed", dt)
+		}
+	}
+}
+
 func TestNewStrings(t *testing.T) {
 	var b strview.Builder
 	b.Append([]byte("kuma"))
