@@ -5,6 +5,7 @@ package plan
 // query is forty and three of the operators are projections.
 
 import (
+	"errors"
 	"strings"
 )
 
@@ -103,16 +104,17 @@ func writeMarked(sb *strings.Builder, n, at *Node, depth int) {
 // showing the whole query it was asked about rather than the part of it below
 // the mistake.
 //
-// A child reports through [Node.Schema] and so hands back either an error of
-// this type or one of its own, never one wrapped around this type, which is why
-// this can ask the plain question rather than go looking with errors.As.
+// Widening the plan is a write to the error rather than another error built
+// around it. That keeps whatever a caller wrapped the first one in, and it
+// means an operator reported from the bottom of a deep plan costs one error
+// rather than one per level on the way up. Nothing else can be holding it: the
+// walk builds it on the way back and hands it straight to the caller, and a
+// second walk over the same plan builds its own.
 func found(n *Node, err error) error {
-	oe, ok := err.(*OperatorError)
-	if !ok {
-		return &OperatorError{Err: err, At: n, Plan: n}
-	}
-	if oe.Plan == n {
+	var oe *OperatorError
+	if errors.As(err, &oe) {
+		oe.Plan = n
 		return err
 	}
-	return &OperatorError{Err: oe.Err, At: oe.At, Plan: n}
+	return &OperatorError{Err: err, At: n, Plan: n}
 }
