@@ -762,8 +762,11 @@ func TestLazyJoinMistakes(t *testing.T) {
 		want error
 	}{
 		{
+			// A nil right side has no schema for the compiler to work the
+			// type parameter out from, so this is the one call that has to
+			// write it. It is also the one call nobody makes on purpose.
 			name: "no query to join to",
-			q:    f.Lazy().InnerJoin(nil, "symbol"),
+			q:    f.Lazy().InnerJoin[kuma.Dynamic](nil, "symbol"),
 			want: kuma.ErrNoValues,
 		},
 		{
@@ -1010,6 +1013,25 @@ func BenchmarkLazyInnerJoin(b *testing.B) {
 			b.Fatalf("Collect: %v", err)
 		}
 		frameSink = out
+	}
+}
+
+// BenchmarkLazyJoinAs is BenchmarkFrameJoinAs written as a query, over the same
+// two frames and the same struct, so the gap between the two is the whole cost
+// of going through the plan.
+func BenchmarkLazyJoinAs(b *testing.B) {
+	left, right := benchJoinSides(b)
+	ctx := b.Context()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := left.Lazy().
+			JoinAs[benchJoined](right.Lazy(), kuma.Using("k"), kuma.InnerJoin).
+			Collect(ctx)
+		if err != nil {
+			b.Fatalf("Collect: %v", err)
+		}
+		joinedSink = out
 	}
 }
 

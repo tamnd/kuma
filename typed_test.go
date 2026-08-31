@@ -404,3 +404,161 @@ func TestLazyAggAsString(t *testing.T) {
 		t.Errorf("the plan is\n%s\nwant\n%s", got, want)
 	}
 }
+
+// Sector is the schema of the frame the trades are joined to, so that a test can
+// join two typed frames rather than a typed one and a dynamic one.
+type Sector struct {
+	Symbol string `kuma:"symbol"`
+	Sector string `kuma:"sector"`
+}
+
+// Enriched is the result of that join, which is one column from the left, one
+// from the right and the key they share.
+type Enriched struct {
+	Symbol string  `kuma:"symbol"`
+	Price  float64 `kuma:"price"`
+	Sector string  `kuma:"sector"`
+}
+
+// typedSectors is the sectors frame bound to Sector.
+func typedSectors(t *testing.T) *kuma.Frame[Sector] {
+	t.Helper()
+
+	f, err := kuma.Bind[Sector](sectors(t))
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	return f
+}
+
+func TestJoinAs(t *testing.T) {
+	got, err := typedTrades(t).JoinAs[Enriched](typedSectors(t), kuma.Using("symbol"), kuma.InnerJoin)
+	if err != nil {
+		t.Fatalf("JoinAs: %v", err)
+	}
+
+	if want := []string{"symbol", "price", "sector"}; !slices.Equal(got.Names(), want) {
+		t.Errorf("JoinAs gave %v, want %v", got.Names(), want)
+	}
+	want := []string{
+		"AAPL 189.5 hardware",
+		"MSFT 411.2 software",
+		"AAPL 190.1 hardware",
+	}
+	if r := rows(t, got); !slices.Equal(r, want) {
+		t.Errorf("JoinAs gave %v, want %v", r, want)
+	}
+}
+
+// TestJoinAsLeavesOutWhatTheStructDoesNotName is the wide join whose result is a
+// handful of columns, which is one step here rather than a join and a select.
+func TestJoinAsLeavesOutWhatTheStructDoesNotName(t *testing.T) {
+	type justSector struct {
+		Sector string `kuma:"sector"`
+	}
+
+	got, err := trades(t).JoinAs[justSector](sectors(t), kuma.Using("symbol"), kuma.InnerJoin)
+	if err != nil {
+		t.Fatalf("JoinAs: %v", err)
+	}
+	if want := []string{"sector"}; !slices.Equal(got.Names(), want) {
+		t.Errorf("JoinAs gave %v, want %v", got.Names(), want)
+	}
+}
+
+func TestJoinAsMistakes(t *testing.T) {
+	left, right := trades(t), sectors(t)
+
+	type wanted struct {
+		Industry string `kuma:"industry"`
+	}
+	_, err := left.JoinAs[wanted](right, kuma.Using("symbol"), kuma.InnerJoin)
+	if !errors.Is(err, kuma.ErrNoColumn) {
+		t.Fatalf("JoinAs = %v, want ErrNoColumn", err)
+	}
+	if !strings.Contains(err.Error(), "JoinAs") {
+		t.Errorf("the message is %q, want it to name the step", err.Error())
+	}
+
+	// A semi join takes no columns from the right frame, so a struct that asks
+	// for one is asking for a column the step did not produce rather than one
+	// that was never there.
+	if _, err := left.JoinAs[Enriched](right, kuma.Using("symbol"), kuma.SemiJoin); !errors.Is(err, kuma.ErrNoColumn) {
+		t.Errorf("JoinAs over a semi join = %v, want ErrNoColumn", err)
+	}
+
+	// The mistake the join itself makes still comes from there.
+	if _, err := left.JoinAs[Enriched](right, kuma.Using("ticker"), kuma.InnerJoin); !errors.Is(err, kuma.ErrNoColumn) {
+		t.Errorf("JoinAs on a key that is not there = %v, want ErrNoColumn", err)
+	}
+}
+
+// TestJoinTakesAnySchema is the change that made the typed join possible, which
+// is that the frame being joined to no longer has to be a dynamic one.
+func TestJoinTakesAnySchema(t *testing.T) {
+	got, err := typedTrades(t).InnerJoin(typedSectors(t), "symbol")
+	if err != nil {
+		t.Fatalf("InnerJoin: %v", err)
+	}
+	if want := []string{"symbol", "price", "qty", "sector"}; !slices.Equal(got.Names(), want) {
+		t.Errorf("InnerJoin gave %v, want %v", got.Names(), want)
+	}
+}
+
+func TestLazyJoinAs(t *testing.T) {
+	left, right := typedTrades(t), typedSectors(t)
+
+	want, err := left.JoinAs[Enriched](right, kuma.Using("symbol"), kuma.InnerJoin)
+	if err != nil {
+		t.Fatalf("JoinAs: %v", err)
+	}
+
+	got, err := left.Lazy().
+		JoinAs[Enriched](right.Lazy(), kuma.Using("symbol"), kuma.InnerJoin).
+		Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if got.String() != want.String() {
+		t.Errorf("the query gave\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestLazyJoinAsKeepsTheSchemaType is the point of it, which is a query that
+// goes on being written against handles after the join.
+func TestLazyJoinAsKeepsTheSchemaType(t *testing.T) {
+	price := kuma.NewF64Col[Enriched]("price")
+
+	out, err := typedTrades(t).Lazy().
+		JoinAs[Enriched](typedSectors(t).Lazy(), kuma.Using("symbol"), kuma.InnerJoin).
+		Filter(price.Gt(200)).
+		Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if r := rows(t, out); !slices.Equal(r, []string{"MSFT 411.2 software"}) {
+		t.Errorf("the query gave %v", r)
+	}
+}
+
+// TestLazyJoinAsIsCheckedWhereItIsWritten is the check the join gets the most
+// out of, since which columns a join produces is a rule with three parts to it.
+func TestLazyJoinAsIsCheckedWhereItIsWritten(t *testing.T) {
+	q := trades(t).Lazy().
+		JoinAs[Enriched](sectors(t).Lazy(), kuma.Using("symbol"), kuma.SemiJoin)
+
+	if err := q.Validate(); !errors.Is(err, kuma.ErrNoColumn) {
+		t.Errorf("Validate = %v, want ErrNoColumn", err)
+	}
+}
+
+// TestLazyJoinAsString is the plan, which is a projection over the join.
+func TestLazyJoinAsString(t *testing.T) {
+	got := trades(t).Lazy().
+		JoinAs[Enriched](sectors(t).Lazy(), kuma.Using("symbol"), kuma.InnerJoin).
+		String()
+	want := "Project symbol, price, sector\n  Join inner on symbol\n    Scan frame\n    Scan frame"
+	if got != want {
+		t.Errorf("the plan is\n%s\nwant\n%s", got, want)
+	}
+}

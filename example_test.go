@@ -1429,3 +1429,47 @@ func ExampleGroupedFrame_AggAs() {
 	//   AAPL   |   125
 	//   MSFT   |    50
 }
+
+// ExampleFrame_JoinAs shows a join whose result is a Go struct, which is one
+// step rather than a join, a select and a bind.
+func ExampleFrame_JoinAs() {
+	type Enriched struct {
+		Symbol string  `kuma:"symbol"`
+		Price  float64 `kuma:"price"`
+		Sector string  `kuma:"sector"`
+	}
+
+	trades, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "AAPL", "MSFT").Column(),
+		kuma.NewSeries("price", 189.5, 411.2).Column(),
+		kuma.NewSeries("qty", int64(100), 50).Column(),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	sectors, err := kuma.NewFrame(
+		kuma.NewSeries("symbol", "MSFT", "AAPL").Column(),
+		kuma.NewSeries("sector", "software", "hardware").Column(),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	both, err := trades.JoinAs[Enriched](sectors, kuma.Using("symbol"), kuma.InnerJoin)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(both)
+	// Output:
+	// kuma.Frame[kuma_test.Enriched] 2 rows x 3 cols
+	//
+	//   symbol |   price | sector
+	//   string | float64 | string
+	// ---------+---------+---------
+	//   AAPL   |   189.5 | hardware
+	//   MSFT   |   411.2 | software
+}

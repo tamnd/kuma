@@ -332,7 +332,9 @@ func TestFrameJoinErrors(t *testing.T) {
 	left := trades(t)
 	right := sectors(t)
 
-	if _, err := left.Join(nil, kuma.Using("symbol"), kuma.InnerJoin); err == nil {
+	// A nil right frame has no schema for the compiler to work the type
+	// parameter out from, so this is the one call that has to write it.
+	if _, err := left.Join[kuma.Dynamic](nil, kuma.Using("symbol"), kuma.InnerJoin); err == nil {
 		t.Error("joining onto nothing succeeded")
 	}
 	if _, err := left.Join(right, nil, kuma.InnerJoin); err == nil {

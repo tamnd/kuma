@@ -22,6 +22,11 @@ import (
 // They are spelled with an As because a method cannot be written twice with
 // different type parameters. Select and SelectAs are the same step told two
 // ways, the first by naming the columns and the second by naming the struct.
+//
+// There are three of them, which are the three steps that change what the
+// columns are: a projection, an aggregation and a join. Every other step either
+// keeps the columns or takes rows out, and those keep the schema type without
+// being told anything.
 
 // SelectAs keeps the columns the struct R names, in the order R names them, and
 // returns a frame whose schema type is R.
@@ -110,6 +115,38 @@ func selectAs[R, S any](f *Frame[S], who string) (*Frame[R], error) {
 	return newFrame[R](cols)
 }
 
+// JoinAs puts the rows of two frames together where their keys match and keeps
+// the columns the struct Out names, as a frame whose schema type is Out.
+//
+//	type Enriched struct {
+//		Symbol string  `kuma:"symbol"`
+//		Price  float64 `kuma:"price"`
+//		Sector string  `kuma:"sector"`
+//	}
+//
+//	both, err := trades.JoinAs[Enriched](sectors, kuma.Using("symbol"), kuma.InnerJoin)
+//
+// It is [Frame.Join] and [Frame.SelectAs] in one step, and it is the only one of
+// the typed steps that has to name two schemas, since a join reads a second
+// frame. The result comes first so that the type of the frame being joined to is
+// worked out from the argument, which leaves one type to write rather than two.
+//
+// Every rule [Frame.Join] follows is kept, since it is that method underneath. A
+// column the struct does not name is left out, so a wide join whose result is a
+// handful of columns is one step here rather than a join and a select.
+//
+// The columns of a join that could not match are nullable, so a field of Out
+// that reads one of them will read a null. That is a fact about the data rather
+// than about the type, which is why it is not an error: a left join says the
+// right side may be missing and a Go field cannot.
+func (f *Frame[S]) JoinAs[Out, R any](other *Frame[R], on []On, how JoinType) (*Frame[Out], error) {
+	joined, err := f.Join(other, on, how)
+	if err != nil {
+		return nil, err
+	}
+	return selectAs[Out](joined, "JoinAs")
+}
+
 // SelectAs keeps the columns the struct R names, in the order R names them, and
 // gives back a query whose schema type is R.
 //
@@ -162,6 +199,34 @@ func (lg *LazyGroupBy[S]) AggAs[R any](aggs ...Aggregation) *LazyFrame[R] {
 		return &LazyFrame[R]{err: err}
 	}
 	return &LazyFrame[R]{node: n}
+}
+
+// JoinAs puts the rows of two queries together where their keys match and keeps
+// the columns the struct Out names, giving back a query whose schema type is
+// Out.
+//
+//	q := trades.Lazy().JoinAs[Enriched](sectors.Lazy(), kuma.Using("symbol"), kuma.InnerJoin)
+//
+// It is [Frame.JoinAs] written as a step of a query, and it is the last of the
+// steps that lets a typed query stay typed. The result type is written and the
+// type of the query being joined to is worked out from the argument.
+//
+// Like [LazyFrame.SelectAs] this is checked where it is written, so a struct
+// naming a column neither side has is an error from that line rather than at
+// [LazyFrame.Collect]. That check is worth more here than anywhere else, since
+// which columns a join produces is a rule with three parts to it and getting it
+// wrong is easy.
+func (lf *LazyFrame[S]) JoinAs[Out, R any](other *LazyFrame[R], on []On, how JoinType) *LazyFrame[Out] {
+	q := lf.Join(other, on, how)
+	if q.err != nil {
+		return &LazyFrame[Out]{err: q.err}
+	}
+
+	n, err := projectAs[Out](q.node, "JoinAs")
+	if err != nil {
+		return &LazyFrame[Out]{err: err}
+	}
+	return &LazyFrame[Out]{node: n}
 }
 
 // projectAs returns the plan that keeps the columns the struct R names, in the

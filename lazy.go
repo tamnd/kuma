@@ -295,10 +295,12 @@ func (lg *LazyGroupBy[S]) Count() *LazyFrame[Dynamic] { return lg.Agg(Size()) }
 // side runs before the join sees it and the join is over the rows that survived
 // rather than over the file they came from.
 //
-// The result is a Dynamic query, since the columns are no longer the ones
-// either schema describes. The typed join, which works the result type out from
-// the two sides, is a later change.
-func (lf *LazyFrame[S]) Join(other *LazyFrame[Dynamic], on []On, how JoinType) *LazyFrame[Dynamic] {
+// The result is a Dynamic query, since the columns are no longer the ones either
+// schema describes. [LazyFrame.JoinAs] is the same step with a struct saying what
+// the result holds, which is how a query stays typed across a join. Either side
+// may have any schema, since a join reads columns by name and neither side's
+// type says anything about the other's.
+func (lf *LazyFrame[S]) Join[R any](other *LazyFrame[R], on []On, how JoinType) *LazyFrame[Dynamic] {
 	if lf.err != nil {
 		return &LazyFrame[Dynamic]{err: lf.err}
 	}
@@ -318,13 +320,13 @@ func (lf *LazyFrame[S]) Join(other *LazyFrame[Dynamic], on []On, how JoinType) *
 
 // InnerJoin keeps only the pairs of rows that matched, on the columns both
 // sides call by the named names. It is [LazyFrame.Join] for the common case.
-func (lf *LazyFrame[S]) InnerJoin(other *LazyFrame[Dynamic], names ...string) *LazyFrame[Dynamic] {
+func (lf *LazyFrame[S]) InnerJoin[R any](other *LazyFrame[R], names ...string) *LazyFrame[Dynamic] {
 	return lf.Join(other, Using(names...), InnerJoin)
 }
 
 // LeftJoin keeps every row of this query, with the other query's columns
 // missing where nothing matched.
-func (lf *LazyFrame[S]) LeftJoin(other *LazyFrame[Dynamic], names ...string) *LazyFrame[Dynamic] {
+func (lf *LazyFrame[S]) LeftJoin[R any](other *LazyFrame[R], names ...string) *LazyFrame[Dynamic] {
 	return lf.Join(other, Using(names...), LeftJoin)
 }
 
@@ -333,7 +335,7 @@ func (lf *LazyFrame[S]) LeftJoin(other *LazyFrame[Dynamic], names ...string) *La
 // The result has as many rows as the two multiplied together, which is why it
 // is a step a caller has to name rather than something a forgotten key falls
 // into.
-func (lf *LazyFrame[S]) CrossJoin(other *LazyFrame[Dynamic]) *LazyFrame[Dynamic] {
+func (lf *LazyFrame[S]) CrossJoin[R any](other *LazyFrame[R]) *LazyFrame[Dynamic] {
 	return lf.Join(other, nil, CrossJoin)
 }
 

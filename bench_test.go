@@ -31,6 +31,7 @@ var (
 	groupSink       *kuma.GroupedFrame[kuma.Dynamic]
 	boundSink       *kuma.Frame[benchRow]
 	totalSink       *kuma.Frame[benchTotal]
+	joinedSink      *kuma.Frame[benchJoined]
 )
 
 // benchInts returns a column of benchLen int64 values in the given number of
@@ -738,6 +739,30 @@ func BenchmarkFrameSemiJoin(b *testing.B) {
 			b.Fatalf("Join: %v", err)
 		}
 		frameSink = out
+	}
+}
+
+// benchJoined is the two columns of a joined frame worth keeping, which is the
+// key and the one column the right side brought.
+type benchJoined struct {
+	K    int64   `kuma:"k"`
+	Rate float64 `kuma:"rate"`
+}
+
+// BenchmarkFrameJoinAs is the same inner join with the result named as a struct,
+// so the gap between it and BenchmarkFrameInnerJoin is what naming the result
+// costs. The struct leaves out a column the join produced, which is the case it
+// is for.
+func BenchmarkFrameJoinAs(b *testing.B) {
+	left, right := benchJoinSides(b)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := left.JoinAs[benchJoined](right, kuma.Using("k"), kuma.InnerJoin)
+		if err != nil {
+			b.Fatalf("JoinAs: %v", err)
+		}
+		joinedSink = out
 	}
 }
 
