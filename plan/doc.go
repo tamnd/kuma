@@ -51,7 +51,9 @@
 // names of the passes that made the difference, in a format this package
 // documents and keeps. [Node.Tree] is the printing on its own, one operator per
 // line with the inputs indented under it, for a caller who wants the plan and
-// not the comparison.
+// not the comparison. [Profile] is the same thing for a query that has run,
+// with the time each operator spent and the rows it produced on its line, out
+// of the [Measure] the engine fills in while the query runs.
 //
 // The two rules that everything else here depends on are that an expression
 // never changes once it has been built, and that two expressions that say the

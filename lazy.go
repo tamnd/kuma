@@ -531,3 +531,43 @@ func (lf *LazyFrame[S]) Explain() (string, error) {
 	}
 	return plan.Explain(lf.node, plan.Passes()...)
 }
+
+// Profile runs the query and returns the answer along with what it cost, in the
+// format [plan.Profile] documents.
+//
+// It is [LazyFrame.Explain] with a wall time and a row count on each operator,
+// which is the other half of the same question. The explain says a filter runs
+// before the join and the profile says whether that was where the time went,
+// and neither is much use without the other when a query is slower than it
+// looks like it should be.
+//
+// The answer comes back too, rather than being worked out and thrown away. A
+// query that is worth timing is usually a query somebody wanted the answer to,
+// and running it twice to have both would be a profile of a run that is not the
+// one the answer came from.
+//
+// The clock is read once per operator. That costs a few nanoseconds against
+// work measured in microseconds at the very least, so this is the same query
+// and not a slower one put up to be measured, and the numbers are a fact about
+// the run rather than an estimate of it.
+func (lf *LazyFrame[S]) Profile(ctx context.Context) (*Frame[S], string, error) {
+	if lf.err != nil {
+		return nil, "", lf.err
+	}
+
+	f, ran, err := runMeasured(ctx, lf.node, &recorder{})
+	if err != nil {
+		return nil, "", err
+	}
+
+	text, err := plan.Profile(lf.node, ran, plan.Passes()...)
+	if err != nil {
+		return nil, "", err
+	}
+
+	out, err := Bind[S](f)
+	if err != nil {
+		return nil, "", err
+	}
+	return out, text, nil
+}

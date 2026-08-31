@@ -1624,5 +1624,140 @@ func TestLazyExplainDoesNotChangeTheQuery(t *testing.T) {
 	}
 }
 
+// TestLazyProfileRunsTheQueryAndSaysWhatItCost is the whole of it: the answer
+// is the answer, and the text is the explain with the numbers on.
+func TestLazyProfileRunsTheQueryAndSaysWhatItCost(t *testing.T) {
+	f := trades(t)
+	q := f.Lazy().Filter(kuma.F64("price").Gt(150)).Select("symbol", "price").Head(2)
+
+	out, text, err := q.Profile(t.Context())
+	if err != nil {
+		t.Fatalf("Profile: %v", err)
+	}
+
+	want, err := q.Collect(t.Context())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if out.String() != want.String() {
+		t.Errorf("the profiled query gave\n%s\nand collecting it gave\n%s", out, want)
+	}
+
+	// The times move from run to run, so what is checked is everything else:
+	// an operator per line, the row counts, and the two headings.
+	for _, line := range []string{
+		"the query as written",
+		"the query that ran",
+		"  Project symbol, price",
+		"    Limit 2",
+		"      Filter (price > 150)",
+		"        Scan frame [symbol, price]",
+		"changed by slice pushdown and projection pushdown",
+		"ran in ",
+	} {
+		if !strings.Contains(text, line) {
+			t.Errorf("the profile is\n%s\nand does not have %q in it", text, line)
+		}
+	}
+	for _, rows := range []string{"2 rows\n", "3 rows\n", "4 rows\n"} {
+		if !strings.Contains(text, rows) {
+			t.Errorf("the profile is\n%s\nand nothing in it produced %s", text, strings.TrimSpace(rows))
+		}
+	}
+}
+
+// TestLazyProfileOfAQueryNothingImproves is the shorter shape, and the one a
+// short query gets.
+func TestLazyProfileOfAQueryNothingImproves(t *testing.T) {
+	q := trades(t).Lazy().Filter(kuma.F64("price").Gt(150))
+
+	_, text, err := q.Profile(t.Context())
+	if err != nil {
+		t.Fatalf("Profile: %v", err)
+	}
+
+	if strings.Contains(text, "the query as written") {
+		t.Errorf("the profile is\n%s\nwant one plan rather than the same one twice", text)
+	}
+	if !strings.Contains(text, "nothing the optimizer does changes it") {
+		t.Errorf("the profile is\n%s\nwant it to say no pass found anything", text)
+	}
+}
+
+// TestLazyProfileOfAQueryThatIsWrong is the same error Collect gives, since a
+// query that does not check is a query that never runs and so has nothing to
+// time.
+func TestLazyProfileOfAQueryThatIsWrong(t *testing.T) {
+	q := trades(t).Lazy().Select("nope")
+
+	if _, _, err := q.Profile(t.Context()); !errors.Is(err, kuma.ErrNoColumn) {
+		t.Errorf("Profile = %v, want the same error Collect gives", err)
+	}
+}
+
+// TestLazyProfileOfAQueryThatWasGivenUpOn is the query that was thrown away
+// half built, which every method on a lazy frame has to answer the same way.
+func TestLazyProfileOfAQueryThatWasGivenUpOn(t *testing.T) {
+	q := trades(t).Lazy().Filter(kuma.Dyn("price").Gt("not a price"))
+
+	if _, _, err := q.Profile(t.Context()); err == nil {
+		t.Error("Profile of a query that was never valid gave no error")
+	}
+}
+
+// TestLazyProfileDoesNotChangeTheAnswer is what makes it a shipping feature
+// rather than a debugging one: the query that was timed is the query that runs
+// the rest of the time.
+func TestLazyProfileDoesNotChangeTheAnswer(t *testing.T) {
+	f := trades(t)
+	cases := []struct {
+		name string
+		q    *kuma.LazyFrame[kuma.Dynamic]
+	}{
+		{"a filter", f.Lazy().Filter(kuma.F64("price").Gt(150))},
+		{"a group by", f.Lazy().GroupBy("symbol").Agg(kuma.Sum("qty"))},
+		{"a sort with a head on it", f.Lazy().SortDesc("price").Head(2)},
+		{"a join onto itself", f.Lazy().Select("symbol").Join(
+			f.Lazy().Select("symbol"), kuma.Using("symbol"), kuma.InnerJoin)},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			want, err := c.q.Collect(t.Context())
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			got, _, err := c.q.Profile(t.Context())
+			if err != nil {
+				t.Fatalf("Profile: %v", err)
+			}
+			if got.String() != want.String() {
+				t.Errorf("profiling gave\n%s\nand collecting gave\n%s", got, want)
+			}
+		})
+	}
+}
+
+// TestLazyProfileOfAQueryReadingTheSameStepTwice is why a measure is a tree and
+// not a map from operator to time: the same step stands in the plan twice and
+// the two runs of it are two different costs.
+func TestLazyProfileOfAQueryReadingTheSameStepTwice(t *testing.T) {
+	f := trades(t)
+	side := f.Lazy().Filter(kuma.F64("price").Gt(100)).Select("symbol")
+
+	_, text, err := side.Join(side, kuma.Using("symbol"), kuma.InnerJoin).Profile(t.Context())
+	if err != nil {
+		t.Fatalf("Profile: %v", err)
+	}
+
+	_, ran, ok := strings.Cut(text, "the query that ran")
+	if !ok {
+		t.Fatalf("the profile is\n%s\nand does not say what ran", text)
+	}
+	if got := strings.Count(ran, "Filter (price > 100)"); got != 2 {
+		t.Errorf("the query that ran is\n%s\nand has the filter on %d lines, want it timed on each side of the join", ran, got)
+	}
+}
+
 // planSink keeps the plan the benchmark built from being optimized away.
 var planSink *plan.Node

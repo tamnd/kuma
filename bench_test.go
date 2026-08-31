@@ -1253,3 +1253,46 @@ func BenchmarkLazyAConditionThatAlwaysHolds(b *testing.B) {
 		frameSink = out
 	}
 }
+
+// BenchmarkLazyCollectOfAJoin and BenchmarkLazyProfileOfAJoin are the pair that
+// says what a profile costs. The clock is read once per operator, so the answer
+// should be that it costs nothing worth measuring, and the way to know that is
+// to measure it.
+func BenchmarkLazyCollectOfAJoin(b *testing.B) {
+	q := benchJoin(b)
+	ctx := b.Context()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := q.Collect(ctx)
+		if err != nil {
+			b.Fatalf("Collect: %v", err)
+		}
+		frameSink = out
+	}
+}
+
+func BenchmarkLazyProfileOfAJoin(b *testing.B) {
+	q := benchJoin(b)
+	ctx := b.Context()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		out, text, err := q.Profile(ctx)
+		if err != nil {
+			b.Fatalf("Profile: %v", err)
+		}
+		frameSink, stringSink = out, text
+	}
+}
+
+// benchJoin is the query both of those run: five operators over a wide frame,
+// which is enough of a plan for the per operator cost of timing it to show up
+// if there is one.
+func benchJoin(b *testing.B) *kuma.LazyFrame[kuma.Dynamic] {
+	b.Helper()
+
+	f := benchFrame(b)
+	left := f.Lazy().Filter(kuma.I64("c00").Gt(benchLen/2)).Select("c00", "c01")
+	return left.Join(f.Lazy().Select("c00", "c02"), kuma.Using("c00"), kuma.InnerJoin).Head(1000)
+}

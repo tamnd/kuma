@@ -65,15 +65,32 @@ func (s frameSource) read(context.Context) (*Frame[Dynamic], error) { return s.f
 // pass left it, and so that the passes themselves can rely on every name in the
 // plan being a column and every expression having a type.
 func run(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
+	f, _, err := runMeasured(ctx, n, nil)
+	return f, err
+}
+
+// runMeasured is run with somewhere to write down what each operator cost, and
+// the measure of the whole query when there was somewhere.
+//
+// A nil recorder is a query that is only being run, which is the usual one, and
+// it costs that query a nil check per operator. Building the recorder is what
+// [LazyFrame.Profile] does and running the query is otherwise the same, so
+// there is one path through the engine rather than two that have to agree.
+func runMeasured(ctx context.Context, n *plan.Node, rec *recorder) (*Frame[Dynamic], plan.Measure, error) {
 	if _, err := n.Schema(); err != nil {
-		return nil, err
+		return nil, plan.Measure{}, err
 	}
 
 	n, err := plan.Optimize(n, plan.Passes()...)
 	if err != nil {
-		return nil, err
+		return nil, plan.Measure{}, err
 	}
-	return runNode(ctx, n)
+
+	f, err := runNode(withRecorder(ctx, rec), n)
+	if err != nil || rec == nil {
+		return f, plan.Measure{}, err
+	}
+	return f, rec.whole(), nil
 }
 
 // runNode is run without the check, which the operators below call for their
@@ -86,6 +103,16 @@ func runNode(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
 		return nil, err
 	}
 
+	if rec := recorderFrom(ctx); rec != nil {
+		return rec.around(n, func() (*Frame[Dynamic], error) { return runOp(ctx, n) })
+	}
+	return runOp(ctx, n)
+}
+
+// runOp is the operator itself, which is runNode without the check and without
+// the clock, so that a query being profiled and a query being run go through
+// exactly the same code.
+func runOp(ctx context.Context, n *plan.Node) (*Frame[Dynamic], error) {
 	switch n.Op() {
 	case plan.OpScan:
 		return runScan(ctx, n)
