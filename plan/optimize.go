@@ -71,6 +71,16 @@ func optimize(n *Node, passes []Pass) (*Node, []string, error) {
 		return nil, nil, errNoPlan
 	}
 
+	// A plan with a step in it that could not be built is turned away here
+	// rather than by whichever pass first asks it for a schema. The passes would
+	// report the same mistake, since asking a poisoned step anything gives it
+	// back, but each of them names itself in what it returns, and "constant
+	// folding: column "nope" not found" is a worse answer to a wrong column name
+	// than the one the step is already holding.
+	if bad := poisoned(n); bad != nil {
+		return nil, nil, found(n, bad.carried())
+	}
+
 	moved := make([]bool, len(passes))
 	for range maxRounds {
 		done := true

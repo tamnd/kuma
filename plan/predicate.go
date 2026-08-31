@@ -90,6 +90,13 @@ func placed(n *Node, cs []cond) (*Node, error) {
 	case OpExplode:
 		return throughExplode(n, cs)
 
+	case OpPoison:
+		// A step that could not be built cannot say which columns reach it, so
+		// there is no telling whether a condition would still read what it
+		// names underneath. The conditions stay where they are, which is what
+		// happens above a limit and for the same reason.
+		return stop(n, cs)
+
 	default:
 		return throughJoin(n, cs)
 	}

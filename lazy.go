@@ -3,6 +3,7 @@ package kuma
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/tamnd/kuma/dtype"
 	"github.com/tamnd/kuma/plan"
@@ -35,6 +36,12 @@ import (
 // nobody writes and everybody skips. What is kept is the first mistake, since
 // the steps after it were written against something that did not happen.
 //
+// Where it is kept is the plan, as a step that could not be built standing
+// where the step would have been. See [plan.Poison]. That is what lets the
+// steps after it go on being written down, and the plan they make is most of
+// what the error has to say about which of the calls the mistake is in, since a
+// query has no line numbers of its own.
+//
 // The operators it can build today are a scan, a filter, a projection, a group
 // by, a join, a distinct, a sort, a limit and an explode, which is every
 // operator the plan has and every one the engine runs. A union, a pivot and a
@@ -43,12 +50,6 @@ import (
 // The zero LazyFrame is not usable. Use [Frame.Lazy].
 type LazyFrame[S any] struct {
 	node *plan.Node
-
-	// err is the first thing that went wrong while the query was being written,
-	// which is reported by Collect. A frame that is carrying one builds no
-	// further, so the mistake a caller is told about is theirs rather than the
-	// one it led to.
-	err error
 }
 
 // Lazy returns a query that starts from this frame.
@@ -74,9 +75,6 @@ func (lf *LazyFrame[S]) Plan() *plan.Node { return lf.node }
 // field is nullable when a column might have missing values in it rather than
 // when it does, since which rows arrive is what the data decides.
 func (lf *LazyFrame[S]) Schema() (dtype.Schema, error) {
-	if lf.err != nil {
-		return dtype.Schema{}, lf.err
-	}
 	return lf.node.Schema()
 }
 
@@ -86,9 +84,6 @@ func (lf *LazyFrame[S]) Schema() (dtype.Schema, error) {
 // It is what Collect checks before it reads anything, on its own, for a program
 // that wants to say a query is wrong at the point it was built.
 func (lf *LazyFrame[S]) Validate() error {
-	if lf.err != nil {
-		return lf.err
-	}
 	return lf.node.Validate()
 }
 
@@ -100,9 +95,6 @@ func (lf *LazyFrame[S]) Validate() error {
 // [Frame.Filter] follows and the reason filtering on a condition and then on
 // its negation does not always give every row back.
 func (lf *LazyFrame[S]) Filter(cond BoolValue[S]) *LazyFrame[S] {
-	if lf.err != nil {
-		return lf
-	}
 	return &LazyFrame[S]{node: plan.Filter(lf.node, cond.expr())}
 }
 
@@ -116,10 +108,6 @@ func (lf *LazyFrame[S]) Filter(cond BoolValue[S]) *LazyFrame[S] {
 // the schema type describes. [LazyFrame.SelectAs] is the same step told by a
 // struct instead of by a list of names, and it keeps the query typed.
 func (lf *LazyFrame[S]) Select(names ...string) *LazyFrame[Dynamic] {
-	if lf.err != nil {
-		return &LazyFrame[Dynamic]{err: lf.err}
-	}
-
 	cols := make([]plan.Projection, len(names))
 	for i, name := range names {
 		cols[i] = plan.Projection{Expr: plan.Col(name)}
@@ -135,17 +123,13 @@ func (lf *LazyFrame[S]) Select(names ...string) *LazyFrame[Dynamic] {
 // It is [Frame.WithExpr] written as a step of a query. The result is a Dynamic
 // frame because the columns are no longer the ones the schema type describes.
 func (lf *LazyFrame[S]) With(name string, e Expr[S]) *LazyFrame[Dynamic] {
-	if lf.err != nil {
-		return &LazyFrame[Dynamic]{err: lf.err}
-	}
-
 	// A projection says which columns it produces, so the ones that are already
 	// there have to be named. That means asking the plan what it has, which is
 	// the schema check the source up to here, and it is where a mistake written
 	// earlier in the query is usually found.
 	s, err := lf.node.Schema()
 	if err != nil {
-		return &LazyFrame[Dynamic]{err: err}
+		return &LazyFrame[Dynamic]{node: plan.Poison(lf.node, "With "+name, err)}
 	}
 
 	cols := make([]plan.Projection, 0, len(s.Fields)+1)
@@ -168,19 +152,17 @@ func (lf *LazyFrame[S]) With(name string, e Expr[S]) *LazyFrame[Dynamic] {
 // in. A name that is not there is an error at Collect, since dropping a column
 // that does not exist is a mistake rather than nothing to do.
 func (lf *LazyFrame[S]) Drop(names ...string) *LazyFrame[Dynamic] {
-	if lf.err != nil {
-		return &LazyFrame[Dynamic]{err: lf.err}
-	}
-
+	step := "Drop " + strings.Join(names, ", ")
 	s, err := lf.node.Schema()
 	if err != nil {
-		return &LazyFrame[Dynamic]{err: err}
+		return &LazyFrame[Dynamic]{node: plan.Poison(lf.node, step, err)}
 	}
 
 	drop := make(map[string]bool, len(names))
 	for _, name := range names {
 		if _, ok := s.Field(name); !ok {
-			return &LazyFrame[Dynamic]{err: noColumn("Drop", name, s.Names())}
+			bad := noColumn("Drop", name, s.Names())
+			return &LazyFrame[Dynamic]{node: plan.Poison(lf.node, step, bad)}
 		}
 		drop[name] = true
 	}
@@ -210,11 +192,9 @@ func (lf *LazyFrame[S]) Drop(names ...string) *LazyFrame[Dynamic] {
 // agrees with a missing value, which is the rule [Frame.GroupBy] follows. A
 // name that is not there is an error at [LazyFrame.Collect].
 func (lf *LazyFrame[S]) GroupBy(names ...string) *LazyGroupBy[S] {
-	if lf.err != nil {
-		return &LazyGroupBy[S]{err: lf.err}
-	}
 	if len(names) == 0 {
-		return &LazyGroupBy[S]{err: fmt.Errorf("kuma: GroupBy with no columns to group by: %w", ErrLength)}
+		bad := fmt.Errorf("kuma: GroupBy with no columns to group by: %w", ErrLength)
+		return &LazyGroupBy[S]{node: plan.Poison(lf.node, "GroupBy", bad)}
 	}
 
 	by := make([]*plan.Expr, len(names))
@@ -235,10 +215,6 @@ func (lf *LazyFrame[S]) GroupBy(names ...string) *LazyGroupBy[S] {
 type LazyGroupBy[S any] struct {
 	node *plan.Node
 	by   []*plan.Expr
-
-	// err is the mistake the query was already carrying, or the one made in the
-	// group by itself, kept for the frame Agg gives back to report.
-	err error
 }
 
 // Agg works out the given aggregations for every group.
@@ -261,11 +237,9 @@ type LazyGroupBy[S any] struct {
 // [LazyGroupBy.AggAs] is the same step with a struct saying what the result
 // holds, which is how a query stays typed across a group by.
 func (lg *LazyGroupBy[S]) Agg(aggs ...Aggregation) *LazyFrame[Dynamic] {
-	if lg.err != nil {
-		return &LazyFrame[Dynamic]{err: lg.err}
-	}
 	if len(aggs) == 0 {
-		return &LazyFrame[Dynamic]{err: fmt.Errorf("kuma: Agg with nothing to aggregate: %w", ErrLength)}
+		bad := fmt.Errorf("kuma: Agg with nothing to aggregate: %w", ErrLength)
+		return &LazyFrame[Dynamic]{node: plan.Poison(lg.node, "Agg", bad)}
 	}
 
 	as := make([]plan.Agg, len(aggs))
@@ -300,14 +274,9 @@ func (lg *LazyGroupBy[S]) Count() *LazyFrame[Dynamic] { return lg.Agg(Size()) }
 // may have any schema, since a join reads columns by name and neither side's
 // type says anything about the other's.
 func (lf *LazyFrame[S]) Join[R any](other *LazyFrame[R], on []On, how JoinType) *LazyFrame[Dynamic] {
-	if lf.err != nil {
-		return &LazyFrame[Dynamic]{err: lf.err}
-	}
 	if other == nil {
-		return &LazyFrame[Dynamic]{err: fmt.Errorf("kuma: Join with no query to join to: %w", ErrNoValues)}
-	}
-	if other.err != nil {
-		return &LazyFrame[Dynamic]{err: other.err}
+		bad := fmt.Errorf("kuma: Join with no query to join to: %w", ErrNoValues)
+		return &LazyFrame[Dynamic]{node: plan.Poison(lf.node, "Join", bad)}
 	}
 
 	keys := make([]plan.JoinKey, len(on))
@@ -354,10 +323,6 @@ func (lf *LazyFrame[S]) CrossJoin[R any](other *LazyFrame[R]) *LazyFrame[Dynamic
 // the query above, is the other way to say the same thing and the one that says
 // what the answer holds as well.
 func (lf *LazyFrame[S]) Distinct(names ...string) *LazyFrame[S] {
-	if lf.err != nil {
-		return lf
-	}
-
 	by := make([]*plan.Expr, len(names))
 	for i, name := range names {
 		by[i] = plan.Col(name)
@@ -386,9 +351,6 @@ func (lf *LazyFrame[S]) Distinct(names ...string) *LazyFrame[S] {
 // something this can work out on its own, since a query with two list columns
 // in it has two answers and they are different frames.
 func (lf *LazyFrame[S]) Explode(names ...string) *LazyFrame[Dynamic] {
-	if lf.err != nil {
-		return &LazyFrame[Dynamic]{err: lf.err}
-	}
 	return &LazyFrame[Dynamic]{node: plan.Explode(lf.node, names)}
 }
 
@@ -398,10 +360,6 @@ func (lf *LazyFrame[S]) Explode(names ...string) *LazyFrame[Dynamic] {
 // The sort is stable, for the reasons [Frame.Sort] gives, and a key can be an
 // expression rather than a column name once [LazyFrame.SortByExpr] is used.
 func (lf *LazyFrame[S]) Sort(by ...By) *LazyFrame[S] {
-	if lf.err != nil {
-		return lf
-	}
-
 	keys := make([]plan.SortKey, len(by))
 	for i, b := range by {
 		keys[i] = plan.SortKey{
@@ -431,9 +389,6 @@ func (lf *LazyFrame[S]) SortDesc(names ...string) *LazyFrame[S] {
 // The column it sorts by is not in the result. Sorting by an expression and
 // keeping it is [LazyFrame.With] and then a sort by its name.
 func (lf *LazyFrame[S]) SortByExpr(e Expr[S], o Order) *LazyFrame[S] {
-	if lf.err != nil {
-		return lf
-	}
 	return &LazyFrame[S]{node: plan.Sort(lf.node, []plan.SortKey{{
 		Expr:       e.expr(),
 		Descending: o.Descending,
@@ -454,9 +409,6 @@ func (lf *LazyFrame[S]) Head(n int) *LazyFrame[S] { return lf.Slice(0, n) }
 // lazy spelling because how far back to start is something only the row count
 // knows.
 func (lf *LazyFrame[S]) Slice(off, n int) *LazyFrame[S] {
-	if lf.err != nil {
-		return lf
-	}
 	return &LazyFrame[S]{node: plan.Limit(lf.node, int64(off), int64(n))}
 }
 
@@ -485,10 +437,6 @@ func (lf *LazyFrame[S]) Slice(off, n int) *LazyFrame[S] {
 // checks one, so a typed query that produced the wrong columns is an error here
 // rather than a handle that reads the wrong data later.
 func (lf *LazyFrame[S]) Collect(ctx context.Context) (*Frame[S], error) {
-	if lf.err != nil {
-		return nil, lf.err
-	}
-
 	f, err := run(ctx, lf.node)
 	if err != nil {
 		return nil, err
@@ -503,9 +451,6 @@ func (lf *LazyFrame[S]) Collect(ctx context.Context) (*Frame[S], error) {
 // will run next to the query that was written. This is the plan as it stands,
 // before any of that, for reading in a test failure and at a prompt.
 func (lf *LazyFrame[S]) String() string {
-	if lf.err != nil {
-		return "invalid query: " + lf.err.Error()
-	}
 	return lf.node.Tree()
 }
 
@@ -526,9 +471,6 @@ func (lf *LazyFrame[S]) String() string {
 // the same query, which is a query that does not check, and it is reported as
 // the query was written rather than as some pass left it.
 func (lf *LazyFrame[S]) Explain() (string, error) {
-	if lf.err != nil {
-		return "", lf.err
-	}
 	return plan.Explain(lf.node, plan.Passes()...)
 }
 
@@ -551,10 +493,6 @@ func (lf *LazyFrame[S]) Explain() (string, error) {
 // and not a slower one put up to be measured, and the numbers are a fact about
 // the run rather than an estimate of it.
 func (lf *LazyFrame[S]) Profile(ctx context.Context) (*Frame[S], string, error) {
-	if lf.err != nil {
-		return nil, "", lf.err
-	}
-
 	f, ran, err := runMeasured(ctx, lf.node, &recorder{})
 	if err != nil {
 		return nil, "", err

@@ -106,6 +106,12 @@ func pushProjection(n *Node, need map[string]bool) (*Node, error) {
 		}
 		return rewriteInput(n, below)
 
+	case OpPoison:
+		// The same as a join whose columns cannot be told apart: a step that
+		// could not be built cannot say which columns it produces, so nothing
+		// below it can be shown to be unread.
+		return rewriteInput(n, nil)
+
 	default:
 		return pushJoin(n, need)
 	}
