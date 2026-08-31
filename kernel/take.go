@@ -27,14 +27,22 @@ import (
 // values as c, so taking a million rows out of a column of country codes writes
 // a million int32s rather than a million strings.
 //
+// A list column is the other exception, and it is halfway between the two. The
+// offsets are rebuilt, since the rows are in a new order and were never going to
+// survive that, but the elements are gathered rather than copied a row at a
+// time, so a column of lists costs what a column of its elements costs.
+//
 // It panics if c is nil or is a type this package cannot read yet, which today
-// means the nested types.
+// means the struct and map types.
 func Take(c *array.Chunked, idx []int) *array.Chunked {
 	if c == nil {
 		panic("kernel: take from a nil column")
 	}
-	if dt, ok := c.DType().(dtype.Dictionary); ok {
+	switch dt := c.DType().(type) {
+	case dtype.Dictionary:
 		return takeDictionary(c, dt, idx)
+	case dtype.List:
+		return takeList(c, dt, idx)
 	}
 
 	b, err := array.NewBuilder(c.DType())
@@ -213,6 +221,16 @@ func (f *finder) at(i int) (*array.Array, int) {
 		return f.starts[k]+f.chunks[k].Len() > i
 	})
 	return f.chunks[f.last], i - f.starts[f.last]
+}
+
+// atChunk is at with the number of the chunk as well.
+//
+// The list gather needs it because a chunked list column has one child per
+// chunk, so an element is a position in a particular one of them and finding
+// the row is only half of finding the value.
+func (f *finder) atChunk(i int) (a *array.Array, pos, chunk int) {
+	a, pos = f.at(i)
+	return a, pos, f.last
 }
 
 // holds reports whether chunk k is where position i lives.

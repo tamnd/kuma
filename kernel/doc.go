@@ -29,7 +29,12 @@
 // [Take], which reads values out of a column at the positions given, and
 // [Filter], which keeps the values a boolean mask selects. Everything that
 // reorders or drops rows goes through one of those two, so joins, sorts, limits
-// and predicates all come back here in the end.
+// and predicates all come back here in the end. A gather over a dictionary
+// encoded column moves the indices and leaves the values where they are, and a
+// gather over a list column moves the elements in one pass rather than taking
+// the rows apart and putting them back together one at a time, so the two
+// encodings that hold more than one thing per row cost about what the values
+// underneath them cost.
 //
 // [Cast], which turns the values of a column into another type, and [SortIndex],
 // which works out the order rows go in and leaves the moving to Take.
